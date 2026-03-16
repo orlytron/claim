@@ -3,8 +3,8 @@
 import React, { useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { extractPdfText, parseChunk, ClaimItem } from "./actions/parseClaim";
-import { getRoomSummary, RoomSummary } from "./actions/getRoomSummary";
-import { saveSession } from "./lib/session";
+import { getRoomSummary } from "./actions/getRoomSummary";
+import { saveSession, RoomSummary } from "./lib/session";
 
 type GroupedClaims = Record<string, ClaimItem[]>;
 type Phase = "idle" | "scanning" | "parsing" | "done";
