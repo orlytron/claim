@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { extractPdfText, parseChunk, ClaimItem } from "./actions/parseClaim";
+import { parsePdf, ClaimItem } from "./actions/parseClaim";
 import { getRoomSummary } from "./actions/getRoomSummary";
 import { saveSession, RoomSummary } from "./lib/session";
 
@@ -31,7 +31,6 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
-  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [roomSummary, setRoomSummary] = useState<RoomSummary[] | null>(null);
   const [items, setItems] = useState<ClaimItem[] | null>(null);
@@ -70,36 +69,36 @@ export default function Home() {
     if (selected) handleFile(selected);
   };
 
+  const fileToBase64 = (f: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        // strip the "data:application/pdf;base64," prefix
+        resolve(result.split(",")[1]);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(f);
+    });
+
   const handleParse = async () => {
     if (!file) return;
     setError(null);
-    setProgress(null);
     setRoomSummary(null);
     setItems(null);
 
     try {
-      // ── Phase 1: extract text + fast room summary ──────────────────────
+      const base64 = await fileToBase64(file);
+
+      // ── Phase 1: fast room summary ─────────────────────────────────────
       setPhase("scanning");
-      const formData = new FormData();
-      formData.append("pdf", file);
-
-      const { fullText, chunks } = await extractPdfText(formData);
-
       // getRoomSummary also calls saveSession({ room_summary, status: 'parsing' })
-      const summary = await getRoomSummary(fullText);
+      const summary = await getRoomSummary(base64);
       setRoomSummary(summary);
 
-      // ── Phase 2: per-chunk full item parsing ───────────────────────────
+      // ── Phase 2: full item extraction ──────────────────────────────────
       setPhase("parsing");
-      const total = chunks.length;
-      const allItems: ClaimItem[] = [];
-
-      for (let i = 0; i < chunks.length; i++) {
-        setProgress({ current: i + 1, total });
-        const chunkItems = await parseChunk(chunks[i]);
-        // empty chunks are already returned as [] — just skip
-        allItems.push(...chunkItems);
-      }
+      const allItems = await parsePdf(base64);
 
       // Deduplicate by room + description + unit_cost
       const seen = new Set<string>();
@@ -129,8 +128,6 @@ export default function Home() {
         err instanceof Error ? err.message : "Failed to parse claim. Please try again."
       );
       setPhase("idle");
-    } finally {
-      setProgress(null);
     }
   };
 
@@ -147,8 +144,6 @@ export default function Home() {
   const total = items
     ? items.reduce((sum, item) => sum + item.qty * item.unit_cost, 0)
     : 0;
-
-  const isLoading = phase === "scanning" || phase === "parsing";
 
   return (
     <div className="min-h-screen bg-white">
@@ -291,23 +286,11 @@ export default function Home() {
               ))}
             </div>
 
-            {/* Progress */}
-            {progress && (
-              <div className="flex flex-col items-center gap-3">
-                <div className="flex items-center gap-3 text-sm text-gray-600">
-                  <Spinner />
-                  {`Analyzing chunk ${progress.current} of ${progress.total}...`}
-                </div>
-                <div className="w-full overflow-hidden rounded-full bg-gray-200">
-                  <div
-                    className="h-1.5 rounded-full bg-[#2563EB]"
-                    style={{
-                      width: `${Math.round((progress.current / progress.total) * 100)}%`,
-                    }}
-                  />
-                </div>
-              </div>
-            )}
+            {/* Parsing spinner */}
+            <div className="flex items-center gap-3 text-sm text-gray-600">
+              <Spinner />
+              Extracting all line items...
+            </div>
           </div>
         )}
 

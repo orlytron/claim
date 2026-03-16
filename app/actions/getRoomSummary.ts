@@ -3,12 +3,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { RoomSummary, saveSession } from "../lib/session";
 
-export async function getRoomSummary(fullText: string): Promise<RoomSummary[]> {
+export async function getRoomSummary(base64Data: string): Promise<RoomSummary[]> {
   const client = new Anthropic({
     apiKey: process.env.ANTHROPIC_API_KEY,
   });
 
-  const message = await client.messages.create({
+  const response = await client.messages.create({
     model: "claude-sonnet-4-5",
     max_tokens: 1024,
     system: `You are an insurance claim parser. Extract only a room-by-room summary from this claim. Return ONLY a valid JSON array with no other text, no markdown, no backticks. Each object must have exactly these keys:
@@ -17,12 +17,25 @@ Return only the raw JSON array.`,
     messages: [
       {
         role: "user",
-        content: `Here is the extracted text from an insurance claim PDF. Return a room-by-room summary:\n\n${fullText}`,
+        content: [
+          {
+            type: "document",
+            source: {
+              type: "base64",
+              media_type: "application/pdf",
+              data: base64Data,
+            },
+          },
+          {
+            type: "text",
+            text: "Return a room-by-room summary of this insurance claim PDF as instructed.",
+          },
+        ],
       },
     ],
   });
 
-  const content = message.content[0];
+  const content = response.content[0];
   if (content.type !== "text") {
     throw new Error("Unexpected response type from Claude API");
   }
