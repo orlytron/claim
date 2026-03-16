@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { parsePdf, ClaimItem } from "./actions/parseClaim";
+import { parsePdfRoom, ClaimItem } from "./actions/parseClaim";
 import { getRoomSummary } from "./actions/getRoomSummary";
 import { saveSession, RoomSummary } from "./lib/session";
 
@@ -34,6 +34,11 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [roomSummary, setRoomSummary] = useState<RoomSummary[] | null>(null);
   const [items, setItems] = useState<ClaimItem[] | null>(null);
+  const [parseProgress, setParseProgress] = useState<{
+    current: number;
+    total: number;
+    roomName: string;
+  } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = (f: File) => {
@@ -96,9 +101,19 @@ export default function Home() {
       const summary = await getRoomSummary(base64);
       setRoomSummary(summary);
 
-      // ── Phase 2: full item extraction ──────────────────────────────────
+      // ── Phase 2: full item extraction, one call per room ───────────────
       setPhase("parsing");
-      const allItems = await parsePdf(base64);
+      const rooms = summary.map((r) => r.room);
+      const allItems: ClaimItem[] = [];
+
+      for (let i = 0; i < rooms.length; i++) {
+        const roomName = rooms[i];
+        setParseProgress({ current: i + 1, total: rooms.length, roomName });
+        const roomItems = await parsePdfRoom(base64, roomName);
+        allItems.push(...roomItems);
+      }
+
+      setParseProgress(null);
 
       // Deduplicate by room + description + unit_cost
       const seen = new Set<string>();
@@ -124,6 +139,7 @@ export default function Home() {
       setItems(deduplicated);
       setPhase("done");
     } catch (err) {
+      setParseProgress(null);
       setError(
         err instanceof Error ? err.message : "Failed to parse claim. Please try again."
       );
@@ -136,6 +152,7 @@ export default function Home() {
     setItems(null);
     setRoomSummary(null);
     setError(null);
+    setParseProgress(null);
     setPhase("idle");
     if (inputRef.current) inputRef.current.value = "";
   };
@@ -289,7 +306,9 @@ export default function Home() {
             {/* Parsing spinner */}
             <div className="flex items-center gap-3 text-sm text-gray-600">
               <Spinner />
-              Extracting all line items...
+              {parseProgress
+                ? `Parsing room ${parseProgress.current} of ${parseProgress.total}: ${parseProgress.roomName}…`
+                : "Extracting all line items…"}
             </div>
           </div>
         )}

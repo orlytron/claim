@@ -15,24 +15,24 @@ export interface ClaimItem {
   category: string;
 }
 
-const SYSTEM_PROMPT = `You are an insurance claim parser. Extract all line items from this insurance claim PDF. Return ONLY a valid JSON array with no other text, no markdown, no backticks. Each object must have these exact keys:
-room, description, brand, model, qty, age_years, age_months, condition, unit_cost, category
+function buildRoomPrompt(roomName: string): string {
+  return (
+    `Extract ONLY the line items from the room called '${roomName}' from this insurance claim PDF. ` +
+    `Return ONLY a valid JSON array. Each object must have: room, description, brand, model, qty, ` +
+    `age_years, age_months, condition, unit_cost, category. ` +
+    `Calculate unit_cost as total estimate amount divided by qty. ` +
+    `Return empty array [] if no items found for this room.`
+  );
+}
 
-The 'Estimate Amount' column in this PDF is the TOTAL cost for all units of that item combined. Calculate unit_cost as: Estimate Amount divided by Qty. For example if Estimate Amount is $6400 and Qty is 8, unit_cost should be $800.
-
-For any field not clearly present use these defaults: model = empty string, brand = empty string, age_years = 0, age_months = 0, condition = Average, category = empty string.
-
-Return only the raw JSON array, nothing else.`;
-
-export async function parsePdf(base64Data: string): Promise<ClaimItem[]> {
-  const client = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-  });
-
+async function callClaudeForRoom(
+  client: Anthropic,
+  base64Data: string,
+  roomName: string
+): Promise<ClaimItem[]> {
   const response = await client.messages.create({
     model: "claude-sonnet-4-5",
-    max_tokens: 8096,
-    system: SYSTEM_PROMPT,
+    max_tokens: 2048,
     messages: [
       {
         role: "user",
@@ -47,7 +47,7 @@ export async function parsePdf(base64Data: string): Promise<ClaimItem[]> {
           },
           {
             type: "text",
-            text: "Extract all line items from this insurance claim PDF as instructed.",
+            text: buildRoomPrompt(roomName),
           },
         ],
       },
@@ -56,7 +56,7 @@ export async function parsePdf(base64Data: string): Promise<ClaimItem[]> {
 
   const content = response.content[0];
   if (content.type !== "text") {
-    console.error("Unexpected non-text response from Claude");
+    console.error(`Unexpected non-text response for room: ${roomName}`);
     return [];
   }
 
@@ -66,7 +66,7 @@ export async function parsePdf(base64Data: string): Promise<ClaimItem[]> {
     rawText = rawText.replace(/^```[a-z]*\n?/, "").replace(/```$/, "").trim();
   }
 
-  console.log("Claude raw response:", rawText);
+  console.log(`Claude response for room "${roomName}":`, rawText.substring(0, 200));
 
   if (rawText === "[]" || rawText === "") {
     return [];
@@ -75,15 +75,43 @@ export async function parsePdf(base64Data: string): Promise<ClaimItem[]> {
   let items: ClaimItem[];
   try {
     items = JSON.parse(rawText) as ClaimItem[];
-  } catch (e) {
-    console.error("Failed to parse Claude response, skipping:", rawText.substring(0, 200));
+  } catch {
+    console.error(
+      `Failed to parse Claude response for room "${roomName}":`,
+      rawText.substring(0, 200)
+    );
     return [];
   }
 
   if (!Array.isArray(items)) {
-    console.error("Claude returned non-array, skipping");
+    console.error(`Claude returned non-array for room "${roomName}", skipping`);
     return [];
   }
 
   return items;
+}
+
+/** Extract line items for a single room. Used by the client for per-room progress updates. */
+export async function parsePdfRoom(
+  base64Data: string,
+  roomName: string
+): Promise<ClaimItem[]> {
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return callClaudeForRoom(client, base64Data, roomName);
+}
+
+/** Extract all line items by iterating over every room in sequence. */
+export async function parsePdf(
+  base64Data: string,
+  rooms: string[]
+): Promise<ClaimItem[]> {
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const allItems: ClaimItem[] = [];
+
+  for (const room of rooms) {
+    const roomItems = await callClaudeForRoom(client, base64Data, room);
+    allItems.push(...roomItems);
+  }
+
+  return allItems;
 }
