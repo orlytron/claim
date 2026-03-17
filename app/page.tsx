@@ -55,10 +55,13 @@ export default function Home() {
       const session = await loadSession();
 
       if (session?.claim_items && session.claim_items.length > 0) {
+        console.log("[DEBUG] Raw items from Supabase:", session.claim_items.length);
         console.log(
-          `[ClaimBuilder] Loaded ${session.claim_items.length} items from Supabase across`,
-          [...new Set(session.claim_items.map((i) => i.room))].length,
-          "rooms"
+          "[DEBUG] Items per room:",
+          session.claim_items.reduce<Record<string, number>>((acc, item) => {
+            acc[item.room] = (acc[item.room] || 0) + 1;
+            return acc;
+          }, {})
         );
 
         const summary = session.room_summary ?? deriveRoomSummary(session.claim_items);
@@ -191,22 +194,14 @@ export default function Home() {
         }
       }
 
-      // Deduplicate and persist
-      const seen = new Set<string>();
-      const deduplicated = allItems.filter((item) => {
-        const key = `${item.room}||${item.description}||${item.unit_cost}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-
-      const currentTotal = deduplicated.reduce(
+      // Persist the full unfiltered item list — no deduplication
+      const currentTotal = allItems.reduce(
         (sum, item) => sum + item.qty * item.unit_cost,
         0
       );
 
       await saveSession({
-        claim_items: deduplicated,
+        claim_items: allItems,
         current_total: currentTotal,
         status: "complete",
       });
