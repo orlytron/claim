@@ -3,34 +3,70 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { loadSession, saveSession, SessionData, RoomSummary } from "../../lib/session";
+import { loadSession, saveSession, SessionData } from "../../lib/session";
 import {
   ClaimItem,
-  ItemWithTiers,
-  TierKey,
+  RoomContext,
   TierSuggestion,
   StoredItemTier,
+  LifestyleProfile,
 } from "../../lib/types";
 import { generateItemId, slugify, formatCurrency } from "../../lib/utils";
 
-const TIER_ORDER: TierKey[] = ["keep", "entry", "mid", "premium", "ultra"];
+// ── Hard-coded missing items per room ───────────────────────────────────────
 
-const ROOM_CATEGORIES: Record<string, string[]> = {
-  default: ["Lighting", "Artwork", "Rugs", "Storage", "Accessories", "Window Treatments"],
-  kitchen: ["Small Appliances", "Cookware", "Bar & Wine", "Lighting", "Storage"],
-  bedroom: ["Bedding & Linens", "Lighting", "Artwork", "Mirror", "Storage"],
-  bathroom: ["Towels & Linens", "Accessories", "Mirror", "Lighting"],
-  office: ["Lighting", "Storage", "Artwork", "Tech Accessories"],
-  garage: ["Storage & Shelving", "Tools", "Outdoor Equipment"],
-  patio: ["Outdoor Furniture", "Lighting", "Planters", "Accessories"],
+const MISSING_ITEMS: Record<string, string[]> = {
+  "Living Room": [
+    "Lighting fixtures",
+    "Window treatments",
+    "Throws & pillows",
+    "Bar setup",
+    "Additional artwork",
+  ],
+  Kitchen: [
+    "Cookware set",
+    "Espresso machine",
+    "Knife set",
+    "Wine storage",
+    "Dinnerware set",
+    "Glassware",
+  ],
+  "Bedroom Rafe": [
+    "Bedside table",
+    "Desk & chair",
+    "Bookshelf",
+    "Gaming setup",
+    "Sports display",
+  ],
+  "Bedroom Orly": [
+    "Bedside table",
+    "Desk & chair",
+    "Bookshelf",
+    "Bedding set",
+    "Closet organizer",
+  ],
+  "David Office / Guest Room": [
+    "Office chair",
+    "Printer",
+    "Award display shelving",
+    "Safe/storage",
+    "Desk lamp",
+  ],
+  "Bathroom Master": [
+    "Towel set",
+    "Bath mat set",
+    "Mirror",
+    "Medicine cabinet",
+    "Toiletry organizer",
+    "Robe",
+  ],
+  "Bathroom White": ["Towel set", "Bath products", "Mirror", "Shower accessories"],
+  Patio: ["Dining table", "Chairs", "Umbrella", "Outdoor lighting", "Planters"],
+  Garage: ["Surf rack/storage", "Bike storage", "Gym equipment", "Workbench"],
 };
 
-function getRoomCategories(room: string): string[] {
-  const key = room.toLowerCase();
-  for (const [k, v] of Object.entries(ROOM_CATEGORIES)) {
-    if (k !== "default" && key.includes(k)) return v;
-  }
-  return ROOM_CATEGORIES.default;
+function getMissingItems(room: string): string[] {
+  return MISSING_ITEMS[room] ?? ["Lighting", "Storage", "Artwork", "Accessories"];
 }
 
 // ── Sub-components ──────────────────────────────────────────────────────────
@@ -43,223 +79,350 @@ function Spinner({ size = "sm" }: { size?: "sm" | "md" }) {
       viewBox="0 0 24 24"
     >
       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+      <path
+        className="opacity-75"
+        fill="currentColor"
+        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+      />
     </svg>
   );
 }
 
-function PlausibilityDot({ p }: { p?: "green" | "yellow" | "red" }) {
-  if (!p || p === "green") return <span className="h-2.5 w-2.5 rounded-full bg-[#16A34A] shrink-0" />;
-  if (p === "yellow") return <span className="h-2.5 w-2.5 rounded-full bg-[#D97706] shrink-0" />;
-  return <span className="h-2.5 w-2.5 rounded-full bg-[#DC2626] shrink-0" />;
-}
-
-function ItemSkeleton() {
-  return (
-    <div className="animate-pulse rounded-lg border border-gray-200 bg-white p-5">
-      <div className="mb-3 flex items-center gap-2">
-        <div className="h-2.5 w-2.5 rounded-full bg-gray-200" />
-        <div className="h-4 w-48 rounded bg-gray-200" />
-      </div>
-      <div className="mb-4 h-3 w-32 rounded bg-gray-100" />
-      <div className="h-2 w-full rounded-full bg-gray-200" />
-      <div className="mt-2 flex justify-between">
-        {[0, 1, 2, 3, 4].map((i) => (
-          <div key={i} className="h-3 w-12 rounded bg-gray-100" />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function TierSlider({
-  tiers,
-  selectedTier,
-  onChange,
-  onRelease,
+function PlausibilityBadge({
+  p,
+  multiple,
 }: {
-  tiers: TierSuggestion[];
-  selectedTier: TierKey;
-  onChange: (t: TierKey) => void;
-  onRelease: (t: TierKey) => void;
+  p: "green" | "yellow" | "red";
+  multiple: number;
 }) {
-  const idx = TIER_ORDER.indexOf(selectedTier);
-  const fillPct = (idx / 4) * 100;
+  const colors = {
+    green: "bg-green-50 text-green-700 border-green-200",
+    yellow: "bg-amber-50 text-amber-700 border-amber-200",
+    red: "bg-red-50 text-red-700 border-red-200",
+  };
+  const dots = { green: "bg-[#16A34A]", yellow: "bg-[#D97706]", red: "bg-[#DC2626]" };
+  const labels = { green: "Clean", yellow: "Needs narrative", red: "High flag" };
 
   return (
-    <div className="py-3">
-      <input
-        type="range"
-        min={0}
-        max={4}
-        step={1}
-        value={idx}
-        onChange={(e) => onChange(TIER_ORDER[+e.target.value])}
-        onMouseUp={(e) => onRelease(TIER_ORDER[+(e.target as HTMLInputElement).value])}
-        onTouchEnd={(e) => onRelease(TIER_ORDER[+(e.target as HTMLInputElement).value])}
-        className="h-2 w-full cursor-pointer appearance-none rounded-full accent-[#2563EB]"
-        style={{
-          background: `linear-gradient(to right, #2563EB ${fillPct}%, #E5E7EB ${fillPct}%)`,
-        }}
-      />
-      <div className="mt-2 flex">
-        {TIER_ORDER.map((tier, i) => {
-          const t = tiers.find((x) => x.tier === tier);
-          const active = i === idx;
-          return (
-            <button
-              key={tier}
-              onClick={() => { onChange(tier); onRelease(tier); }}
-              className="flex flex-1 flex-col items-center gap-0.5 text-center"
-            >
-              <span
-                className={`text-xs capitalize font-medium ${
-                  active ? "text-[#2563EB]" : "text-gray-400"
-                }`}
-              >
-                {tier}
-              </span>
-              <span
-                className={`text-xs tabular-nums ${
-                  active ? "font-semibold text-gray-900" : "text-gray-400"
-                }`}
-              >
-                {t ? formatCurrency(t.unit_cost) : "—"}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${colors[p]}`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${dots[p]}`} />
+      {multiple > 1 ? `${multiple.toFixed(1)}x · ` : ""}
+      {labels[p]}
+    </span>
   );
 }
+
+// ── CardState type ──────────────────────────────────────────────────────────
+
+type CardState =
+  | { mode: "default" }
+  | { mode: "loading" }
+  | { mode: "suggestions"; tiers: TierSuggestion[]; idx: number }
+  | { mode: "accepted"; tier: TierSuggestion };
+
+// ── ItemCard ─────────────────────────────────────────────────────────────────
 
 function ItemCard({
   item,
-  onTierChange,
-  onTierSave,
+  accepted,
+  profile,
+  roomContext,
+  roomBudget,
+  onAccept,
+  onRevert,
 }: {
-  item: ItemWithTiers;
-  onTierChange: (id: string, tier: TierKey) => void;
-  onTierSave: (id: string, tier: TierKey) => void;
+  item: ClaimItem;
+  accepted?: TierSuggestion;
+  profile: LifestyleProfile | null;
+  roomContext?: RoomContext;
+  roomBudget: number;
+  onAccept: (tier: TierSuggestion) => void;
+  onRevert: () => void;
 }) {
-  const tierData = item.tiers.find((t) => t.tier === item.selected_tier);
-  const lineTotal = (tierData?.unit_cost ?? item.unit_cost) * item.qty;
+  const [state, setState] = useState<CardState>(() =>
+    accepted ? { mode: "accepted", tier: accepted } : { mode: "default" }
+  );
 
-  if (item.is_loading_tiers) return <ItemSkeleton />;
+  const currentTotal =
+    state.mode === "accepted"
+      ? state.tier.unit_cost * item.qty
+      : accepted
+      ? accepted.unit_cost * item.qty
+      : item.unit_cost * item.qty;
+
+  async function handleSuggest() {
+    setState({ mode: "loading" });
+    try {
+      const res = await fetch("/api/generate-tiers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          item,
+          lifestyle_profile: profile,
+          room_budget: roomBudget,
+          room_context: roomContext ?? null,
+        }),
+      });
+      if (!res.ok) throw new Error(`${res.status}`);
+      const allTiers = (await res.json()) as TierSuggestion[];
+      // Show entry / mid / premium (skip keep & ultra for 3-option display)
+      const suggestions = allTiers.filter(
+        (t) => t.tier !== "keep" && t.tier !== "ultra"
+      );
+      setState({ mode: "suggestions", tiers: suggestions.length ? suggestions : allTiers.slice(1), idx: 0 });
+    } catch {
+      setState({ mode: "default" });
+    }
+  }
+
+  function handleAccept() {
+    if (state.mode !== "suggestions") return;
+    const tier = state.tiers[state.idx];
+    setState({ mode: "accepted", tier });
+    onAccept(tier);
+  }
+
+  function handleKeepOriginal() {
+    setState({ mode: "default" });
+  }
+
+  function handleRevert() {
+    setState({ mode: "default" });
+    onRevert();
+  }
+
+  function setIdx(newIdx: number) {
+    if (state.mode === "suggestions") {
+      setState({ mode: "suggestions", tiers: state.tiers, idx: newIdx });
+    }
+  }
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-5">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-2">
-          <PlausibilityDot p={tierData?.plausibility} />
-          <div>
-            <h3 className="font-semibold text-gray-900 leading-snug">{item.description}</h3>
-            {item.brand && <p className="text-xs text-gray-400">{item.brand}</p>}
-          </div>
-        </div>
-        <div className="shrink-0 text-right">
-          <p className="text-sm font-semibold tabular-nums text-gray-900">
-            {formatCurrency(lineTotal)}
-          </p>
-          {item.qty > 1 && (
-            <p className="text-xs tabular-nums text-gray-400">
-              {item.qty} × {formatCurrency(tierData?.unit_cost ?? item.unit_cost)}
-            </p>
-          )}
-        </div>
+    <div className="rounded-lg border border-gray-200 bg-white shadow-sm p-5">
+      {/* Badges row */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <span className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600">
+          {item.room}
+        </span>
+        {item.category && (
+          <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+            {item.category}
+          </span>
+        )}
+        {state.mode === "accepted" && (
+          <span className="rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">
+            ✓ Upgraded
+          </span>
+        )}
       </div>
 
-      <p className="mt-1 text-xs text-gray-400">
-        Original: {formatCurrency(item.unit_cost)} · Qty: {item.qty}
+      {/* Item info */}
+      <h3 className="font-semibold text-gray-900 leading-snug">{item.description}</h3>
+      {(item.brand || item.model) && (
+        <p className="text-xs text-gray-500 mt-0.5">
+          {[item.brand, item.model].filter(Boolean).join(" · ")}
+        </p>
+      )}
+      <p className="mt-1.5 text-xs text-gray-400">
+        Qty: {item.qty} · Unit: {formatCurrency(item.unit_cost)} · Total:{" "}
+        <span className={state.mode === "accepted" ? "font-semibold text-gray-700" : ""}>
+          {formatCurrency(currentTotal)}
+        </span>
       </p>
 
-      {/* Slider */}
-      {item.tiers.length > 0 ? (
-        <TierSlider
-          tiers={item.tiers}
-          selectedTier={item.selected_tier}
-          onChange={(t) => onTierChange(item.id, t)}
-          onRelease={(t) => onTierSave(item.id, t)}
-        />
-      ) : (
-        <p className="mt-3 text-xs text-gray-400">Tier suggestions unavailable</p>
+      {/* ── Default: action buttons ── */}
+      {state.mode === "default" && (
+        <div className="mt-4 flex items-center gap-3">
+          <span className="text-sm text-gray-400 cursor-default">Keep as-is</span>
+          <button
+            onClick={handleSuggest}
+            className="rounded-md bg-[#2563EB] px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+          >
+            Suggest Upgrade →
+          </button>
+        </div>
       )}
 
-      {/* Selected tier details */}
-      {tierData && item.selected_tier !== "keep" && (
-        <div className="mt-2 rounded-md bg-gray-50 p-3">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <p className="text-sm font-semibold text-gray-900">{tierData.label}</p>
-              <p className="text-xs text-gray-500">
-                {[tierData.brand, tierData.material, tierData.origin]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </p>
+      {/* ── Loading ── */}
+      {state.mode === "loading" && (
+        <div className="mt-4 flex items-center gap-2 text-sm text-gray-500">
+          <Spinner size="md" />
+          <span>Analyzing item…</span>
+        </div>
+      )}
+
+      {/* ── Suggestions ── */}
+      {state.mode === "suggestions" && state.tiers.length > 0 && (
+        <div className="mt-4">
+          <div className="rounded-lg bg-[#EFF6FF] border border-blue-100 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wider text-blue-600 mb-3">
+              Suggested Replacement
+            </p>
+
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-gray-900 leading-snug">
+                  {state.tiers[state.idx].label}
+                </p>
+                {(state.tiers[state.idx].brand || state.tiers[state.idx].model) && (
+                  <p className="text-sm text-gray-600 mt-0.5">
+                    {[state.tiers[state.idx].brand, state.tiers[state.idx].model]
+                      .filter(Boolean)
+                      .join(" ")}
+                  </p>
+                )}
+                {(state.tiers[state.idx].material || state.tiers[state.idx].origin) && (
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {[state.tiers[state.idx].material, state.tiers[state.idx].origin]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                )}
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="text-xl font-semibold tabular-nums text-gray-900">
+                  {formatCurrency(state.tiers[state.idx].unit_cost)}
+                </p>
+                {item.qty > 1 && (
+                  <p className="text-xs text-gray-400 tabular-nums">
+                    × {item.qty} = {formatCurrency(state.tiers[state.idx].unit_cost * item.qty)}
+                  </p>
+                )}
+              </div>
             </div>
-            {tierData.vendor_url ? (
+
+            <div className="mt-3">
+              <PlausibilityBadge
+                p={state.tiers[state.idx].plausibility}
+                multiple={state.tiers[state.idx].upgrade_multiple}
+              />
+            </div>
+
+            {state.tiers[state.idx].plausibility !== "green" &&
+              state.tiers[state.idx].adjuster_narrative && (
+                <p className="mt-2 text-xs italic text-gray-500">
+                  &ldquo;{state.tiers[state.idx].adjuster_narrative}&rdquo;
+                </p>
+              )}
+
+            {state.tiers[state.idx].vendor_url && (
               <a
-                href={tierData.vendor_url}
+                href={state.tiers[state.idx].vendor_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="shrink-0 text-xs text-[#2563EB] hover:underline"
+                className="mt-2 inline-block text-xs text-[#2563EB] hover:underline"
               >
-                View ↗
+                View item ↗
               </a>
-            ) : null}
+            )}
           </div>
 
-          {/* Upgrade multiple & plausibility */}
-          {tierData.upgrade_multiple > 1 && (
-            <div
-              className={`mt-2.5 rounded p-2.5 text-xs ${
-                tierData.plausibility === "yellow"
-                  ? "bg-amber-50 text-amber-800"
-                  : tierData.plausibility === "red"
-                  ? "bg-red-50 text-red-800"
-                  : "bg-green-50 text-green-800"
-              }`}
-            >
-              <div className="flex items-center gap-1.5 font-medium">
-                <PlausibilityDot p={tierData.plausibility} />
-                {tierData.upgrade_multiple.toFixed(1)}x upgrade
-                {tierData.plausibility_reason ? ` · ${tierData.plausibility_reason}` : ""}
-              </div>
-              {tierData.adjuster_narrative && tierData.plausibility !== "green" && (
-                <p className="mt-1 italic opacity-90">&ldquo;{tierData.adjuster_narrative}&rdquo;</p>
-              )}
+          {/* Navigation + actions */}
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-1.5 text-sm">
+              <button
+                onClick={() =>
+                  setIdx((state as { mode: "suggestions"; tiers: TierSuggestion[]; idx: number }).idx === 0
+                    ? state.tiers.length - 1
+                    : (state as { mode: "suggestions"; tiers: TierSuggestion[]; idx: number }).idx - 1)
+                }
+                className="rounded border border-gray-200 px-2 py-1 text-gray-500 hover:bg-gray-50 disabled:opacity-40"
+              >
+                ← Prev
+              </button>
+              <span className="text-xs text-gray-400 tabular-nums px-1">
+                {(state as { mode: "suggestions"; tiers: TierSuggestion[]; idx: number }).idx + 1} of {state.tiers.length}
+              </span>
+              <button
+                onClick={() =>
+                  setIdx(((state as { mode: "suggestions"; tiers: TierSuggestion[]; idx: number }).idx + 1) % state.tiers.length)
+                }
+                className="rounded border border-gray-200 px-2 py-1 text-gray-500 hover:bg-gray-50 disabled:opacity-40"
+              >
+                Next →
+              </button>
             </div>
-          )}
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleKeepOriginal}
+                className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                ✗ Keep Original
+              </button>
+              <button
+                onClick={handleAccept}
+                className="rounded-md bg-[#16A34A] px-4 py-2 text-sm font-medium text-white hover:bg-green-700 transition-colors"
+              >
+                ✓ Accept
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Accepted ── */}
+      {state.mode === "accepted" && (
+        <div className="mt-3">
+          <div className="rounded-lg bg-[#EFF6FF] border border-blue-100 p-3">
+            <p className="text-xs text-blue-600 mb-1.5 font-medium">Upgraded to:</p>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="font-semibold text-gray-900 text-sm">{state.tier.label}</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {[state.tier.brand, state.tier.material, state.tier.origin]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="font-semibold tabular-nums text-gray-900 text-sm">
+                  {formatCurrency(state.tier.unit_cost * item.qty)}
+                </p>
+                <p className="text-xs text-gray-400 tabular-nums">
+                  was {formatCurrency(item.unit_cost * item.qty)}
+                </p>
+              </div>
+            </div>
+            <div className="mt-2">
+              <PlausibilityBadge p={state.tier.plausibility} multiple={state.tier.upgrade_multiple} />
+            </div>
+            {state.tier.plausibility !== "green" && state.tier.adjuster_narrative && (
+              <p className="mt-1.5 text-xs italic text-gray-500">
+                &ldquo;{state.tier.adjuster_narrative}&rdquo;
+              </p>
+            )}
+          </div>
+          <button
+            onClick={handleRevert}
+            className="mt-2 text-xs text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            × Revert to original
+          </button>
         </div>
       )}
     </div>
   );
 }
 
-function SuggestionCard({
-  s,
-  onAdd,
-}: {
-  s: TierSuggestion;
-  onAdd: (s: TierSuggestion) => void;
-}) {
+// ── SuggestionCard ────────────────────────────────────────────────────────────
+
+function SuggestionCard({ s, onAdd }: { s: TierSuggestion; onAdd: (s: TierSuggestion) => void }) {
   return (
-    <div className="flex flex-col rounded-lg border border-gray-200 bg-white p-4">
-      <p className="font-medium text-gray-900 text-sm">{s.label}</p>
+    <div className="flex flex-col rounded-lg border border-blue-100 bg-[#EFF6FF] p-4">
+      <p className="font-medium text-gray-900 text-sm leading-snug">{s.label}</p>
       <p className="text-xs text-gray-500 mt-0.5">
         {[s.brand, s.material, s.origin].filter(Boolean).join(" · ")}
       </p>
       <p className="mt-2 text-lg font-semibold tabular-nums text-gray-900">
         {formatCurrency(s.unit_cost)}
       </p>
-      {s.vendor && (
-        <p className="text-xs text-gray-400 mt-0.5">{s.vendor}</p>
-      )}
+      {s.vendor && <p className="text-xs text-gray-400 mt-0.5">{s.vendor}</p>}
       <button
         onClick={() => onAdd(s)}
-        className="mt-auto pt-3 text-xs font-medium text-[#2563EB] hover:underline text-left"
+        className="mt-auto pt-3 text-xs font-medium text-[#16A34A] hover:underline text-left"
       >
         + Add to claim
       </button>
@@ -275,19 +438,20 @@ export default function RoomReviewPage() {
 
   const [session, setSession] = useState<SessionData | null>(null);
   const [roomName, setRoomName] = useState<string>("");
-  const [items, setItems] = useState<ItemWithTiers[]>([]);
+  const [items, setItems] = useState<ClaimItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-
-  // Navigation
   const [allRooms, setAllRooms] = useState<string[]>([]);
 
-  // Add items section
+  // Accepted tiers map: item id → accepted TierSuggestion
+  const [acceptedTiers, setAcceptedTiers] = useState<Record<string, TierSuggestion>>({});
+
+  // Missing items section
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
-  const [suggestions, setSuggestions] = useState<TierSuggestion[] | null>(null);
-  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+  const [categorySuggestions, setCategorySuggestions] = useState<TierSuggestion[] | null>(null);
+  const [isLoadingCategory, setIsLoadingCategory] = useState(false);
   const [customRequest, setCustomRequest] = useState("");
 
-  // Accumulate tier saves without re-reading Supabase on every write
+  // Accumulate tier saves without clobbering concurrent Supabase writes
   const pendingTiersRef = useRef<Record<string, StoredItemTier>>({});
 
   // ── Bootstrap ──────────────────────────────────────────────────────────────
@@ -299,135 +463,103 @@ export default function RoomReviewPage() {
   async function bootstrap() {
     setIsLoading(true);
     setItems([]);
-    setSuggestions(null);
+    setAcceptedTiers({});
     setActiveCategory(null);
+    setCategorySuggestions(null);
 
     const sess = await loadSession();
     setSession(sess);
 
-    if (!sess?.claim_items?.length) return;
+    if (!sess?.claim_items?.length) {
+      setIsLoading(false);
+      return;
+    }
 
-    // Seed the pending-tiers accumulator from saved state
     if (sess.item_tiers) {
       pendingTiersRef.current = { ...sess.item_tiers };
     }
 
-    // Match slug → room name
-    const rooms = sess.room_summary?.map((r) => r.room) ??
+    const rooms =
+      sess.room_summary?.map((r) => r.room) ??
       [...new Set(sess.claim_items.map((i) => i.room))];
     setAllRooms(rooms);
 
     const name = rooms.find((r) => slugify(r) === roomSlug) ?? "";
     setRoomName(name);
 
-    if (!name) { setIsLoading(false); return; }
+    if (!name) {
+      setIsLoading(false);
+      return;
+    }
 
     const roomClaimItems = sess.claim_items.filter((i) => i.room === name);
+    setItems(roomClaimItems);
 
-    const initialItems: ItemWithTiers[] = roomClaimItems.map((item) => {
+    // Restore previously accepted tiers
+    const accepted: Record<string, TierSuggestion> = {};
+    for (const item of roomClaimItems) {
       const id = generateItemId(item);
       const stored = sess.item_tiers?.[id];
-      return {
-        ...item,
-        id,
-        tiers: stored?.tiers ?? [],
-        selected_tier: stored?.selected_tier ?? "keep",
-        is_loading_tiers: !stored?.tiers?.length,
-      };
-    });
-
-    setItems(initialItems);
-    setIsLoading(false);
-
-    // Generate tiers for items that don't have them yet
-    const needTiers = initialItems.filter((i) => i.is_loading_tiers);
-    if (needTiers.length > 0) {
-      generateTiersInParallel(needTiers, sess);
-    }
-  }
-
-  async function generateTiersInParallel(
-    needTiers: ItemWithTiers[],
-    sess: SessionData
-  ) {
-    const budget = sess.room_budgets?.[roomName] ?? 0;
-
-    const promises = needTiers.map(async (item) => {
-      try {
-        const res = await fetch("/api/generate-tiers", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            item,
-            lifestyle_profile: sess.lifestyle_profile,
-            room_budget: budget,
-          }),
-        });
-
-        if (!res.ok) throw new Error(`${res.status}`);
-        const tiers = (await res.json()) as TierSuggestion[];
-
-        setItems((prev) =>
-          prev.map((i) =>
-            i.id === item.id ? { ...i, tiers, is_loading_tiers: false } : i
-          )
-        );
-
-        // Persist — accumulate in ref to avoid clobbering concurrent writes
-        pendingTiersRef.current[item.id] = {
-          tiers,
-          selected_tier: "keep",
-        };
-        await saveSession({ item_tiers: { ...pendingTiersRef.current } });
-      } catch (err) {
-        console.error(`Tier generation failed for ${item.description}:`, err);
-        setItems((prev) =>
-          prev.map((i) =>
-            i.id === item.id ? { ...i, is_loading_tiers: false } : i
-          )
-        );
+      if (stored && stored.selected_tier !== "keep" && stored.tiers?.length) {
+        const tier = stored.tiers.find((t) => t.tier === stored.selected_tier);
+        if (tier) accepted[id] = tier;
       }
-    });
-
-    await Promise.allSettled(promises);
+    }
+    setAcceptedTiers(accepted);
+    setIsLoading(false);
   }
 
-  // ── Tier interactions ──────────────────────────────────────────────────────
+  // ── Accept / revert handlers ───────────────────────────────────────────────
 
-  function handleTierChange(id: string, tier: TierKey) {
-    setItems((prev) =>
-      prev.map((i) => (i.id === id ? { ...i, selected_tier: tier } : i))
-    );
-  }
-
-  async function handleTierSave(id: string, tier: TierKey) {
-    const item = items.find((i) => i.id === id);
-    if (!item) return;
+  async function handleAccept(item: ClaimItem, tier: TierSuggestion) {
+    const id = generateItemId(item);
+    setAcceptedTiers((prev) => ({ ...prev, [id]: tier }));
 
     pendingTiersRef.current[id] = {
-      tiers: item.tiers,
-      selected_tier: tier,
+      tiers: [tier],
+      selected_tier: tier.tier,
     };
     await saveSession({ item_tiers: { ...pendingTiersRef.current } });
   }
 
-  // ── Add items ──────────────────────────────────────────────────────────────
+  async function handleRevert(item: ClaimItem) {
+    const id = generateItemId(item);
+    setAcceptedTiers((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+
+    if (pendingTiersRef.current[id]) {
+      pendingTiersRef.current[id] = {
+        tiers: pendingTiersRef.current[id].tiers,
+        selected_tier: "keep",
+      };
+      await saveSession({ item_tiers: { ...pendingTiersRef.current } });
+    }
+  }
+
+  // ── Missing items / add items ──────────────────────────────────────────────
 
   async function handleCategoryClick(category: string) {
     if (activeCategory === category) {
       setActiveCategory(null);
-      setSuggestions(null);
+      setCategorySuggestions(null);
       return;
     }
     setActiveCategory(category);
-    setSuggestions(null);
-    setIsLoadingSuggestions(true);
+    setCategorySuggestions(null);
+    setIsLoadingCategory(true);
 
     try {
-      const roomTotal = items.reduce((s, i) => {
-        const td = i.tiers.find((t) => t.tier === i.selected_tier);
-        return s + (td?.unit_cost ?? i.unit_cost) * i.qty;
+      const roomTotal = items.reduce((s, item) => {
+        const id = generateItemId(item);
+        const accepted = acceptedTiers[id];
+        return s + (accepted?.unit_cost ?? item.unit_cost) * item.qty;
       }, 0);
+
+      const roomContext =
+        session?.lifestyle_profile?.room_context?.[roomName] ?? null;
 
       const res = await fetch("/api/suggest-additions", {
         method: "POST",
@@ -436,31 +568,33 @@ export default function RoomReviewPage() {
           room: roomName,
           room_budget: session?.room_budgets?.[roomName] ?? 0,
           current_room_total: roomTotal,
-          existing_items: items as ClaimItem[],
+          existing_items: items,
           lifestyle_profile: session?.lifestyle_profile ?? null,
+          room_context: roomContext,
           category,
           custom_request: "",
         }),
       });
       if (!res.ok) throw new Error("Suggestions failed");
-      setSuggestions((await res.json()) as TierSuggestion[]);
+      setCategorySuggestions((await res.json()) as TierSuggestion[]);
     } catch {
-      setSuggestions([]);
+      setCategorySuggestions([]);
     } finally {
-      setIsLoadingSuggestions(false);
+      setIsLoadingCategory(false);
     }
   }
 
   async function handleCustomRequest() {
     if (!customRequest.trim()) return;
     setActiveCategory("custom");
-    setSuggestions(null);
-    setIsLoadingSuggestions(true);
+    setCategorySuggestions(null);
+    setIsLoadingCategory(true);
 
     try {
-      const roomTotal = items.reduce((s, i) => {
-        const td = i.tiers.find((t) => t.tier === i.selected_tier);
-        return s + (td?.unit_cost ?? i.unit_cost) * i.qty;
+      const roomTotal = items.reduce((s, item) => {
+        const id = generateItemId(item);
+        const accepted = acceptedTiers[id];
+        return s + (accepted?.unit_cost ?? item.unit_cost) * item.qty;
       }, 0);
 
       const res = await fetch("/api/suggest-additions", {
@@ -470,18 +604,19 @@ export default function RoomReviewPage() {
           room: roomName,
           room_budget: session?.room_budgets?.[roomName] ?? 0,
           current_room_total: roomTotal,
-          existing_items: items as ClaimItem[],
+          existing_items: items,
           lifestyle_profile: session?.lifestyle_profile ?? null,
+          room_context: session?.lifestyle_profile?.room_context?.[roomName] ?? null,
           category: "custom",
           custom_request: customRequest,
         }),
       });
       if (!res.ok) throw new Error("Suggestions failed");
-      setSuggestions((await res.json()) as TierSuggestion[]);
+      setCategorySuggestions((await res.json()) as TierSuggestion[]);
     } catch {
-      setSuggestions([]);
+      setCategorySuggestions([]);
     } finally {
-      setIsLoadingSuggestions(false);
+      setIsLoadingCategory(false);
     }
   }
 
@@ -500,47 +635,39 @@ export default function RoomReviewPage() {
     };
 
     const id = generateItemId(newItem);
-    const newItemWithTiers: ItemWithTiers = {
-      ...newItem,
-      id,
-      tiers: [s],
-      selected_tier: "keep",
-      is_loading_tiers: false,
-    };
 
-    setItems((prev) => [...prev, newItemWithTiers]);
+    setItems((prev) => [...prev, newItem]);
+    setAcceptedTiers((prev) => ({ ...prev, [id]: s }));
 
-    // Persist: add to claim_items + item_tiers
-    const updatedClaimItems = [
-      ...(session?.claim_items ?? []),
-      newItem,
-    ];
-    pendingTiersRef.current[id] = { tiers: [s], selected_tier: "keep" };
+    const updatedClaimItems = [...(session?.claim_items ?? []), newItem];
+    pendingTiersRef.current[id] = { tiers: [s], selected_tier: s.tier };
 
     await saveSession({
       claim_items: updatedClaimItems,
       item_tiers: { ...pendingTiersRef.current },
     });
-    setSession((prev) =>
-      prev ? { ...prev, claim_items: updatedClaimItems } : prev
-    );
+    setSession((prev) => (prev ? { ...prev, claim_items: updatedClaimItems } : prev));
   }
 
   // ── Derived values ─────────────────────────────────────────────────────────
 
   const roomBudget = session?.room_budgets?.[roomName] ?? 0;
-  const roomTotal = items.reduce((s, i) => {
-    const td = i.tiers.find((t) => t.tier === i.selected_tier);
-    return s + (td?.unit_cost ?? i.unit_cost) * i.qty;
+  const roomTotal = items.reduce((s, item) => {
+    const id = generateItemId(item);
+    const accepted = acceptedTiers[id];
+    return s + (accepted?.unit_cost ?? item.unit_cost) * item.qty;
   }, 0);
   const budgetPct = roomBudget > 0 ? Math.min(100, (roomTotal / roomBudget) * 100) : 0;
 
   const plausibilityCounts = items.reduce(
-    (acc, i) => {
-      if (i.is_loading_tiers || !i.tiers.length) return acc;
-      const td = i.tiers.find((t) => t.tier === i.selected_tier);
-      const p = td?.plausibility ?? "green";
-      acc[p]++;
+    (acc, item) => {
+      const id = generateItemId(item);
+      const accepted = acceptedTiers[id];
+      if (accepted) {
+        acc[accepted.plausibility]++;
+      } else {
+        acc.green++;
+      }
       return acc;
     },
     { green: 0, yellow: 0, red: 0 }
@@ -550,13 +677,16 @@ export default function RoomReviewPage() {
   const prevRoom = roomIdx > 0 ? allRooms[roomIdx - 1] : null;
   const nextRoom = roomIdx < allRooms.length - 1 ? allRooms[roomIdx + 1] : null;
 
-  const categories = getRoomCategories(roomName);
+  const missingCategories = getMissingItems(roomName);
+  const profile = session?.lifestyle_profile ?? null;
+  const roomContext: RoomContext | undefined =
+    session?.lifestyle_profile?.room_context?.[roomName];
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-col min-h-screen">
-      {/* Page header */}
+      {/* ── Page header ────────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-10 border-b border-gray-100 bg-white px-6 py-4">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -565,7 +695,7 @@ export default function RoomReviewPage() {
                 ← All Rooms
               </Link>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <h1 className="text-xl font-semibold text-gray-900">{roomName}</h1>
               {roomBudget > 0 && (
                 <span className="text-sm tabular-nums text-gray-500">
@@ -573,10 +703,14 @@ export default function RoomReviewPage() {
                   <span className="text-gray-400">/ {formatCurrency(roomBudget)}</span>
                 </span>
               )}
+              {roomContext && (
+                <span className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-500">
+                  {roomContext.occupant}
+                </span>
+              )}
             </div>
           </div>
 
-          {/* Plausibility summary */}
           <div className="flex items-center gap-3 text-xs shrink-0">
             <span className="flex items-center gap-1 text-[#16A34A]">
               <span className="h-2 w-2 rounded-full bg-[#16A34A]" />
@@ -593,7 +727,6 @@ export default function RoomReviewPage() {
           </div>
         </div>
 
-        {/* Budget progress bar */}
         {roomBudget > 0 && (
           <div className="mt-3">
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
@@ -613,11 +746,23 @@ export default function RoomReviewPage() {
         )}
       </header>
 
-      {/* Main content */}
+      {/* ── Main content ───────────────────────────────────────────────────── */}
       <main className="flex-1 px-6 py-6">
         {isLoading ? (
           <div className="space-y-3">
-            {[1, 2, 3].map((i) => <ItemSkeleton key={i} />)}
+            {[1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="animate-pulse rounded-lg border border-gray-200 bg-white p-5"
+              >
+                <div className="flex gap-2 mb-3">
+                  <div className="h-5 w-20 rounded-full bg-gray-100" />
+                  <div className="h-5 w-16 rounded-full bg-gray-100" />
+                </div>
+                <div className="h-4 w-56 rounded bg-gray-200 mb-2" />
+                <div className="h-3 w-32 rounded bg-gray-100" />
+              </div>
+            ))}
           </div>
         ) : items.length === 0 ? (
           <div className="flex flex-col items-center py-16 text-center">
@@ -628,32 +773,39 @@ export default function RoomReviewPage() {
           </div>
         ) : (
           <div className="space-y-3">
-            {items.map((item) => (
-              <ItemCard
-                key={item.id}
-                item={item}
-                onTierChange={handleTierChange}
-                onTierSave={handleTierSave}
-              />
-            ))}
+            {items.map((item, idx) => {
+              const id = generateItemId(item);
+              return (
+                <ItemCard
+                  key={`${id}-${idx}`}
+                  item={item}
+                  accepted={acceptedTiers[id]}
+                  profile={profile}
+                  roomContext={roomContext}
+                  roomBudget={roomBudget}
+                  onAccept={(tier) => handleAccept(item, tier)}
+                  onRevert={() => handleRevert(item)}
+                />
+              );
+            })}
           </div>
         )}
 
-        {/* ── Add Items Section ────────────────────────────────────────── */}
+        {/* ── Items commonly found in this room ───────────────────────────── */}
         {!isLoading && (
-          <div className="mt-8">
-            <div className="mb-4">
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
-                + Add Items to This Room
+          <div className="mt-10">
+            <div className="mb-4 border-t border-gray-100 pt-6">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                Items Commonly Found in This Room
               </h2>
               <p className="mt-1 text-xs text-gray-400">
-                Add missing like-kind items to strengthen your claim.
+                Add missing items to strengthen the claim.
               </p>
             </div>
 
-            {/* Category chips */}
+            {/* Hard-coded missing item chips */}
             <div className="flex flex-wrap gap-2 mb-4">
-              {categories.map((cat) => (
+              {missingCategories.map((cat) => (
                 <button
                   key={cat}
                   onClick={() => handleCategoryClick(cat)}
@@ -668,24 +820,24 @@ export default function RoomReviewPage() {
               ))}
             </div>
 
-            {/* Loading suggestions */}
-            {isLoadingSuggestions && (
+            {isLoadingCategory && (
               <div className="flex items-center gap-2 py-4 text-sm text-gray-500">
                 <Spinner size="md" /> Generating suggestions…
               </div>
             )}
 
-            {/* Suggestion cards */}
-            {suggestions && suggestions.length > 0 && (
+            {categorySuggestions && categorySuggestions.length > 0 && (
               <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                {suggestions.map((s, i) => (
+                {categorySuggestions.map((s, i) => (
                   <SuggestionCard key={i} s={s} onAdd={handleAddSuggestion} />
                 ))}
               </div>
             )}
 
-            {suggestions && suggestions.length === 0 && (
-              <p className="mb-4 text-sm text-gray-400">No suggestions found. Try a custom request.</p>
+            {categorySuggestions && categorySuggestions.length === 0 && (
+              <p className="mb-4 text-sm text-gray-400">
+                No suggestions found. Try a custom request below.
+              </p>
             )}
 
             {/* Custom request */}
@@ -700,8 +852,8 @@ export default function RoomReviewPage() {
               />
               <button
                 onClick={handleCustomRequest}
-                disabled={isLoadingSuggestions || !customRequest.trim()}
-                className="rounded-md bg-[#2563EB] px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                disabled={isLoadingCategory || !customRequest.trim()}
+                className="rounded-md bg-[#2563EB] px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
               >
                 Get Suggestions →
               </button>
@@ -710,7 +862,7 @@ export default function RoomReviewPage() {
         )}
       </main>
 
-      {/* ── Sticky bottom bar ───────────────────────────────────────────── */}
+      {/* ── Sticky bottom bar ───────────────────────────────────────────────── */}
       <footer className="sticky bottom-0 z-10 border-t border-gray-200 bg-white/95 px-6 py-4 backdrop-blur">
         <div className="flex items-center justify-between gap-6">
           <div className="flex-1">
@@ -727,7 +879,11 @@ export default function RoomReviewPage() {
                 <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
                   <div
                     className={`h-full rounded-full transition-all ${
-                      budgetPct >= 100 ? "bg-green-500" : budgetPct >= 80 ? "bg-amber-500" : "bg-[#2563EB]"
+                      budgetPct >= 100
+                        ? "bg-green-500"
+                        : budgetPct >= 80
+                        ? "bg-amber-500"
+                        : "bg-[#2563EB]"
                     }`}
                     style={{ width: `${budgetPct}%` }}
                   />

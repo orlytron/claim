@@ -36,6 +36,11 @@ export type ItemWithTiers = ClaimItem & {
   is_loading_tiers: boolean;
 };
 
+export type RoomContext = {
+  type: string;
+  occupant: string;
+};
+
 export type LifestyleProfile = {
   design_tier: string;
   aesthetic: string;
@@ -52,6 +57,7 @@ export type LifestyleProfile = {
     outdoor: string[];
     textiles: string[];
   };
+  room_context?: Record<string, RoomContext>;
 };
 
 export type StoredItemTier = {

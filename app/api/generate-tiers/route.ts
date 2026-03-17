@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
-import { ClaimItem, LifestyleProfile, TierSuggestion } from "../../lib/types";
+import { ClaimItem, LifestyleProfile, RoomContext, TierSuggestion } from "../../lib/types";
 
 function buildSystemPrompt(): string {
   return `You are an insurance claim upgrade specialist.
@@ -18,9 +18,14 @@ For yellow items, adjuster_narrative must explain why this upgrade is justified 
 All suggestions must:
 - Be the same item category (sofa stays sofa)
 - Be available for purchase before Jan 1 2025
-- Match the lifestyle profile provided
+- Match the lifestyle profile AND the room context provided
 - Have real brand names and real market prices
 - Be specific: brand + model + material + origin
+
+IMPORTANT: Match suggestions to the room occupant and type.
+For children's rooms (kids_bedroom), suggest age-appropriate items — NOT luxury Italian designer furniture.
+For shared/master bathrooms, suggest quality but functional items.
+For garage/outdoor, suggest durable and activity-appropriate items.
 
 Return ONLY a raw JSON array of exactly 5 objects.
 One object per tier: keep, entry, mid, premium, ultra.
@@ -30,17 +35,23 @@ No markdown. No backticks. Just the array.`;
 function buildUserMessage(
   item: ClaimItem,
   profile: LifestyleProfile | null,
-  roomBudget: number
+  roomBudget: number,
+  roomContext: RoomContext | null
 ): string {
   const furnitureBrands = profile?.suggested_brands?.furniture?.join(", ") ?? "not specified";
   const prioritize = profile?.prioritize?.join(", ") ?? "not specified";
   const avoid = profile?.avoid?.join(", ") ?? "not specified";
+
+  const contextLine = roomContext
+    ? `Room context: ${roomContext.type} — occupant: ${roomContext.occupant}`
+    : "";
 
   return `Item: ${item.description}${item.brand ? ` by ${item.brand}` : ""}
 Original price: $${item.unit_cost}
 Room: ${item.room}
 Quantity: ${item.qty}
 Room budget: $${roomBudget}
+${contextLine}
 
 Lifestyle profile:
 - Design tier: ${profile?.design_tier ?? "not specified"}
@@ -51,15 +62,16 @@ Lifestyle profile:
 
 Generate 5 upgrade tiers for this item.
 Keep tier must use the original item details (brand: "${item.brand || "unknown"}", unit_cost: ${item.unit_cost}).
-Each higher tier must be a genuinely better version of the same item type, matching the lifestyle profile.`;
+Each higher tier must be a genuinely better version of the same item type, matching the lifestyle profile and room context.`;
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const { item, lifestyle_profile, room_budget } = (await request.json()) as {
+    const { item, lifestyle_profile, room_budget, room_context } = (await request.json()) as {
       item: ClaimItem;
       lifestyle_profile: LifestyleProfile | null;
       room_budget: number;
+      room_context?: RoomContext | null;
     };
 
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -71,7 +83,7 @@ export async function POST(request: NextRequest) {
       messages: [
         {
           role: "user",
-          content: buildUserMessage(item, lifestyle_profile, room_budget),
+          content: buildUserMessage(item, lifestyle_profile, room_budget, room_context ?? null),
         },
       ],
     });

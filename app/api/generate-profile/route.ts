@@ -16,6 +16,17 @@ const ISRAEL_PROFILE = {
     outdoor: ["Gandia Blasco", "Dedon", "Brown Jordan", "Kettal"],
     textiles: ["Dedar Milano", "Osborne & Little", "Rogers & Goffigon", "Christopher Farr"],
   },
+  room_context: {
+    "Living Room": { type: "primary_living", occupant: "family" },
+    "Kitchen": { type: "kitchen", occupant: "family" },
+    "Bedroom Rafe": { type: "kids_bedroom", occupant: "Rafe (child)" },
+    "Bedroom Orly": { type: "kids_bedroom", occupant: "Orly (child)" },
+    "Patio": { type: "outdoor", occupant: "family" },
+    "Garage": { type: "garage_active", occupant: "family" },
+    "Bathroom White": { type: "bathroom", occupant: "shared" },
+    "Bathroom Master": { type: "bathroom", occupant: "David" },
+    "David Office / Guest Room": { type: "office_guest", occupant: "David" },
+  },
 };
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

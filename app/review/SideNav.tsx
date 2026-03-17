@@ -50,10 +50,29 @@ export default function SideNav({ session }: { session: SessionData | null }) {
 
   return (
     <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-gray-100 bg-white lg:flex overflow-y-auto">
-      <div className="px-4 py-5 border-b border-gray-100">
-        <Link href="/" className="text-base font-semibold tracking-tight text-gray-900">
-          ClaimBuilder
+      {/* Header + progress */}
+      <div className="px-4 py-4 border-b border-gray-100">
+        <Link href="/" className="block">
+          <p className="text-sm font-semibold tracking-tight text-gray-900">Israel Claim</p>
+          <p className="text-xs text-gray-400">Claim #7579B726D</p>
         </Link>
+        <div className="mt-3">
+          <div className="flex items-center justify-between text-xs mb-1">
+            <span className="tabular-nums font-semibold text-gray-900">
+              {formatCurrency(grandTotal)}
+            </span>
+            <span className="text-gray-400">
+              → {formatCurrency(targetValue || 1_600_000)}
+            </span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
+            <div
+              className="h-full rounded-full bg-[#2563EB] transition-all"
+              style={{ width: `${grandPct}%` }}
+            />
+          </div>
+          <p className="mt-0.5 text-xs text-gray-400">{grandPct.toFixed(0)}% of target</p>
+        </div>
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-0.5">
@@ -102,35 +121,29 @@ export default function SideNav({ session }: { session: SessionData | null }) {
             </Link>
           );
         })}
+
+        {/* Art Collection special entry */}
+        <div className="pt-2 pb-1 px-3">
+          <p className="text-xs font-medium uppercase tracking-wider text-gray-400">Special</p>
+        </div>
+        <Link
+          href="/review/art"
+          className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors ${
+            pathname === "/review/art"
+              ? "bg-blue-50 font-medium text-[#2563EB]"
+              : "text-gray-700 hover:bg-gray-50 hover:text-gray-900"
+          }`}
+        >
+          <span>🖼</span> Art Collection
+        </Link>
       </nav>
 
       <div className="border-t border-gray-100 px-4 py-4 space-y-3">
-        {/* Grand total */}
-        <div>
-          <div className="flex justify-between text-xs text-gray-500 mb-1">
-            <span>Total</span>
-            <span className="tabular-nums font-medium text-gray-900">
-              {formatCurrency(grandTotal)}
-              {targetValue > 0 && (
-                <span className="text-gray-400"> / {formatCurrency(targetValue)}</span>
-              )}
-            </span>
-          </div>
-          {targetValue > 0 && (
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
-              <div
-                className="h-full rounded-full bg-[#2563EB] transition-all"
-                style={{ width: `${grandPct}%` }}
-              />
-            </div>
-          )}
-        </div>
-
         {/* Plausibility summary */}
         <div className="flex gap-3 text-xs">
           <span className="flex items-center gap-1 text-green-600">
             <span className="h-2 w-2 rounded-full bg-green-500" />
-            {plausibility.green}
+            {plausibility.green} clean
           </span>
           <span className="flex items-center gap-1 text-amber-600">
             <span className="h-2 w-2 rounded-full bg-amber-500" />
@@ -142,12 +155,12 @@ export default function SideNav({ session }: { session: SessionData | null }) {
           </span>
         </div>
 
-        <Link
-          href="#"
+        <a
+          href="/api/export-xact"
           className="block w-full rounded-md border border-gray-200 px-3 py-2 text-center text-xs font-medium text-gray-700 hover:bg-gray-50"
         >
-          Export →
-        </Link>
+          Export XactContents →
+        </a>
       </div>
     </aside>
   );

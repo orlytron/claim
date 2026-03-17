@@ -55,15 +55,6 @@ export default function Home() {
       const session = await loadSession();
 
       if (session?.claim_items && session.claim_items.length > 0) {
-        console.log("[DEBUG] Raw items from Supabase:", session.claim_items.length);
-        console.log(
-          "[DEBUG] Items per room:",
-          session.claim_items.reduce<Record<string, number>>((acc, item) => {
-            acc[item.room] = (acc[item.room] || 0) + 1;
-            return acc;
-          }, {})
-        );
-
         const summary = session.room_summary ?? deriveRoomSummary(session.claim_items);
         const grouped = groupByRoom(session.claim_items);
 
@@ -73,7 +64,6 @@ export default function Home() {
         if (session.target_value) setTargetValue(String(session.target_value));
         setPhase("done");
       } else {
-        console.log("[ClaimBuilder] No existing claim data found — showing upload screen.");
         setPhase("idle");
       }
     }
@@ -247,7 +237,34 @@ export default function Home() {
     <div className="min-h-screen bg-white">
       {/* Header */}
       <header className="border-b border-gray-100 px-6 py-4">
-        <span className="text-xl font-semibold tracking-tight text-gray-900">ClaimBuilder</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xl font-semibold tracking-tight text-gray-900">Israel Claim</span>
+          <span className="text-gray-300">·</span>
+          <span className="text-sm text-gray-500">Claim #7579B726D</span>
+        </div>
+        {isResultsView && runningTotal > 0 && (
+          <div className="mt-3 max-w-lg">
+            <div className="mb-1 flex items-center justify-between text-xs text-gray-500">
+              <span className="tabular-nums font-semibold text-gray-900">
+                {formatCurrency(runningTotal)}
+              </span>
+              <span className="text-gray-400">
+                → {formatCurrency(parseFloat(targetValue) || 1_600_000)} target
+              </span>
+            </div>
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
+              <div
+                className="h-full rounded-full bg-[#2563EB] transition-all"
+                style={{
+                  width: `${Math.min(100, (runningTotal / (parseFloat(targetValue) || 1_600_000)) * 100)}%`,
+                }}
+              />
+            </div>
+            <p className="mt-0.5 text-xs text-gray-400">
+              {((runningTotal / (parseFloat(targetValue) || 1_600_000)) * 100).toFixed(1)}% of target
+            </p>
+          </div>
+        )}
       </header>
 
       <main className="mx-auto max-w-4xl px-6 py-12">
