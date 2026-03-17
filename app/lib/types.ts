@@ -10,3 +10,51 @@ export interface ClaimItem {
   unit_cost: number;
   category: string;
 }
+
+export type TierKey = "keep" | "entry" | "mid" | "premium" | "ultra";
+
+export type TierSuggestion = {
+  tier: TierKey;
+  label: string;
+  brand: string;
+  model: string;
+  material: string;
+  origin: string;
+  vendor: string;
+  vendor_url: string;
+  unit_cost: number;
+  plausibility: "green" | "yellow" | "red";
+  plausibility_reason: string;
+  adjuster_narrative: string;
+  upgrade_multiple: number;
+};
+
+export type ItemWithTiers = ClaimItem & {
+  id: string;
+  tiers: TierSuggestion[];
+  selected_tier: TierKey;
+  is_loading_tiers: boolean;
+};
+
+export type LifestyleProfile = {
+  design_tier: string;
+  aesthetic: string;
+  art_engagement: string;
+  active_lifestyle: string[];
+  professional: string;
+  avoid: string[];
+  prioritize: string[];
+  suggested_brands: {
+    furniture: string[];
+    lighting: string[];
+    kitchen: string[];
+    art: string[];
+    outdoor: string[];
+    textiles: string[];
+  };
+};
+
+export type StoredItemTier = {
+  tiers: TierSuggestion[];
+  selected_tier: TierKey;
+};

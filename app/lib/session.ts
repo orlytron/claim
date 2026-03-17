@@ -1,7 +1,7 @@
 "use server";
 
 import { supabase } from "./supabase";
-import { ClaimItem } from "./types";
+import { ClaimItem, LifestyleProfile, StoredItemTier } from "./types";
 
 export interface RoomSummary {
   room: string;
@@ -15,6 +15,10 @@ export interface SessionData {
   target_value: number | null;
   current_total: number | null;
   status: string | null;
+  lifestyle_profile: LifestyleProfile | null;
+  room_budgets: Record<string, number> | null;
+  item_tiers: Record<string, StoredItemTier> | null;
+  strategy: "upgrades_only" | "upgrades_additions" | null;
 }
 
 export async function saveSession(data: Partial<SessionData>): Promise<void> {
@@ -56,5 +60,9 @@ export async function loadSession(): Promise<SessionData | null> {
     target_value: data.target_value ?? null,
     current_total: data.current_total ?? null,
     status: data.status ?? null,
+    lifestyle_profile: data.lifestyle_profile ?? null,
+    room_budgets: data.room_budgets ?? null,
+    item_tiers: data.item_tiers ?? null,
+    strategy: data.strategy ?? null,
   };
 }
