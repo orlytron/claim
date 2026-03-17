@@ -695,6 +695,13 @@ export default function RoomReviewPage() {
                 ← All Rooms
               </Link>
             </div>
+            {/* Browse Bundles button */}
+            <Link
+              href={`/review/bundles/${roomSlug}`}
+              className="mb-2 inline-flex items-center gap-1.5 rounded-md bg-[#2563EB] px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 transition-colors"
+            >
+              + Browse Room Bundles →
+            </Link>
             <div className="flex items-center gap-3 flex-wrap">
               <h1 className="text-xl font-semibold text-gray-900">{roomName}</h1>
               {roomBudget > 0 && (

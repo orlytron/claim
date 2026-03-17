@@ -90,35 +90,47 @@ export default function SideNav({ session }: { session: SessionData | null }) {
         {rooms.map((room) => {
           const slug = slugify(room);
           const isActive = pathname === `/review/${slug}`;
+          const isBundlesActive = pathname === `/review/bundles/${slug}`;
           const budget = session.room_budgets?.[room] ?? 0;
           const total = roomTotals[room] ?? 0;
           const pct = budget > 0 ? Math.min(100, Math.round((total / budget) * 100)) : 0;
 
           return (
-            <Link
-              key={room}
-              href={`/review/${slug}`}
-              className={`flex items-center justify-between rounded-md px-3 py-2 text-sm transition-colors ${
-                isActive
-                  ? "bg-blue-50 font-medium text-[#2563EB]"
-                  : "text-gray-700 hover:bg-gray-50 hover:text-gray-900"
-              }`}
-            >
-              <span className="truncate">{room}</span>
-              {budget > 0 && (
-                <span
-                  className={`ml-2 shrink-0 text-xs tabular-nums ${
-                    pct >= 100
-                      ? "text-green-600"
-                      : pct >= 80
-                      ? "text-amber-600"
-                      : "text-gray-400"
-                  }`}
-                >
-                  {pct}%
-                </span>
-              )}
-            </Link>
+            <div key={room}>
+              <Link
+                href={`/review/${slug}`}
+                className={`flex items-center justify-between rounded-md px-3 py-2 text-sm transition-colors ${
+                  isActive
+                    ? "bg-blue-50 font-medium text-[#2563EB]"
+                    : "text-gray-700 hover:bg-gray-50 hover:text-gray-900"
+                }`}
+              >
+                <span className="truncate">{room}</span>
+                {budget > 0 && (
+                  <span
+                    className={`ml-2 shrink-0 text-xs tabular-nums ${
+                      pct >= 100
+                        ? "text-green-600"
+                        : pct >= 80
+                        ? "text-amber-600"
+                        : "text-gray-400"
+                    }`}
+                  >
+                    {pct}%
+                  </span>
+                )}
+              </Link>
+              <Link
+                href={`/review/bundles/${slug}`}
+                className={`ml-4 flex items-center gap-1 rounded-md px-3 py-1 text-xs transition-colors ${
+                  isBundlesActive
+                    ? "font-medium text-[#2563EB]"
+                    : "text-gray-400 hover:text-gray-600"
+                }`}
+              >
+                <span>📦</span> Bundles
+              </Link>
+            </div>
           );
         })}
 

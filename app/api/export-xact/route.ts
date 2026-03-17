@@ -1,6 +1,20 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { loadSession } from "../../lib/session";
+import { supabase } from "../../lib/supabase";
+import { ClaimItem } from "../../lib/types";
+
+interface BundleDecisionRow {
+  room: string;
+  items: Array<{
+    description: string;
+    brand: string;
+    qty: number;
+    unit_cost: number;
+    total: number;
+    category: string;
+  }>;
+}
 
 export async function GET() {
   const session = await loadSession();
@@ -9,47 +23,65 @@ export async function GET() {
     return NextResponse.json({ error: "No claim items found" }, { status: 404 });
   }
 
-  const items = session.claim_items;
-  const grandTotal = items.reduce((sum, item) => sum + item.qty * item.unit_cost, 0);
+  // Load accepted bundle decisions
+  const { data: decisions } = await supabase
+    .from("bundle_decisions")
+    .select("room, items")
+    .eq("action", "accepted");
+
+  // Merge original claim_items + bundle items, deduplicating by description+room
+  const seen = new Set<string>();
+  const allItems: ClaimItem[] = [];
+
+  for (const item of session.claim_items) {
+    const key = `${item.room}::${item.description}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      allItems.push(item);
+    }
+  }
+
+  for (const decision of (decisions as BundleDecisionRow[]) ?? []) {
+    for (const bi of decision.items ?? []) {
+      const key = `${decision.room}::${bi.description}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        allItems.push({
+          room: decision.room,
+          description: bi.description,
+          brand: bi.brand ?? "",
+          model: "",
+          qty: bi.qty,
+          age_years: 0,
+          age_months: 0,
+          condition: "New",
+          unit_cost: bi.unit_cost,
+          category: bi.category ?? "",
+        });
+      }
+    }
+  }
+
+  const grandTotal = allItems.reduce((sum, item) => sum + item.qty * item.unit_cost, 0);
 
   // ── Build worksheet rows ───────────────────────────────────────────────────
 
   const rows: unknown[][] = [
-    // Row 1 — template version / condition scale
     ["Template Version: 4.3", "Average", "Below Avg.", "Above Avg.", "New", "", "", "", "", "", "", "", "", ""],
-    // Row 2 — insured / claim number
     ["Insured:", "ISRAEL, DAVID", "", "", "", "", "Claim Number:", "7579B726D", "", "", "", "State/Prov:", "CA", ""],
-    // Row 3 — adjuster / policy number
     ["Adjuster:", "", "", "", "", "", "Policy Number:", "71XS54220", "", "", "", "", "", ""],
-    // Row 4 — important information
     ["Important Information:", "", "", "", "", "", "", "", "", "", "", "", "", ""],
-    // Row 5-6 — blank spacers
     ["", "", "", "", "", "", "", "", "", "", "", "", "", ""],
     ["", "", "", "", "", "", "", "", "", "", "", "", "", ""],
-    // Row 7 — total (column K, index 10, will be updated below)
     ["Total Estimated Replacement Cost = ", "", "", "", "", "", "", "", "", "", grandTotal, "", "", ""],
-    // Row 8 — column headers
     [
-      "Item #",
-      "Room",
-      "Brand or Manufacturer",
-      "Model#",
-      "Item Description",
-      "Original Vendor",
-      "Quantity Lost",
-      "Item Age (Years)",
-      "Item Age (Months)",
-      "Condition",
-      "Cost to Replace Pre-Tax (each)",
-      "Total Cost",
-      "CAT",
-      "SEL",
+      "Item #", "Room", "Brand or Manufacturer", "Model#", "Item Description",
+      "Original Vendor", "Quantity Lost", "Item Age (Years)", "Item Age (Months)",
+      "Condition", "Cost to Replace Pre-Tax (each)", "Total Cost", "CAT", "SEL",
     ],
   ];
 
-  // ── Item rows ──────────────────────────────────────────────────────────────
-
-  items.forEach((item, index) => {
+  allItems.forEach((item, index) => {
     rows.push([
       index + 1,
       item.room,
