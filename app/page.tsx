@@ -2,12 +2,11 @@
 
 import React, { useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { parsePdfRoom, ClaimItem } from "./actions/parseClaim";
+import { ClaimItem } from "./lib/types";
 import { getRoomSummary } from "./actions/getRoomSummary";
 import { saveSession, RoomSummary } from "./lib/session";
 
 type Phase = "idle" | "scanning" | "parsing" | "done";
-type RoomParseStatus = "pending" | "loading" | "done";
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -24,19 +23,15 @@ export default function Home() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [roomSummary, setRoomSummary] = useState<RoomSummary[] | null>(null);
-  const [roomStatuses, setRoomStatuses] = useState<Record<string, RoomParseStatus>>({});
   const [roomItems, setRoomItems] = useState<Record<string, ClaimItem[]>>({});
   const [expandedRooms, setExpandedRooms] = useState<Set<string>>(new Set());
-  const [parseProgress, setParseProgress] = useState<{ completed: number; total: number } | null>(null);
   const [targetValue, setTargetValue] = useState<string>("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   const resetParseState = () => {
     setRoomSummary(null);
-    setRoomStatuses({});
     setRoomItems({});
     setExpandedRooms(new Set());
-    setParseProgress(null);
   };
 
   const handleFile = (f: File) => {
@@ -99,48 +94,70 @@ export default function Home() {
       const summary = await getRoomSummary(base64);
       setRoomSummary(summary);
 
-      // ── Phase 2: fire all room parses simultaneously ───────────────────
+      // ── Phase 2: single streaming extraction call ──────────────────────
       setPhase("parsing");
-      const rooms = summary.map((r) => r.room);
-      const total = rooms.length;
 
-      const initialStatuses: Record<string, RoomParseStatus> = {};
-      rooms.forEach((r) => (initialStatuses[r] = "pending"));
-      setRoomStatuses(initialStatuses);
-      setParseProgress({ completed: 0, total });
-
-      const promises = rooms.map(async (roomName) => {
-        setRoomStatuses((prev) => ({ ...prev, [roomName]: "loading" }));
-
-        const items = await parsePdfRoom(base64, roomName);
-
-        const seen = new Set<string>();
-        const deduped = items.filter((item) => {
-          const key = `${item.room}||${item.description}||${item.unit_cost}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-
-        setRoomItems((prev) => ({ ...prev, [roomName]: deduped }));
-        setRoomStatuses((prev) => ({ ...prev, [roomName]: "done" }));
-        setParseProgress((prev) =>
-          prev ? { ...prev, completed: prev.completed + 1 } : { completed: 1, total }
-        );
-
-        return deduped;
+      const response = await fetch("/api/parse-claim", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base64Data: base64 }),
       });
 
-      const results = await Promise.allSettled(promises);
+      if (!response.ok) throw new Error(`Parse failed: ${response.statusText}`);
+      if (!response.body) throw new Error("No response body from parse API");
 
-      const allItems = results
-        .filter((r): r is PromiseFulfilledResult<ClaimItem[]> => r.status === "fulfilled")
-        .flatMap((r) => r.value);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let lineBuffer = "";
 
-      const currentTotal = allItems.reduce((sum, item) => sum + item.qty * item.unit_cost, 0);
+      // Collect all items for final Supabase save
+      const allItems: ClaimItem[] = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        lineBuffer += decoder.decode(value, { stream: true });
+        const lines = lineBuffer.split("\n");
+        lineBuffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const item = JSON.parse(line) as ClaimItem;
+            allItems.push(item);
+
+            setRoomItems((prev) => {
+              const room = item.room || "Uncategorized";
+              const existing = prev[room] ?? [];
+              // Auto-expand the room when its first item arrives
+              if (existing.length === 0) {
+                setExpandedRooms((rooms) => new Set([...rooms, room]));
+              }
+              return { ...prev, [room]: [...existing, item] };
+            });
+          } catch {
+            // skip malformed NDJSON lines
+          }
+        }
+      }
+
+      // Deduplicate and persist
+      const seen = new Set<string>();
+      const deduplicated = allItems.filter((item) => {
+        const key = `${item.room}||${item.description}||${item.unit_cost}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      const currentTotal = deduplicated.reduce(
+        (sum, item) => sum + item.qty * item.unit_cost,
+        0
+      );
 
       await saveSession({
-        claim_items: allItems,
+        claim_items: deduplicated,
         current_total: currentTotal,
         status: "complete",
       });
@@ -171,8 +188,16 @@ export default function Home() {
   };
 
   const allParsedItems = Object.values(roomItems).flat();
-  const runningTotal = allParsedItems.reduce((sum, item) => sum + item.qty * item.unit_cost, 0);
-  const isParsingActive = phase === "parsing" || phase === "done";
+  const runningTotal = allParsedItems.reduce(
+    (sum, item) => sum + item.qty * item.unit_cost,
+    0
+  );
+  const isResultsView = phase === "parsing" || phase === "done";
+
+  // Ordered room list: Phase 1 rooms first (in order), then any surprise rooms
+  const knownRooms = roomSummary?.map((r) => r.room) ?? [];
+  const surpriseRooms = Object.keys(roomItems).filter((r) => !knownRooms.includes(r));
+  const orderedRooms = [...knownRooms, ...surpriseRooms];
 
   return (
     <div className="min-h-screen bg-white">
@@ -211,7 +236,6 @@ export default function Home() {
                 className="hidden"
                 onChange={onInputChange}
               />
-
               {file ? (
                 <>
                   <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-blue-100">
@@ -251,43 +275,59 @@ export default function Home() {
         {/* ── Phase 1: scanning spinner ──────────────────────────────────── */}
         {phase === "scanning" && (
           <div className="flex flex-col items-center py-16">
-            <Spinner color="blue" size="lg" />
+            <Spinner size="lg" color="blue" />
             <p className="mt-4 text-sm text-gray-600">Scanning your claim...</p>
           </div>
         )}
 
-        {/* ── Phase 2 + Done: accordion results view ─────────────────────── */}
-        {isParsingActive && roomSummary && (
+        {/* ── Phase 2 + Done: live streaming accordion ────────────────────── */}
+        {isResultsView && roomSummary && (
           <div>
             {/* Page header */}
-            <div className="mb-6 flex items-start justify-between">
+            <div className="mb-5 flex items-start justify-between">
               <div>
                 <h2 className="text-xl font-semibold text-gray-900">Claim Overview</h2>
-                <p className="mt-1 text-sm text-gray-500">
-                  {phase === "parsing" && parseProgress
-                    ? `Parsing rooms… ${parseProgress.completed} of ${parseProgress.total} complete`
-                    : `${allParsedItems.length} items extracted from `}
-                  {phase === "done" && (
-                    <span className="font-medium text-gray-700">{file?.name}</span>
+                <p className="mt-1 flex items-center gap-2 text-sm text-gray-500">
+                  {phase === "parsing" ? (
+                    <>
+                      <Spinner size="sm" color="blue" />
+                      <span>
+                        Extracting items&hellip;{" "}
+                        <span className="tabular-nums font-medium text-gray-700">
+                          {allParsedItems.length}
+                        </span>{" "}
+                        found so far
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-green-100">
+                        <svg className="h-2.5 w-2.5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      </span>
+                      <span>
+                        <span className="font-medium text-gray-700">{allParsedItems.length}</span>{" "}
+                        items extracted from{" "}
+                        <span className="font-medium text-gray-700">{file?.name}</span>
+                      </span>
+                    </>
                   )}
                 </p>
               </div>
-              <button
-                onClick={handleReupload}
-                className="text-sm text-[#2563EB] hover:underline"
-              >
+              <button onClick={handleReupload} className="shrink-0 text-sm text-[#2563EB] hover:underline">
                 Re-upload
               </button>
             </div>
 
             {/* Target value input — interactive immediately after Phase 1 */}
-            <div className="mb-6 flex items-center gap-4 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+            <div className="mb-5 flex items-center gap-4 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
               <div className="flex-1">
                 <label className="block text-xs font-medium uppercase tracking-wider text-gray-400">
                   Your Target Claim Value
                 </label>
-                <div className="mt-1 flex items-center gap-2">
-                  <span className="text-sm text-gray-500">$</span>
+                <div className="mt-1 flex items-center gap-1.5">
+                  <span className="text-sm text-gray-400">$</span>
                   <input
                     type="number"
                     min="0"
@@ -300,68 +340,73 @@ export default function Home() {
                 </div>
               </div>
               {runningTotal > 0 && (
-                <div className="text-right">
+                <div className="shrink-0 text-right">
                   <p className="text-xs font-medium uppercase tracking-wider text-gray-400">
-                    Current Value
+                    {phase === "parsing" ? "Running Total" : "Current Value"}
                   </p>
-                  <p className="text-lg font-semibold text-gray-900">{formatCurrency(runningTotal)}</p>
+                  <p className="text-lg font-semibold tabular-nums text-gray-900">
+                    {formatCurrency(runningTotal)}
+                  </p>
                 </div>
               )}
             </div>
 
-            {/* Room accordion cards */}
+            {/* Room accordion */}
             <div className="space-y-2">
-              {roomSummary.map((r) => {
-                const status = roomStatuses[r.room] ?? "pending";
-                const items = roomItems[r.room] ?? [];
-                const isExpanded = expandedRooms.has(r.room);
-                const roomTotal = items.reduce((sum, item) => sum + item.qty * item.unit_cost, 0);
+              {orderedRooms.map((roomName) => {
+                const items = roomItems[roomName] ?? [];
+                const hasItems = items.length > 0;
+                const isExpanded = expandedRooms.has(roomName);
+                const roomTotal = items.reduce((sum, i) => sum + i.qty * i.unit_cost, 0);
 
                 return (
                   <div
-                    key={r.room}
+                    key={roomName}
                     className="overflow-hidden rounded-lg border border-gray-200 bg-white"
                   >
-                    {/* Room header row */}
                     <button
-                      onClick={() => status === "done" && toggleRoom(r.room)}
-                      disabled={status !== "done"}
+                      onClick={() => hasItems && toggleRoom(roomName)}
+                      disabled={!hasItems}
                       className={`flex w-full items-center justify-between px-4 py-3 text-left transition-colors ${
-                        status === "done"
-                          ? "cursor-pointer hover:bg-gray-50"
-                          : "cursor-default"
+                        hasItems ? "cursor-pointer hover:bg-gray-50" : "cursor-default"
                       }`}
                     >
                       <div className="flex items-center gap-3">
-                        {status === "pending" && <Spinner color="gray" size="sm" />}
-                        {status === "loading" && <Spinner color="blue" size="sm" />}
-                        {status === "done" && (
-                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-green-100">
+                        {!hasItems && phase === "parsing" && (
+                          <Spinner size="sm" color="gray" />
+                        )}
+                        {!hasItems && phase === "done" && (
+                          <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-gray-200" />
+                        )}
+                        {hasItems && phase === "parsing" && (
+                          <Spinner size="sm" color="blue" />
+                        )}
+                        {hasItems && phase === "done" && (
+                          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-green-100">
                             <svg className="h-2.5 w-2.5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                             </svg>
                           </span>
                         )}
-                        <span className="text-sm font-medium text-gray-900">{r.room}</span>
+                        <span className="text-sm font-medium text-gray-900">{roomName}</span>
                       </div>
 
                       <div className="flex items-center gap-4">
-                        {status === "pending" && (
-                          <span className="text-xs text-gray-400">Pending...</span>
+                        {!hasItems && (
+                          <span className="text-xs text-gray-400">
+                            {phase === "parsing" ? "Pending…" : "No items found"}
+                          </span>
                         )}
-                        {status === "loading" && (
-                          <span className="text-xs font-medium text-blue-600">Loading...</span>
-                        )}
-                        {status === "done" && (
+                        {hasItems && (
                           <>
-                            <span className="text-xs text-gray-400">
+                            <span className="tabular-nums text-xs text-gray-400">
                               {items.length} item{items.length !== 1 ? "s" : ""}
                             </span>
-                            <span className="text-sm font-semibold text-gray-900">
+                            <span className="tabular-nums text-sm font-semibold text-gray-900">
                               {formatCurrency(roomTotal)}
                             </span>
                             <svg
-                              className={`h-4 w-4 text-gray-400 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                              className={`h-4 w-4 shrink-0 text-gray-400 transition-transform ${isExpanded ? "rotate-180" : ""}`}
                               fill="none"
                               viewBox="0 0 24 24"
                               stroke="currentColor"
@@ -375,7 +420,7 @@ export default function Home() {
                     </button>
 
                     {/* Expandable items table */}
-                    {isExpanded && status === "done" && items.length > 0 && (
+                    {isExpanded && hasItems && (
                       <div className="border-t border-gray-100">
                         <table className="w-full text-sm">
                           <thead>
@@ -389,46 +434,32 @@ export default function Home() {
                             </tr>
                           </thead>
                           <tbody>
-                            {items.map((item, idx) => {
-                              const lineTotal = item.qty * item.unit_cost;
-                              return (
-                                <tr
-                                  key={`${r.room}-${idx}`}
-                                  className="border-t border-gray-50 hover:bg-gray-50"
-                                >
-                                  <td className="px-4 py-2.5 text-gray-900">{item.description}</td>
-                                  <td className="px-4 py-2.5 text-gray-500">{item.brand || "—"}</td>
-                                  <td className="px-4 py-2.5 text-right text-gray-900">{item.qty}</td>
-                                  <td className="px-4 py-2.5">
-                                    <span
-                                      className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${
-                                        item.condition === "Good" || item.condition === "Excellent"
-                                          ? "bg-green-50 text-green-700"
-                                          : item.condition === "Poor"
-                                          ? "bg-red-50 text-red-700"
-                                          : "bg-gray-100 text-gray-600"
-                                      }`}
-                                    >
-                                      {item.condition || "Average"}
-                                    </span>
-                                  </td>
-                                  <td className="px-4 py-2.5 text-right text-gray-900">
-                                    {formatCurrency(item.unit_cost)}
-                                  </td>
-                                  <td className="px-4 py-2.5 text-right font-medium text-gray-900">
-                                    {formatCurrency(lineTotal)}
-                                  </td>
-                                </tr>
-                              );
-                            })}
+                            {items.map((item, idx) => (
+                              <tr key={idx} className="border-t border-gray-50 hover:bg-gray-50">
+                                <td className="px-4 py-2.5 text-gray-900">{item.description}</td>
+                                <td className="px-4 py-2.5 text-gray-500">{item.brand || "—"}</td>
+                                <td className="px-4 py-2.5 text-right tabular-nums text-gray-900">{item.qty}</td>
+                                <td className="px-4 py-2.5">
+                                  <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${
+                                    item.condition === "Good" || item.condition === "Excellent"
+                                      ? "bg-green-50 text-green-700"
+                                      : item.condition === "Poor"
+                                      ? "bg-red-50 text-red-700"
+                                      : "bg-gray-100 text-gray-600"
+                                  }`}>
+                                    {item.condition || "Average"}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-2.5 text-right tabular-nums text-gray-900">
+                                  {formatCurrency(item.unit_cost)}
+                                </td>
+                                <td className="px-4 py-2.5 text-right tabular-nums font-medium text-gray-900">
+                                  {formatCurrency(item.qty * item.unit_cost)}
+                                </td>
+                              </tr>
+                            ))}
                           </tbody>
                         </table>
-                      </div>
-                    )}
-
-                    {isExpanded && status === "done" && items.length === 0 && (
-                      <div className="border-t border-gray-100 px-4 py-3 text-sm text-gray-400">
-                        No items found for this room.
                       </div>
                     )}
                   </div>
@@ -436,18 +467,20 @@ export default function Home() {
               })}
             </div>
 
-            {/* Footer: total + CTA */}
+            {/* Footer: live total + CTA */}
             <div className="mt-6 flex flex-col items-end gap-4 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-gray-500">
                 {Object.keys(roomItems).length} of {roomSummary.length} room
-                {roomSummary.length !== 1 ? "s" : ""} parsed · {allParsedItems.length} items
+                {roomSummary.length !== 1 ? "s" : ""} · {allParsedItems.length} items
               </p>
               <div className="flex items-center gap-6">
                 <div className="text-right">
                   <p className="text-xs font-medium uppercase tracking-wider text-gray-400">
                     {phase === "parsing" ? "Running Total" : "Current Claim Value"}
                   </p>
-                  <p className="text-2xl font-semibold text-gray-900">{formatCurrency(runningTotal)}</p>
+                  <p className="text-2xl font-semibold tabular-nums text-gray-900">
+                    {formatCurrency(runningTotal)}
+                  </p>
                 </div>
                 <button
                   onClick={handleConfirm}
@@ -458,7 +491,7 @@ export default function Home() {
                       : "cursor-not-allowed bg-gray-300"
                   }`}
                 >
-                  {phase === "parsing" ? "Parsing…" : "Confirm & Continue →"}
+                  {phase === "parsing" ? "Extracting…" : "Confirm & Continue →"}
                 </button>
               </div>
             </div>
@@ -474,11 +507,15 @@ export default function Home() {
   );
 }
 
-function Spinner({ color, size }: { color: "blue" | "gray"; size: "sm" | "lg" }) {
-  const colorClass = color === "blue" ? "text-[#2563EB]" : "text-gray-400";
-  const sizeClass = size === "lg" ? "h-6 w-6" : "h-3.5 w-3.5";
+function Spinner({ size, color }: { size: "sm" | "lg"; color: "blue" | "gray" }) {
   return (
-    <svg className={`animate-spin ${colorClass} ${sizeClass} shrink-0`} fill="none" viewBox="0 0 24 24">
+    <svg
+      className={`animate-spin shrink-0 ${size === "lg" ? "h-6 w-6" : "h-3.5 w-3.5"} ${
+        color === "blue" ? "text-[#2563EB]" : "text-gray-400"
+      }`}
+      fill="none"
+      viewBox="0 0 24 24"
+    >
       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
     </svg>

@@ -1,7 +1,7 @@
 "use server";
 
 import { supabase } from "./supabase";
-import { ClaimItem } from "../actions/parseClaim";
+import { ClaimItem } from "./types";
 
 export interface RoomSummary {
   room: string;

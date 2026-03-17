@@ -9,7 +9,7 @@ export async function getRoomSummary(base64Data: string): Promise<RoomSummary[]>
   });
 
   const response = await client.messages.create({
-    model: "claude-sonnet-4-5",
+    model: "claude-sonnet-4-6",
     max_tokens: 1024,
     system: `You are an insurance claim parser. Extract only a room-by-room summary from this claim. Return ONLY a valid JSON array with no other text, no markdown, no backticks. Each object must have exactly these keys:
 room (string), item_count (number), subtotal (number).
