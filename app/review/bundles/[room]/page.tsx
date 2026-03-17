@@ -1,6 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+/*
+  Supabase: add note column if not already present
+  ALTER TABLE bundle_decisions ADD COLUMN IF NOT EXISTS note text;
+*/
+
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
@@ -32,6 +37,14 @@ interface Bundle {
   items: BundleItem[];
 }
 
+interface RevisedBundle {
+  name: string;
+  description: string;
+  total_value: number;
+  plausibility: "green" | "yellow" | "red";
+  items: BundleItem[];
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function plausibilityLabel(p: "green" | "yellow" | "red") {
@@ -41,9 +54,24 @@ function plausibilityLabel(p: "green" | "yellow" | "red") {
 }
 
 function plausibilityColors(p: "green" | "yellow" | "red") {
-  if (p === "green") return { badge: "bg-green-50 text-green-700 border-green-200", dot: "bg-[#16A34A]" };
-  if (p === "yellow") return { badge: "bg-amber-50 text-amber-700 border-amber-200", dot: "bg-[#D97706]" };
+  if (p === "green")
+    return { badge: "bg-green-50 text-green-700 border-green-200", dot: "bg-[#16A34A]" };
+  if (p === "yellow")
+    return { badge: "bg-amber-50 text-amber-700 border-amber-200", dot: "bg-[#D97706]" };
   return { badge: "bg-red-50 text-red-700 border-red-200", dot: "bg-[#DC2626]" };
+}
+
+function Spinner({ size = "sm" }: { size?: "sm" | "md" }) {
+  return (
+    <svg
+      className={`animate-spin text-[#2563EB] ${size === "md" ? "h-5 w-5" : "h-3.5 w-3.5"}`}
+      fill="none"
+      viewBox="0 0 24 24"
+    >
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+    </svg>
+  );
 }
 
 function Toast({ message, onDismiss }: { message: string; onDismiss: () => void }) {
@@ -65,24 +93,45 @@ function Toast({ message, onDismiss }: { message: string; onDismiss: () => void 
 function BundleCard({
   bundle,
   accepted,
+  initialNote,
+  initialAction,
   onAccept,
   onUndo,
+  onToast,
 }: {
   bundle: Bundle;
   accepted: boolean;
-  onAccept: (bundle: Bundle) => Promise<void>;
+  initialNote: string;
+  initialAction: string;
+  onAccept: (bundle: Bundle, items: BundleItem[]) => Promise<void>;
   onUndo: (bundle: Bundle) => Promise<void>;
+  onToast: (msg: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Notes
+  const [note, setNote] = useState(initialNote);
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteSaved, setNoteSaved] = useState(false);
+
+  // Regenerate
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [revision, setRevision] = useState<RevisedBundle | null>(null);
+
+  // Per-item swap: displayed items (may differ from bundle.items after swaps)
+  const [displayItems, setDisplayItems] = useState<BundleItem[]>(bundle.items);
+  const [swappingIdx, setSwappingIdx] = useState<number | null>(null);
+  const [swapOptions, setSwapOptions] = useState<Record<number, BundleItem[]>>({});
+
   const colors = plausibilityColors(bundle.plausibility);
-  const previewItems = bundle.items.slice(0, 4);
-  const remaining = bundle.items.length - 4;
+
+  // ── Accept / Undo ──────────────────────────────────────────────────────────
 
   async function handleAccept() {
     setLoading(true);
     try {
-      await onAccept(bundle);
+      await onAccept(bundle, displayItems);
     } finally {
       setLoading(false);
     }
@@ -96,6 +145,117 @@ function BundleCard({
       setLoading(false);
     }
   }
+
+  // ── Save note ─────────────────────────────────────────────────────────────
+
+  async function handleSaveNote() {
+    if (!note.trim()) return;
+    setNoteSaving(true);
+    await supabase.from("bundle_decisions").upsert(
+      {
+        bundle_code: bundle.bundle_code,
+        room: bundle.room,
+        bundle_name: bundle.name,
+        action: initialAction || "noted",
+        items: displayItems,
+        total_value: bundle.total_value,
+        note: note.trim(),
+      },
+      { onConflict: "bundle_code" }
+    );
+    setNoteSaving(false);
+    setNoteSaved(true);
+    setTimeout(() => setNoteSaved(false), 3000);
+  }
+
+  // ── Regenerate ────────────────────────────────────────────────────────────
+
+  async function handleRegenerate() {
+    if (!note.trim()) return;
+    setIsRegenerating(true);
+    setRevision(null);
+    try {
+      const res = await fetch("/api/regenerate-bundle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bundle: { ...bundle, items: displayItems }, note }),
+      });
+      if (!res.ok) throw new Error(`${res.status}`);
+      const revised = (await res.json()) as RevisedBundle;
+      setRevision(revised);
+    } catch {
+      onToast("Regeneration failed. Please try again.");
+    } finally {
+      setIsRegenerating(false);
+    }
+  }
+
+  async function handleUseRevision() {
+    if (!revision) return;
+    await supabase.from("bundle_decisions").upsert(
+      {
+        bundle_code: bundle.bundle_code,
+        room: bundle.room,
+        bundle_name: revision.name,
+        action: "regenerated",
+        items: revision.items,
+        total_value: revision.total_value,
+        note: note.trim(),
+      },
+      { onConflict: "bundle_code" }
+    );
+    setDisplayItems(revision.items);
+    setRevision(null);
+    onToast(`Revised bundle saved — ${formatCurrency(revision.total_value)}`);
+  }
+
+  // ── Per-item swap ─────────────────────────────────────────────────────────
+
+  async function handleSwapClick(idx: number) {
+    if (swappingIdx === idx) {
+      setSwappingIdx(null);
+      return;
+    }
+    setSwappingIdx(idx);
+    if (swapOptions[idx]) return; // Already loaded
+
+    try {
+      const res = await fetch("/api/swap-item", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          item: displayItems[idx],
+          room: bundle.room,
+          bundle_total: bundle.total_value,
+        }),
+      });
+      if (!res.ok) throw new Error();
+      const alts = (await res.json()) as BundleItem[];
+      setSwapOptions((prev) => ({ ...prev, [idx]: alts }));
+    } catch {
+      setSwappingIdx(null);
+      onToast("Could not load alternatives. Try again.");
+    }
+  }
+
+  function handleUseSwap(idx: number, alt: BundleItem) {
+    setDisplayItems((prev) => prev.map((item, i) => (i === idx ? alt : item)));
+    setSwappingIdx(null);
+    // Clear cached options for this index so a re-swap fetches fresh
+    setSwapOptions((prev) => {
+      const next = { ...prev };
+      delete next[idx];
+      return next;
+    });
+    onToast(`Swapped to ${alt.brand ? alt.brand + " " : ""}${alt.description}`);
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  const totalValue = displayItems.reduce((s, i) => s + i.total, 0);
+  const previewItems = displayItems.slice(0, 4);
+  const remaining = displayItems.length - 4;
+  const revColors = revision ? plausibilityColors(revision.plausibility) : null;
 
   return (
     <div
@@ -132,10 +292,9 @@ function BundleCard({
         {/* Name + value */}
         <h2 className="text-lg font-semibold text-gray-900">{bundle.name}</h2>
         <p className="text-2xl font-bold tabular-nums text-gray-900 mt-0.5">
-          {formatCurrency(bundle.total_value)}
+          {formatCurrency(totalValue)}
         </p>
 
-        {/* Description */}
         {bundle.description && (
           <p className="mt-2 text-sm text-gray-500 italic">&ldquo;{bundle.description}&rdquo;</p>
         )}
@@ -149,7 +308,8 @@ function BundleCard({
             {previewItems.map((item, i) => (
               <li key={i} className="flex items-center justify-between text-sm">
                 <span className="text-gray-700 truncate mr-2">
-                  {item.brand ? `${item.brand} ` : ""}{item.description}
+                  {item.brand ? `${item.brand} ` : ""}
+                  {item.description}
                 </span>
                 <span className="shrink-0 tabular-nums text-gray-500 font-medium">
                   {formatCurrency(item.total)}
@@ -161,27 +321,85 @@ function BundleCard({
             )}
           </ul>
 
-          {/* Expanded item list */}
-          {expanded && bundle.items.slice(4).map((item, i) => (
-            <div key={i} className="flex items-center justify-between text-sm mt-1.5">
-              <span className="text-gray-700 truncate mr-2">
-                {item.brand ? `${item.brand} ` : ""}{item.description}
-                {item.qty > 1 && <span className="text-gray-400"> ×{item.qty}</span>}
-              </span>
-              <span className="shrink-0 tabular-nums text-gray-500 font-medium">
-                {formatCurrency(item.total)}
-              </span>
+          {/* Expanded item list with swap buttons */}
+          {expanded && (
+            <div className="mt-2 space-y-1">
+              {displayItems.map((item, idx) => (
+                <div key={idx}>
+                  {/* Item row */}
+                  <div className="flex items-center gap-2 py-1.5 text-sm rounded hover:bg-gray-50 px-1">
+                    <span className="flex-1 text-gray-700 truncate">
+                      {item.brand ? `${item.brand} ` : ""}
+                      {item.description}
+                      {item.qty > 1 && (
+                        <span className="text-gray-400 ml-1">×{item.qty}</span>
+                      )}
+                    </span>
+                    <span className="shrink-0 tabular-nums text-gray-500 text-xs">
+                      {formatCurrency(item.total)}
+                    </span>
+                    <button
+                      onClick={() => handleSwapClick(idx)}
+                      title="Swap this item"
+                      className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium transition-colors ${
+                        swappingIdx === idx
+                          ? "bg-blue-100 text-blue-700"
+                          : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                      }`}
+                    >
+                      {swappingIdx === idx && !swapOptions[idx] ? (
+                        <Spinner />
+                      ) : (
+                        "↺"
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Swap alternatives dropdown */}
+                  {swappingIdx === idx && swapOptions[idx] && (
+                    <div className="ml-2 mb-2 rounded-lg bg-gray-50 border border-gray-200 p-3 space-y-2">
+                      <p className="text-xs font-medium text-gray-500 mb-2">Alternatives:</p>
+                      {swapOptions[idx].map((alt, ai) => (
+                        <div
+                          key={ai}
+                          className="flex items-center justify-between gap-2 rounded-md bg-white border border-gray-200 px-3 py-2"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-gray-900 truncate">
+                              {alt.brand ? `${alt.brand} ` : ""}
+                              {alt.description}
+                            </p>
+                            <p className="text-xs text-gray-400">{formatCurrency(alt.unit_cost)}</p>
+                          </div>
+                          <button
+                            onClick={() => handleUseSwap(idx, alt)}
+                            className="shrink-0 rounded bg-[#2563EB] px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700 transition-colors"
+                          >
+                            Use
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        onClick={() => setSwappingIdx(null)}
+                        className="text-xs text-gray-400 hover:text-gray-600 pt-1"
+                      >
+                        Keep Original
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
 
-        {/* Actions */}
+        {/* Actions row */}
         <div className="mt-5 flex items-center justify-between gap-3">
           <button
             onClick={() => setExpanded((v) => !v)}
             className="text-sm text-[#2563EB] hover:underline"
           >
-            {expanded ? "Collapse" : `View All ${bundle.items.length} Items`}
+            {expanded ? "Collapse" : `View All ${displayItems.length} Items`}
           </button>
 
           <div className="flex items-center gap-2">
@@ -199,18 +417,113 @@ function BundleCard({
                 disabled={loading}
                 className="rounded-md bg-[#16A34A] px-5 py-2 text-sm font-semibold text-white hover:bg-green-700 transition-colors disabled:opacity-50 flex items-center gap-2"
               >
-                {loading ? (
-                  <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                ) : "✓"}
+                {loading ? <Spinner /> : "✓"}
                 {loading ? "Saving…" : "Accept Bundle"}
               </button>
             )}
           </div>
         </div>
       </div>
+
+      {/* ── Notes + Regenerate section ──────────────────────────────────────── */}
+      <div className="border-t border-gray-100 px-5 py-4 bg-gray-50 rounded-b-xl">
+        <p className="text-xs font-semibold text-gray-500 mb-2 flex items-center gap-1.5">
+          💬 Notes on this bundle
+        </p>
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          rows={3}
+          placeholder={`"Too expensive" or "swap the piano for something else" or "I like everything except the rug"…`}
+          className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
+        />
+        <div className="mt-2 flex items-center gap-2 flex-wrap">
+          <button
+            onClick={handleSaveNote}
+            disabled={noteSaving || !note.trim()}
+            className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50 transition-colors"
+          >
+            {noteSaving ? "Saving…" : noteSaved ? "✓ Note saved" : "Save Note"}
+          </button>
+          <button
+            onClick={handleRegenerate}
+            disabled={isRegenerating || !note.trim()}
+            className="rounded-md border border-[#2563EB] bg-white px-3 py-1.5 text-xs font-medium text-[#2563EB] hover:bg-blue-50 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+          >
+            {isRegenerating ? (
+              <>
+                <Spinner /> Regenerating…
+              </>
+            ) : (
+              "↺ Regenerate with these notes"
+            )}
+          </button>
+        </div>
+
+        {/* Regenerating overlay message */}
+        {isRegenerating && (
+          <p className="mt-2 text-xs text-gray-400 italic">
+            Regenerating bundle based on your feedback…
+          </p>
+        )}
+      </div>
+
+      {/* ── Revised bundle card ─────────────────────────────────────────────── */}
+      {revision && (
+        <div className="border-t border-purple-100 bg-[#F5F3FF] rounded-b-xl px-5 py-4">
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <div>
+              <p className="text-xs font-semibold text-purple-600 mb-1">✨ REVISED BUNDLE · Based on your feedback</p>
+              <h3 className="font-semibold text-gray-900">{revision.name}</h3>
+              <p className="text-xl font-bold tabular-nums text-gray-900 mt-0.5">
+                {formatCurrency(revision.total_value)}
+              </p>
+              {revision.description && (
+                <p className="text-xs text-gray-500 italic mt-1">&ldquo;{revision.description}&rdquo;</p>
+              )}
+            </div>
+            {revColors && (
+              <span
+                className={`shrink-0 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium ${revColors.badge}`}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${revColors.dot}`} />
+                {plausibilityLabel(revision.plausibility)}
+              </span>
+            )}
+          </div>
+
+          {/* Revised items */}
+          <ul className="space-y-1.5 mb-4">
+            {revision.items.map((item, i) => (
+              <li key={i} className="flex items-center justify-between text-sm">
+                <span className="text-gray-700 truncate mr-2">
+                  {item.brand ? `${item.brand} ` : ""}
+                  {item.description}
+                  {item.qty > 1 && <span className="text-gray-400"> ×{item.qty}</span>}
+                </span>
+                <span className="shrink-0 tabular-nums text-gray-500 font-medium">
+                  {formatCurrency(item.total)}
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleUseRevision}
+              className="rounded-md bg-[#16A34A] px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 transition-colors"
+            >
+              ✓ Use This Version
+            </button>
+            <button
+              onClick={() => setRevision(null)}
+              className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
+            >
+              Keep Original
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -224,10 +537,14 @@ export default function BundleBrowserPage() {
   const [roomName, setRoomName] = useState("");
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [acceptedCodes, setAcceptedCodes] = useState<Set<string>>(new Set());
+  const [decisionNotes, setDecisionNotes] = useState<Record<string, string>>({});
+  const [decisionActions, setDecisionActions] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [currentRoomTotal, setCurrentRoomTotal] = useState(0);
   const [roomBudget, setRoomBudget] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = useCallback((msg: string) => setToast(msg), []);
 
   useEffect(() => {
     loadData();
@@ -236,7 +553,6 @@ export default function BundleBrowserPage() {
   async function loadData() {
     setIsLoading(true);
 
-    // Load session to get room name, budget, total
     const session = await loadSession();
     const rooms =
       session?.room_summary?.map((r) => r.room) ??
@@ -249,14 +565,10 @@ export default function BundleBrowserPage() {
       setRoomBudget(session.room_budgets?.[name] ?? 0);
       const total = (session.claim_items ?? [])
         .filter((i) => i.room === name)
-        .reduce((s, i) => {
-          const stored = session.item_tiers?.[i.room + i.description + i.unit_cost];
-          return s + (stored?.tiers?.find((t) => t.tier === stored.selected_tier)?.unit_cost ?? i.unit_cost) * i.qty;
-        }, 0);
+        .reduce((s, i) => s + i.unit_cost * i.qty, 0);
       setCurrentRoomTotal(total);
     }
 
-    // Load bundles for this room
     const { data: bundleRows } = await supabase
       .from("bundles")
       .select("*")
@@ -265,37 +577,46 @@ export default function BundleBrowserPage() {
 
     setBundles((bundleRows as Bundle[]) ?? []);
 
-    // Load accepted decisions
     const { data: decisions } = await supabase
       .from("bundle_decisions")
-      .select("bundle_code")
-      .eq("room", name)
-      .eq("action", "accepted");
+      .select("bundle_code, action, note")
+      .eq("room", name);
 
-    setAcceptedCodes(new Set((decisions ?? []).map((d: { bundle_code: string }) => d.bundle_code)));
+    const accepted = new Set<string>();
+    const notes: Record<string, string> = {};
+    const actions: Record<string, string> = {};
+
+    for (const d of (decisions ?? []) as { bundle_code: string; action: string; note: string | null }[]) {
+      actions[d.bundle_code] = d.action;
+      if (d.note) notes[d.bundle_code] = d.note;
+      if (d.action === "accepted" || d.action === "regenerated") accepted.add(d.bundle_code);
+    }
+
+    setAcceptedCodes(accepted);
+    setDecisionNotes(notes);
+    setDecisionActions(actions);
     setIsLoading(false);
   }
 
-  async function handleAccept(bundle: Bundle) {
-    // 1. Upsert bundle decision
+  async function handleAccept(bundle: Bundle, items: BundleItem[]) {
     await supabase.from("bundle_decisions").upsert(
       {
         bundle_code: bundle.bundle_code,
         room: bundle.room,
         bundle_name: bundle.name,
         action: "accepted",
-        items: bundle.items,
-        total_value: bundle.total_value,
+        items,
+        total_value: items.reduce((s, i) => s + i.total, 0),
+        note: decisionNotes[bundle.bundle_code] ?? null,
       },
       { onConflict: "bundle_code" }
     );
 
-    // 2. Add bundle items to claim_items
     const session = await loadSession();
     const existingItems = session?.claim_items ?? [];
     const existingKeys = new Set(existingItems.map((i) => `${i.room}::${i.description}`));
 
-    const newItems: ClaimItem[] = bundle.items
+    const newItems: ClaimItem[] = items
       .filter((bi) => !existingKeys.has(`${bundle.room}::${bi.description}`))
       .map((bi) => ({
         room: bundle.room,
@@ -314,19 +635,18 @@ export default function BundleBrowserPage() {
       await saveSession({ claim_items: [...existingItems, ...newItems] });
     }
 
+    const added = items.reduce((s, i) => s + i.total, 0);
     setAcceptedCodes((prev) => new Set([...prev, bundle.bundle_code]));
-    setCurrentRoomTotal((prev) => prev + bundle.total_value);
-    setToast(`Bundle added — ${formatCurrency(bundle.total_value)} added to ${bundle.room}`);
+    setCurrentRoomTotal((prev) => prev + added);
+    showToast(`Bundle added — ${formatCurrency(added)} added to ${bundle.room}`);
   }
 
   async function handleUndo(bundle: Bundle) {
-    // Update decision to rejected
     await supabase
       .from("bundle_decisions")
       .update({ action: "rejected" })
       .eq("bundle_code", bundle.bundle_code);
 
-    // Remove bundle items from claim_items
     const session = await loadSession();
     const bundleDescriptions = new Set(bundle.items.map((i) => i.description));
     const filtered = (session?.claim_items ?? []).filter(
@@ -340,14 +660,13 @@ export default function BundleBrowserPage() {
       return next;
     });
     setCurrentRoomTotal((prev) => Math.max(0, prev - bundle.total_value));
-    setToast(`Bundle removed — ${bundle.name} undone`);
+    showToast(`Bundle removed — ${bundle.name} undone`);
   }
 
   const gap = roomBudget > 0 ? roomBudget - currentRoomTotal : 0;
 
   return (
     <div className="flex flex-col min-h-screen">
-      {/* Header */}
       <header className="sticky top-0 z-10 border-b border-gray-100 bg-white px-6 py-4">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -364,7 +683,8 @@ export default function BundleBrowserPage() {
           </div>
           <div className="shrink-0 text-right text-sm">
             <p className="text-gray-500">
-              Current: <span className="font-semibold text-gray-900">{formatCurrency(currentRoomTotal)}</span>
+              Current:{" "}
+              <span className="font-semibold text-gray-900">{formatCurrency(currentRoomTotal)}</span>
             </p>
             {roomBudget > 0 && (
               <>
@@ -380,7 +700,6 @@ export default function BundleBrowserPage() {
         </div>
       </header>
 
-      {/* Content */}
       <main className="flex-1 px-6 py-6">
         {isLoading ? (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -400,8 +719,15 @@ export default function BundleBrowserPage() {
         ) : bundles.length === 0 ? (
           <div className="flex flex-col items-center py-20 text-center">
             <p className="text-gray-500 text-lg">No bundles found for {roomName}.</p>
-            <p className="text-gray-400 text-sm mt-1">Run <code className="bg-gray-100 px-1 py-0.5 rounded">npm run seed-bundles</code> to load bundle data.</p>
-            <Link href={`/review/${roomSlug}`} className="mt-4 text-sm text-[#2563EB] hover:underline">
+            <p className="text-gray-400 text-sm mt-1">
+              Run{" "}
+              <code className="bg-gray-100 px-1 py-0.5 rounded">npm run seed-bundles</code> to load
+              bundle data.
+            </p>
+            <Link
+              href={`/review/${roomSlug}`}
+              className="mt-4 text-sm text-[#2563EB] hover:underline"
+            >
               ← Back to {roomName}
             </Link>
           </div>
@@ -412,15 +738,17 @@ export default function BundleBrowserPage() {
                 key={bundle.bundle_code}
                 bundle={bundle}
                 accepted={acceptedCodes.has(bundle.bundle_code)}
+                initialNote={decisionNotes[bundle.bundle_code] ?? ""}
+                initialAction={decisionActions[bundle.bundle_code] ?? ""}
                 onAccept={handleAccept}
                 onUndo={handleUndo}
+                onToast={showToast}
               />
             ))}
           </div>
         )}
       </main>
 
-      {/* Toast */}
       {toast && <Toast message={toast} onDismiss={() => setToast(null)} />}
     </div>
   );
