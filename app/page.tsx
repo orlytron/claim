@@ -1,12 +1,12 @@
 "use client";
 
-import React, { useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { ClaimItem } from "./lib/types";
 import { getRoomSummary } from "./actions/getRoomSummary";
-import { saveSession, RoomSummary } from "./lib/session";
+import { loadSession, saveSession, RoomSummary } from "./lib/session";
 
-type Phase = "idle" | "scanning" | "parsing" | "done";
+type Phase = "loading" | "idle" | "scanning" | "parsing" | "done";
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -16,17 +16,66 @@ function formatCurrency(value: number): string {
   }).format(value);
 }
 
+/** Derive a RoomSummary array from raw claim items when session.room_summary is absent. */
+function deriveRoomSummary(items: ClaimItem[]): RoomSummary[] {
+  const map: Record<string, { item_count: number; subtotal: number }> = {};
+  for (const item of items) {
+    const room = item.room || "Uncategorized";
+    if (!map[room]) map[room] = { item_count: 0, subtotal: 0 };
+    map[room].item_count += 1;
+    map[room].subtotal += item.qty * item.unit_cost;
+  }
+  return Object.entries(map).map(([room, d]) => ({ room, ...d }));
+}
+
+/** Group a flat ClaimItem array into { [room]: ClaimItem[] }. */
+function groupByRoom(items: ClaimItem[]): Record<string, ClaimItem[]> {
+  return items.reduce<Record<string, ClaimItem[]>>((acc, item) => {
+    const room = item.room || "Uncategorized";
+    acc[room] = [...(acc[room] ?? []), item];
+    return acc;
+  }, {});
+}
+
 export default function Home() {
   const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [phase, setPhase] = useState<Phase>("idle");
+  const [phase, setPhase] = useState<Phase>("loading");
   const [error, setError] = useState<string | null>(null);
   const [roomSummary, setRoomSummary] = useState<RoomSummary[] | null>(null);
   const [roomItems, setRoomItems] = useState<Record<string, ClaimItem[]>>({});
   const [expandedRooms, setExpandedRooms] = useState<Set<string>>(new Set());
   const [targetValue, setTargetValue] = useState<string>("");
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // ── Hydrate from Supabase on every page load ─────────────────────────────
+  useEffect(() => {
+    async function hydrate() {
+      const session = await loadSession();
+
+      if (session?.claim_items && session.claim_items.length > 0) {
+        console.log(
+          `[ClaimBuilder] Loaded ${session.claim_items.length} items from Supabase across`,
+          [...new Set(session.claim_items.map((i) => i.room))].length,
+          "rooms"
+        );
+
+        const summary = session.room_summary ?? deriveRoomSummary(session.claim_items);
+        const grouped = groupByRoom(session.claim_items);
+
+        setRoomSummary(summary);
+        setRoomItems(grouped);
+        setExpandedRooms(new Set(Object.keys(grouped)));
+        if (session.target_value) setTargetValue(String(session.target_value));
+        setPhase("done");
+      } else {
+        console.log("[ClaimBuilder] No existing claim data found — showing upload screen.");
+        setPhase("idle");
+      }
+    }
+    hydrate();
+  }, []);
 
   const resetParseState = () => {
     setRoomSummary(null);
@@ -207,6 +256,14 @@ export default function Home() {
       </header>
 
       <main className="mx-auto max-w-4xl px-6 py-12">
+
+        {/* ── Hydrating from Supabase ───────────────────────────────────── */}
+        {phase === "loading" && (
+          <div className="flex flex-col items-center py-24">
+            <Spinner size="lg" color="blue" />
+            <p className="mt-4 text-sm text-gray-500">Loading your claim…</p>
+          </div>
+        )}
 
         {/* ── Upload zone ───────────────────────────────────────────────── */}
         {phase === "idle" && (
