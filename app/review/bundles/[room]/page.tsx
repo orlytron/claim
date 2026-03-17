@@ -691,10 +691,10 @@ export default function BundleBrowserPage() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <Link
-              href={`/review/${roomSlug}`}
+              href="/review"
               className="text-xs text-gray-400 hover:text-gray-600 mb-1 block"
             >
-              ← Back to {roomName}
+              ← All Rooms
             </Link>
             <h1 className="text-xl font-semibold text-gray-900">{roomName} Bundles</h1>
             <p className="text-xs text-gray-400 mt-0.5">
@@ -722,7 +722,7 @@ export default function BundleBrowserPage() {
 
       <main className="flex-1 px-6 py-6">
         {isLoading ? (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="flex flex-col gap-4">
             {[1, 2, 3, 4].map((i) => (
               <div key={i} className="animate-pulse rounded-xl border border-gray-200 bg-white p-5">
                 <div className="h-4 w-24 rounded-full bg-gray-100 mb-3" />
@@ -745,14 +745,14 @@ export default function BundleBrowserPage() {
               bundle data.
             </p>
             <Link
-              href={`/review/${roomSlug}`}
+              href="/review"
               className="mt-4 text-sm text-[#2563EB] hover:underline"
             >
-              ← Back to {roomName}
+              ← All Rooms
             </Link>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="flex flex-col gap-4">
             {bundles.map((bundle) => (
               <BundleCard
                 key={bundle.bundle_code}
