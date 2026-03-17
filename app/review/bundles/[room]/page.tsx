@@ -11,7 +11,27 @@ import { useParams } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
 import { loadSession, saveSession } from "../../../lib/session";
 import { ClaimItem } from "../../../lib/types";
-import { slugify, formatCurrency } from "../../../lib/utils";
+import { formatCurrency } from "../../../lib/utils";
+
+// ── Slug ↔ room name ──────────────────────────────────────────────────────────
+
+const ROOM_SLUG_MAP: Record<string, string> = {
+  "living-room": "Living Room",
+  "kitchen": "Kitchen",
+  "bedroom-rafe": "Bedroom Rafe",
+  "bedroom-orly": "Bedroom Orly",
+  "patio": "Patio",
+  "garage": "Garage",
+  "bathroom-white": "Bathroom White",
+  "bathroom-master": "Bathroom Master",
+  "david-office-guest-room": "David Office / Guest Room",
+  "art": "Art",
+};
+
+function decodeRoomSlug(slug: string): string {
+  return ROOM_SLUG_MAP[slug] ?? slug;
+}
+
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -558,7 +578,7 @@ export default function BundleBrowserPage() {
       session?.room_summary?.map((r) => r.room) ??
       [...new Set(session?.claim_items?.map((i) => i.room) ?? [])];
 
-    const name = rooms.find((r) => slugify(r) === roomSlug) ?? roomSlug.replace(/-/g, " ");
+    const name = decodeRoomSlug(roomSlug);
     setRoomName(name);
 
     if (session) {
