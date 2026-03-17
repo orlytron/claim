@@ -128,7 +128,7 @@ export default function SuggestionBox() {
                       value={message}
                       onChange={(e) => setMessage(e.target.value)}
                       rows={5}
-                      placeholder="e.g. "I'd like to add a bar cart to the living room" or "The piano should be a Yamaha not Steinway" or anything else you want us to consider…"
+                      placeholder="e.g. I'd like to add a bar cart, or the piano should be a Yamaha, or anything else you want us to consider..."
                       className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
                     />
                   </div>
