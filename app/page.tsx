@@ -55,14 +55,8 @@ export default function Home() {
       const session = await loadSession();
 
       if (session?.claim_items && session.claim_items.length > 0) {
-        const summary = session.room_summary ?? deriveRoomSummary(session.claim_items);
-        const grouped = groupByRoom(session.claim_items);
-
-        setRoomSummary(summary);
-        setRoomItems(grouped);
-        setExpandedRooms(new Set(Object.keys(grouped)));
-        if (session.target_value) setTargetValue(String(session.target_value));
-        setPhase("done");
+        router.replace("/review");
+        return;
       } else {
         setPhase("idle");
       }
@@ -209,7 +203,7 @@ export default function Home() {
     if (!isNaN(parsed) && parsed > 0) {
       await saveSession({ target_value: parsed });
     }
-    router.push("/setup");
+    router.push("/review");
   };
 
   const handleReupload = () => {

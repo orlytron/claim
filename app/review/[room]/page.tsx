@@ -913,7 +913,7 @@ export default function RoomReviewPage() {
               </Link>
             ) : (
               <Link
-                href="/setup"
+                href="/review"
                 className="rounded-md border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
               >
                 ← Setup
