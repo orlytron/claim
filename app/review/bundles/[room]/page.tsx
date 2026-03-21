@@ -9,8 +9,10 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
+import { mergeClaimIncoming } from "../../../lib/claim-item-merge";
 import { loadSession, saveSession } from "../../../lib/session";
 import { ClaimItem } from "../../../lib/types";
+import { useClaimMode } from "../../../lib/useClaimMode";
 import { formatCurrency } from "../../../lib/utils";
 import { BUNDLES_DATA } from "../../../lib/bundles-data";
 
@@ -533,6 +535,7 @@ function BundleCard({
 export default function BundleBrowserPage() {
   const params = useParams<{ room: string }>();
   const roomSlug = params.room;
+  const { sessionId, hydrated } = useClaimMode();
 
   const [roomName, setRoomName] = useState("");
   const [bundles, setBundles] = useState<Bundle[]>([]);
@@ -547,13 +550,13 @@ export default function BundleBrowserPage() {
   const showToast = useCallback((msg: string) => setToast(msg), []);
 
   useEffect(() => {
-    loadData();
-  }, [roomSlug]);
+    if (hydrated) loadData();
+  }, [roomSlug, hydrated, sessionId]);
 
   async function loadData() {
     setIsLoading(true);
 
-    const session = await loadSession();
+    const session = await loadSession(sessionId);
     const name = SLUG_TO_ROOM[roomSlug] || roomSlug;
     setRoomName(name);
 
@@ -609,33 +612,31 @@ export default function BundleBrowserPage() {
     );
     if (accErr) console.warn("bundle_decisions accept blocked:", accErr.message);
 
-    const session = await loadSession();
+    const session = await loadSession(sessionId);
     const existingItems = session?.claim_items ?? [];
-    const existingKeys = new Set(existingItems.map((i) => `${i.room}::${i.description}`));
-
-    const newItems: ClaimItem[] = items
-      .filter((bi) => !existingKeys.has(`${bundle.room}::${bi.description}`))
-      .map((bi) => ({
-        room: bundle.room,
-        description: bi.description,
-        brand: bi.brand,
-        model: "",
-        qty: bi.qty,
-        age_years: 0,
-        age_months: 0,
-        condition: "New",
-        unit_cost: bi.unit_cost,
-        category: bi.category,
-      }));
-
-    if (newItems.length > 0) {
-      await saveSession({ claim_items: [...existingItems, ...newItems] });
-    }
+    const incoming: ClaimItem[] = items.map((bi) => ({
+      room: bundle.room,
+      description: bi.description,
+      brand: bi.brand,
+      model: "",
+      qty: bi.qty,
+      age_years: 0,
+      age_months: 0,
+      condition: "New",
+      unit_cost: bi.unit_cost,
+      category: bi.category,
+      source: "bundle",
+    }));
+    const merged = mergeClaimIncoming(existingItems, incoming, "bundle");
+    await saveSession({ claim_items: merged }, sessionId);
 
     const added = items.reduce((s, i) => s + i.total, 0);
     setAcceptedCodes((prev) => new Set([...prev, bundle.bundle_code]));
-    setCurrentRoomTotal((prev) => prev + added);
-    showToast(`Bundle added — ${formatCurrency(added)} added to ${bundle.room}`);
+    const newRoomTotal = merged
+      .filter((i) => i.room === bundle.room)
+      .reduce((s, i) => s + i.unit_cost * i.qty, 0);
+    setCurrentRoomTotal(newRoomTotal);
+    showToast(`Bundle merged — ${formatCurrency(added)} package value · ${bundle.room}`);
   }
 
   async function handleUndo(bundle: Bundle) {
@@ -645,23 +646,34 @@ export default function BundleBrowserPage() {
       .eq("bundle_code", bundle.bundle_code);
     if (undoErr) console.warn("bundle_decisions undo blocked:", undoErr.message);
 
-    const session = await loadSession();
+    const session = await loadSession(sessionId);
     const bundleDescriptions = new Set(bundle.items.map((i) => i.description));
     const filtered = (session?.claim_items ?? []).filter(
       (i) => !(i.room === bundle.room && bundleDescriptions.has(i.description))
     );
-    await saveSession({ claim_items: filtered });
+    await saveSession({ claim_items: filtered }, sessionId);
 
     setAcceptedCodes((prev) => {
       const next = new Set(prev);
       next.delete(bundle.bundle_code);
       return next;
     });
-    setCurrentRoomTotal((prev) => Math.max(0, prev - bundle.total_value));
+    const newRoomTotal = filtered
+      .filter((i) => i.room === bundle.room)
+      .reduce((s, i) => s + i.unit_cost * i.qty, 0);
+    setCurrentRoomTotal(newRoomTotal);
     showToast(`Bundle removed — ${bundle.name} undone`);
   }
 
   const gap = roomBudget > 0 ? roomBudget - currentRoomTotal : 0;
+
+  if (!hydrated) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center text-gray-500">
+        Loading…
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col min-h-screen">

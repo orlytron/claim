@@ -1,20 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { loadSession, saveSession, SessionData } from "../../lib/session";
+import { supabase } from "../../lib/supabase";
 import { ClaimItem } from "../../lib/types";
+import { useClaimMode } from "../../lib/useClaimMode";
 import { generateItemId, slugify, formatCurrency } from "../../lib/utils";
-interface UpgradeProduct {
-  title: string;
-  brand: string;
-  model: string;
-  price: number;
-  retailer: string;
-  url: string;
-  thumbnail?: string;
-}
+import { RoomUpgradeRow, type UpgradeOption } from "./upgrade-row";
 
 // ── Slug → room name ──────────────────────────────────────────────────────────
 
@@ -187,343 +181,6 @@ function SmallSpinner() {
   );
 }
 
-// ── Part 3 — Item Card with 4-position toggle + custom form ──────────────────
-
-interface UpgradeOption {
-  label: string;
-  price: number;
-  title: string;
-  brand: string;
-  model: string;
-  retailer: string;
-  url: string;
-}
-
-const TOTAL_POSITIONS = 4; // 0=Original, 1=Mid, 2=Premium, 3=Custom
-
-function ItemCard({
-  item,
-  onUpgrade,
-}: {
-  item: ClaimItem;
-  onUpgrade: (item: ClaimItem, option: UpgradeOption) => Promise<void>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [upgradeLoading, setUpgradeLoading] = useState(false);
-  const [upgradeResult, setUpgradeResult] = useState<{ mid: UpgradeProduct; premium: UpgradeProduct } | null>(null);
-  const [upgradeError, setUpgradeError] = useState(false);
-  const [pos, setPos] = useState(0);
-  const [applying, setApplying] = useState(false);
-
-  // Custom form state (position 3)
-  const [customDesc, setCustomDesc] = useState("");
-  const [customBrand, setCustomBrand] = useState("");
-  const [customPrice, setCustomPrice] = useState("");
-
-  const isCustomPos = pos === 3;
-  const customValid = customDesc.trim().length > 0 && parseFloat(customPrice) > 0;
-
-  // Open panel, jump to position 1, and fire API immediately
-  function handleOpen() {
-    console.log("Upgrade requested for:", item.description, item.unit_cost);
-    setOpen(true);
-    setPos(1);
-    fetchUpgrades();
-  }
-
-  function handleClose() {
-    setOpen(false);
-    setPos(0);
-  }
-
-  async function fetchUpgrades() {
-    if (upgradeResult || upgradeLoading) return;
-    console.log("Fetching upgrades for:", item.description);
-    setUpgradeLoading(true);
-    setUpgradeError(false);
-    try {
-      const res = await fetch("/api/search-upgrade", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          item_description: item.description,
-          brand: item.brand || "",
-          current_price: item.unit_cost,
-          category: item.category || "",
-        }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { mid: UpgradeProduct; premium: UpgradeProduct };
-      console.log("Upgrade result for:", item.description, data);
-      setUpgradeResult(data);
-    } catch (err) {
-      console.error("Upgrade search failed for:", item.description, err);
-      setUpgradeError(true);
-    } finally {
-      setUpgradeLoading(false);
-    }
-  }
-
-  function handlePositionChange(newPos: number) {
-    setPos(newPos);
-    // Also fire if somehow we arrive at 1/2 without a result yet
-    if ((newPos === 1 || newPos === 2) && !upgradeResult && !upgradeLoading) {
-      fetchUpgrades();
-    }
-  }
-
-  // Build the 4-option list (mid/premium slots may be loading placeholders)
-  function getOptionContent(): { label: string; node: React.ReactNode; canApply: boolean; applyFn: () => Promise<void> } {
-    if (pos === 0) {
-      return {
-        label: "Original",
-        canApply: false,
-        applyFn: async () => {},
-        node: (
-          <div className="text-center py-2">
-            <p className="text-base font-semibold text-gray-900 leading-snug mb-1">{item.description}</p>
-            {item.brand && <p className="text-sm text-gray-500 mb-1">{item.brand}</p>}
-            <p className="text-sm text-gray-400 mb-1">Qty: {item.qty} · {formatCurrency(item.unit_cost)}</p>
-            <p className="text-2xl font-bold tabular-nums text-gray-900 mt-2">{formatCurrency(item.unit_cost * item.qty)}</p>
-          </div>
-        ),
-      };
-    }
-
-    if (pos === 1 || pos === 2) {
-      const isMid = pos === 1;
-      const label = isMid ? "Mid Upgrade" : "Premium";
-
-      if (upgradeLoading) {
-        return {
-          label,
-          canApply: false,
-          applyFn: async () => {},
-          node: (
-            <div className="flex flex-col items-center gap-3 py-6 text-gray-400">
-              <SmallSpinner />
-              <span className="text-sm">Finding upgrades…</span>
-            </div>
-          ),
-        };
-      }
-
-      if (upgradeError || !upgradeResult) {
-        return {
-          label,
-          canApply: false,
-          applyFn: async () => {},
-          node: (
-            <div className="py-4 text-center">
-              <p className="text-sm font-medium text-gray-600 mb-1">No standard upgrade found</p>
-              <p className="text-xs text-gray-400 mb-3">Add a custom item below ↓</p>
-              {upgradeError && (
-                <button
-                  onClick={() => { setUpgradeResult(null); setUpgradeError(false); fetchUpgrades(); }}
-                  className="text-xs text-[#2563EB] hover:underline"
-                >Try again</button>
-              )}
-            </div>
-          ),
-        };
-      }
-
-      const prod = isMid ? upgradeResult.mid : upgradeResult.premium;
-      const option: UpgradeOption = {
-        label,
-        price: prod.price,
-        title: prod.title,
-        brand: prod.brand,
-        model: prod.model,
-        retailer: prod.retailer,
-        url: prod.url,
-      };
-
-      return {
-        label,
-        canApply: true,
-        applyFn: async () => {
-          setApplying(true);
-          await onUpgrade(item, option);
-          setApplying(false);
-          setOpen(false);
-        },
-        node: (
-          <div className="text-center">
-            {prod.thumbnail && (
-              <img
-                src={prod.thumbnail}
-                alt={prod.title}
-                className="mx-auto mb-3 h-[60px] w-[60px] rounded-lg object-contain border border-gray-100"
-                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-              />
-            )}
-            <p className="text-base font-semibold text-gray-900 leading-snug mb-1 line-clamp-2">{prod.title}</p>
-            {prod.brand && prod.brand !== prod.retailer && (
-              <p className="text-sm text-gray-500 mb-0.5">{prod.brand}</p>
-            )}
-            {prod.retailer && (
-              <p className="text-sm text-gray-500 mb-0.5">{prod.retailer}</p>
-            )}
-            <p className="text-2xl font-bold tabular-nums text-gray-900 my-2">{formatCurrency(prod.price)}</p>
-            {item.qty > 1 && (
-              <p className="text-sm text-gray-400 mb-2">× {item.qty} = {formatCurrency(prod.price * item.qty)}</p>
-            )}
-            <p className="text-xs text-gray-400 mb-2">Available as of 2024</p>
-            <a
-              href={prod.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-block text-sm font-medium text-blue-600 underline hover:text-blue-800"
-            >
-              View at {prod.retailer || "retailer"} ↗
-            </a>
-          </div>
-        ),
-      };
-    }
-
-    // pos === 3 — Custom
-    const customOption: UpgradeOption = {
-      label: "Custom",
-      price: parseFloat(customPrice) || 0,
-      title: customDesc.trim(),
-      brand: customBrand.trim(),
-      model: "",
-      retailer: "",
-      url: "",
-    };
-
-    return {
-      label: "Custom Item",
-      canApply: customValid,
-      applyFn: async () => {
-        if (!customValid) return;
-        setApplying(true);
-        await onUpgrade(item, customOption);
-        setApplying(false);
-        setOpen(false);
-      },
-      node: (
-        <div className="space-y-3 text-left">
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">Description <span className="text-red-400">*</span></label>
-            <input
-              type="text" value={customDesc} onChange={(e) => setCustomDesc(e.target.value)}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-blue-400"
-              placeholder="e.g. Wilson Pro Staff tennis racquet"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">Brand <span className="text-gray-400 font-normal">(optional)</span></label>
-            <input
-              type="text" value={customBrand} onChange={(e) => setCustomBrand(e.target.value)}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-blue-400"
-              placeholder="e.g. Wilson"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">Price <span className="text-red-400">*</span></label>
-            <div className="flex items-center gap-1">
-              <span className="text-gray-400 font-medium">$</span>
-              <input
-                type="number" value={customPrice} onChange={(e) => setCustomPrice(e.target.value)}
-                className="flex-1 rounded-lg border border-gray-200 px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-blue-400"
-                placeholder="0" min="0" step="any"
-              />
-            </div>
-          </div>
-        </div>
-      ),
-    };
-  }
-
-  const content = open ? getOptionContent() : null;
-
-  return (
-    <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
-      {/* Main row */}
-      <div className="flex items-center gap-3 px-4 py-4">
-        <div className="flex-1 min-w-0">
-          <p className="text-base font-medium text-gray-900 leading-snug">{item.description}</p>
-          {item.brand && <p className="text-sm text-gray-400 mt-0.5">{item.brand}</p>}
-          <p className="text-sm text-gray-400 mt-0.5">Qty: {item.qty} · {formatCurrency(item.unit_cost)}</p>
-        </div>
-        <div className="shrink-0 flex items-center gap-2">
-          <p className="tabular-nums text-base font-bold text-gray-900 hidden sm:block">{formatCurrency(item.unit_cost * item.qty)}</p>
-          {(item.unit_cost >= 100 || !!item.brand) && (
-            <button
-              onClick={open ? handleClose : handleOpen}
-              className={`min-h-[40px] rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
-                open ? "border-green-300 bg-green-50 text-green-700" : "border-gray-200 text-gray-500 hover:border-gray-300 hover:text-gray-700"
-              }`}
-            >
-              {open ? "✓ Close" : "↕"}
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* 4-position toggle panel */}
-      {open && content && (
-        <div className="border-t border-gray-100 bg-gray-50 px-4 py-5">
-          {/* Position nav */}
-          <div className="flex items-stretch gap-2 mb-4">
-            <button
-              onClick={() => handlePositionChange(Math.max(0, pos - 1))}
-              disabled={pos === 0}
-              className="text-2xl text-gray-300 disabled:opacity-20 hover:text-gray-600 px-1 self-center"
-            >◀</button>
-
-            <div className="flex-1 rounded-xl border-2 border-[#2563EB] bg-white p-4 min-h-[120px] flex flex-col justify-center">
-              <p className="text-xs font-bold uppercase tracking-wider text-[#2563EB] mb-3 text-center">
-                {content.label}
-              </p>
-              {content.node}
-            </div>
-
-            <button
-              onClick={() => handlePositionChange(Math.min(TOTAL_POSITIONS - 1, pos + 1))}
-              disabled={pos === TOTAL_POSITIONS - 1}
-              className="text-2xl text-gray-300 disabled:opacity-20 hover:text-gray-600 px-1 self-center"
-            >▶</button>
-          </div>
-
-          {/* Position dots with labels */}
-          <div className="flex justify-center gap-3 mb-4">
-            {(["Original", "Mid", "Premium", "+"] as const).map((lbl, i) => (
-              <button
-                key={i}
-                onClick={() => handlePositionChange(i)}
-                className="flex flex-col items-center gap-1"
-              >
-                <span className={`h-2.5 w-2.5 rounded-full transition-colors ${i === pos ? "bg-[#2563EB]" : "bg-gray-200"}`} />
-                <span className={`text-xs ${i === pos ? "font-bold text-[#2563EB]" : "text-gray-300"}`}>{lbl}</span>
-              </button>
-            ))}
-          </div>
-
-          {/* Apply / hint */}
-          {content.canApply ? (
-            <button
-              onClick={content.applyFn}
-              disabled={applying}
-              className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-xl bg-[#16A34A] text-base font-bold text-white transition-colors hover:bg-green-700 disabled:opacity-50"
-            >
-              {applying ? <SmallSpinner /> : null}
-              {applying ? "Saving…" : isCustomPos ? "Save Custom Item" : "Apply"}
-            </button>
-          ) : pos === 0 ? (
-            <p className="text-center text-sm text-gray-400">◀ ▶ to see upgrade options</p>
-          ) : isCustomPos ? (
-            <p className="text-center text-sm text-gray-400">Fill in description and price to save</p>
-          ) : null}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── Category Upgrades section ─────────────────────────────────────────────────
 
 function CategoryUpgradesSection({
@@ -650,26 +307,48 @@ export default function RoomReviewPage() {
   const [appliedBundles, setAppliedBundles] = useState<Set<string>>(new Set());
   const [isSaving, setIsSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [cacheKeySet, setCacheKeySet] = useState<Set<string>>(new Set());
+  const [addSectionOpen, setAddSectionOpen] = useState(false);
 
-  useEffect(() => { bootstrap(); }, [roomSlug]);
+  const { sessionId, hydrated } = useClaimMode();
+
+  useEffect(() => {
+    if (!hydrated) return;
+    void bootstrap();
+  }, [roomSlug, hydrated, sessionId]);
 
   async function bootstrap() {
     setIsLoading(true);
     setItems([]);
     setAppliedBundles(new Set());
 
-    const sess = await loadSession();
+    const sess = await loadSession(sessionId);
     setSession(sess);
-    if (!sess?.claim_items?.length) { setIsLoading(false); return; }
+    if (!sess?.claim_items?.length) {
+      setIsLoading(false);
+      return;
+    }
 
     const rooms = sess.room_summary?.map((r) => r.room) ?? [...new Set(sess.claim_items.map((i) => i.room))];
     setAllRooms(rooms);
 
     const name = SLUG_TO_ROOM[roomSlug] ?? rooms.find((r) => slugify(r) === roomSlug) ?? "";
     setRoomName(name);
-    if (!name) { setIsLoading(false); return; }
+    if (!name) {
+      setIsLoading(false);
+      return;
+    }
 
     setItems(sess.claim_items.filter((i) => i.room === name));
+
+    try {
+      const r = await fetch("/api/upgrade-cache-status");
+      const j = (await r.json()) as { keys?: string[] };
+      setCacheKeySet(new Set(j.keys ?? []));
+    } catch {
+      setCacheKeySet(new Set());
+    }
+
     setIsLoading(false);
   }
 
@@ -679,6 +358,8 @@ export default function RoomReviewPage() {
     if (!session?.claim_items) return;
     setIsSaving(true);
 
+    const stableCode = `upgrade:${roomName}:${item.description}:${item.unit_cost}`.slice(0, 180);
+
     const updated = session.claim_items.map((ci) => {
       if (ci.room === item.room && ci.description === item.description && ci.unit_cost === item.unit_cost) {
         return {
@@ -687,18 +368,51 @@ export default function RoomReviewPage() {
           brand: option.brand,
           model: option.model,
           unit_cost: option.price,
+          previous_unit_cost: item.unit_cost,
+          source: "upgrade" as const,
           age_years: 0,
           age_months: 0,
           condition: "New" as const,
-          vendor_url: option.url,
-          vendor_name: option.retailer,
+          vendor_url: option.url || undefined,
+          vendor_name: option.retailer || undefined,
         };
       }
       return ci;
     });
 
-    await saveSession({ claim_items: updated });
-    setSession((prev) => prev ? { ...prev, claim_items: updated } : prev);
+    await saveSession({ claim_items: updated }, sessionId);
+
+    try {
+      const { error: bdErr } = await supabase.from("bundle_decisions").upsert(
+        {
+          bundle_code: stableCode,
+          room: roomName,
+          bundle_name: `Upgrade: ${item.description}`,
+          action: "upgrade_applied",
+          items: [
+            {
+              room: roomName,
+              description: option.title,
+              brand: option.brand,
+              model: option.model,
+              qty: item.qty,
+              unit_cost: option.price,
+              category: item.category,
+              source: "upgrade",
+              vendor_url: option.url,
+              vendor_name: option.retailer,
+            },
+          ],
+          total_value: option.price * item.qty,
+        },
+        { onConflict: "bundle_code" }
+      );
+      if (bdErr) console.warn("bundle_decisions upgrade_applied:", bdErr.message);
+    } catch (e) {
+      console.warn("bundle_decisions upgrade network:", e);
+    }
+
+    setSession((prev) => (prev ? { ...prev, claim_items: updated } : prev));
     setItems(updated.filter((i) => i.room === roomName));
     setIsSaving(false);
     setToast(`Upgraded to ${option.title} — ${formatCurrency(option.price)}`);
@@ -718,13 +432,21 @@ export default function RoomReviewPage() {
     });
 
     const bundleItem: ClaimItem = {
-      room: roomName, description: bundle.name, brand: bundle.brand,
-      model: "", qty: 1, age_years: 0, age_months: 0,
-      condition: "New", unit_cost: bundle.upgrade_value, category: "Category Upgrade",
+      room: roomName,
+      description: bundle.name,
+      brand: bundle.brand,
+      model: "",
+      qty: 1,
+      age_years: 0,
+      age_months: 0,
+      condition: "New",
+      unit_cost: bundle.upgrade_value,
+      category: "Category Upgrade",
+      source: "bundle",
     };
 
     const updated = [...filtered, bundleItem];
-    await saveSession({ claim_items: updated });
+    await saveSession({ claim_items: updated }, sessionId);
     setSession((prev) => prev ? { ...prev, claim_items: updated } : prev);
     setItems(updated.filter((i) => i.room === roomName));
     setAppliedBundles((prev) => new Set([...prev, bundle.name]));
@@ -741,10 +463,40 @@ export default function RoomReviewPage() {
   const prevRoom = roomIdx > 0 ? allRooms[roomIdx - 1] : null;
   const nextRoom = roomIdx < allRooms.length - 1 ? allRooms[roomIdx + 1] : null;
 
+  const sortedItems = useMemo(
+    () => [...items].sort((a, b) => b.unit_cost - a.unit_cost),
+    [items]
+  );
+
+  const originalSub = useMemo(
+    () =>
+      items
+        .filter((i) => !i.source || i.source === "original")
+        .reduce((s, i) => s + i.qty * i.unit_cost, 0),
+    [items]
+  );
+  const upgradedSub = useMemo(
+    () => items.filter((i) => i.source === "upgrade").reduce((s, i) => s + i.qty * i.unit_cost, 0),
+    [items]
+  );
+  const addedSub = useMemo(
+    () => items.filter((i) => i.source === "bundle").reduce((s, i) => s + i.qty * i.unit_cost, 0),
+    [items]
+  );
+
   // ── Render ────────────────────────────────────────────────────────────────
 
+  if (!hydrated) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 text-gray-500">
+        <SmallSpinner />
+        <span>Loading…</span>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-screen flex-col pb-44">
       <header className="sticky top-0 z-10 border-b border-gray-100 bg-white px-6 py-4">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -799,58 +551,108 @@ export default function RoomReviewPage() {
           </div>
         ) : (
           <>
-            <CategoryUpgradesSection
-              roomName={roomName}
-              items={items}
-              appliedBundles={appliedBundles}
-              onApply={handleApplyCategoryBundle}
-            />
-            <div className="space-y-2">
-              {items.map((item, idx) => (
-                <ItemCard
-                  key={`${generateItemId(item)}-${idx}`}
-                  item={item}
-                  onUpgrade={handleUpgrade}
-                />
-              ))}
-            </div>
+            <section className="mb-8">
+              <h2 className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">
+                Upgrade existing items
+              </h2>
+              <div className="space-y-3">
+                {sortedItems.map((item, idx) => (
+                  <RoomUpgradeRow
+                    key={`${generateItemId(item)}-${idx}`}
+                    item={item}
+                    cacheHas={cacheKeySet.has(item.description.trim().toLowerCase())}
+                    onUpgrade={handleUpgrade}
+                  />
+                ))}
+              </div>
+            </section>
+
+            <section className="mb-8">
+              <button
+                type="button"
+                onClick={() => setAddSectionOpen((v) => !v)}
+                className="flex w-full items-center justify-between rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-left text-sm font-bold text-gray-700 hover:bg-gray-100"
+              >
+                <span>+ ADD NEW ITEMS TO {roomName.toUpperCase()}</span>
+                <span className="text-gray-400">{addSectionOpen ? "▼" : "▶"}</span>
+              </button>
+              {addSectionOpen && (
+                <div className="mt-4 space-y-4">
+                  <CategoryUpgradesSection
+                    roomName={roomName}
+                    items={items}
+                    appliedBundles={appliedBundles}
+                    onApply={handleApplyCategoryBundle}
+                  />
+                  <Link
+                    href={`/review/bundles/${roomSlug}`}
+                    className="inline-flex min-h-[44px] items-center rounded-xl bg-[#2563EB] px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-700"
+                  >
+                    Open bundle browser →
+                  </Link>
+                </div>
+              )}
+            </section>
           </>
         )}
       </main>
 
-      <footer className="sticky bottom-0 z-10 border-t border-gray-200 bg-white/95 px-6 py-4 backdrop-blur">
-        <div className="max-w-3xl mx-auto flex items-center justify-between gap-6">
-          <div className="flex-1">
-            {roomBudget > 0 ? (
-              <>
-                <div className="mb-1 flex items-center justify-between text-base">
-                  <span className="font-bold text-gray-900">Room Total: {formatCurrency(roomTotal)}</span>
-                  <span className="tabular-nums text-gray-500">{formatCurrency(roomBudget - roomTotal)} remaining</span>
-                </div>
-                <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
-                  <div
-                    className={`h-full rounded-full transition-all ${budgetPct >= 100 ? "bg-green-500" : budgetPct >= 80 ? "bg-amber-500" : "bg-[#2563EB]"}`}
-                    style={{ width: `${budgetPct}%` }}
-                  />
-                </div>
-              </>
-            ) : (
-              <span className="text-base font-bold text-gray-900">Room Total: {formatCurrency(roomTotal)}</span>
-            )}
+      <footer className="fixed inset-x-0 bottom-0 z-20 border-t-2 border-gray-200 bg-white shadow-[0_-4px_24px_rgba(0,0,0,0.08)]">
+        <div className="max-w-3xl mx-auto px-4 py-3">
+          <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">Room: {roomName}</p>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm tabular-nums mb-2">
+            <span className="text-gray-600">Original</span>
+            <span className="text-right font-semibold text-gray-900">{formatCurrency(originalSub)}</span>
+            <span className="text-gray-600">Upgraded</span>
+            <span className="text-right font-semibold text-green-700">+{formatCurrency(upgradedSub)}</span>
+            <span className="text-gray-600">Added</span>
+            <span className="text-right font-semibold text-blue-700">+{formatCurrency(addedSub)}</span>
           </div>
-          <div className="flex shrink-0 items-center gap-3">
+          <div className="flex items-center justify-between border-t border-gray-100 pt-2 text-sm">
+            <span className="font-bold text-gray-900 tabular-nums">
+              Total: {formatCurrency(roomTotal)}
+              {roomBudget > 0 && (
+                <span className="text-gray-400 font-normal"> / {formatCurrency(roomBudget)} goal</span>
+              )}
+            </span>
+          </div>
+          {roomBudget > 0 && (
+            <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-gray-100">
+              <div
+                className={`h-full rounded-full transition-all ${budgetPct >= 100 ? "bg-green-500" : budgetPct >= 80 ? "bg-amber-500" : "bg-[#2563EB]"}`}
+                style={{ width: `${budgetPct}%` }}
+              />
+            </div>
+          )}
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
             {prevRoom ? (
-              <Link href={`/review/${slugify(prevRoom)}`} className="min-h-[44px] flex items-center rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
-                ← {prevRoom}
+              <Link
+                href={`/review/${slugify(prevRoom)}`}
+                className="min-h-[44px] flex items-center rounded-xl border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                ← Back to Rooms
               </Link>
             ) : (
-              <Link href="/review" className="min-h-[44px] flex items-center rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
-                ← All Rooms
+              <Link
+                href="/review"
+                className="min-h-[44px] flex items-center rounded-xl border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                ← Back to Rooms
               </Link>
             )}
-            {nextRoom && (
-              <Link href={`/review/${slugify(nextRoom)}`} className="min-h-[44px] flex items-center rounded-xl bg-[#2563EB] px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700">
-                {nextRoom} →
+            {nextRoom ? (
+              <Link
+                href={`/review/${slugify(nextRoom)}`}
+                className="min-h-[44px] flex items-center rounded-xl bg-[#2563EB] px-4 py-2 text-sm font-bold text-white hover:bg-blue-700"
+              >
+                Next Room →
+              </Link>
+            ) : (
+              <Link
+                href="/review"
+                className="min-h-[44px] flex items-center rounded-xl bg-gray-100 px-4 py-2 text-sm font-medium text-gray-600"
+              >
+                Done
               </Link>
             )}
           </div>

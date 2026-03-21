@@ -1,3 +1,5 @@
+export type ClaimItemSource = "original" | "bundle" | "upgrade";
+
 export interface ClaimItem {
   room: string;
   description: string;
@@ -11,6 +13,10 @@ export interface ClaimItem {
   category: string;
   vendor_url?: string;
   vendor_name?: string;
+  /** Lineage for totals / export breakdown */
+  source?: ClaimItemSource;
+  /** Set when user applies an upgrade (for strikethrough original price in UI) */
+  previous_unit_cost?: number;
 }
 
 export type TierKey = "keep" | "entry" | "mid" | "premium" | "ultra";

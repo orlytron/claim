@@ -3,9 +3,10 @@ export interface OriginalClaimItem {
   room: string; description: string; brand: string; model: string;
   qty: number; age_years: number; age_months: number; condition: string;
   unit_cost: number; category: string;
+  source: "original";
 }
 
-export const ORIGINAL_CLAIM_ITEMS: OriginalClaimItem[] = [
+const ORIGINAL_CLAIM_ITEMS_RAW: Omit<OriginalClaimItem, "source">[] = [
   // Living Room
   { room: "Living Room", description: "Bowl with food", brand: "", model: "", qty: 1, age_years: 0, age_months: 0, condition: "Average", unit_cost: 150, category: "Decorative" },
   { room: "Living Room", description: "Matcha tea container", brand: "", model: "", qty: 1, age_years: 0, age_months: 0, condition: "Average", unit_cost: 35, category: "Decorative" },
@@ -225,6 +226,11 @@ export const ORIGINAL_CLAIM_ITEMS: OriginalClaimItem[] = [
   { room: "David Office / Guest Room", description: "Window shades", brand: "", model: "", qty: 4, age_years: 0, age_months: 0, condition: "Average", unit_cost: 250, category: "Furniture" },
   { room: "David Office / Guest Room", description: "Ceramics", brand: "", model: "", qty: 6, age_years: 0, age_months: 0, condition: "Average", unit_cost: 75, category: "Decorative" },
 ];
+
+export const ORIGINAL_CLAIM_ITEMS: OriginalClaimItem[] = ORIGINAL_CLAIM_ITEMS_RAW.map((i) => ({
+  ...i,
+  source: "original" as const,
+}));
 
 export const ORIGINAL_TOTAL = ORIGINAL_CLAIM_ITEMS.reduce((s, i) => s + i.qty * i.unit_cost, 0);
 

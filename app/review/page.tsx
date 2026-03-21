@@ -7,6 +7,7 @@ import { BUNDLES_DATA, Bundle, BundleItem } from "../lib/bundles-data";
 import { loadSession, saveSession } from "../lib/session";
 import { ClaimItem } from "../lib/types";
 import { supabase } from "../lib/supabase";
+import { mergeClaimIncoming } from "../lib/claim-item-merge";
 import { formatCurrency } from "../lib/utils";
 import { useClaimMode } from "../lib/useClaimMode";
 
@@ -818,7 +819,6 @@ function RoomRow({
   acceptedCodes,
   saving,
   isPoolFull,
-  addedThisSession,
   onAccept,
   onItemUpdate,
   onAllocationChange,
@@ -831,7 +831,6 @@ function RoomRow({
   acceptedCodes: Set<string>;
   saving: boolean;
   isPoolFull: boolean;
-  addedThisSession: number;
   onAccept: (bundle: Bundle) => void;
   onItemUpdate: (item: ClaimItem, newPrice: number) => void;
   onAllocationChange: (roomName: string, v: number) => void;
@@ -875,9 +874,6 @@ function RoomRow({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {addedThisSession > 0 && (
-            <span className="text-sm font-semibold text-green-600 tabular-nums">✓ +{formatCurrency(addedThisSession)}</span>
-          )}
           <Link
             href={`/review/bundles/${room.slug}`}
             onClick={(e) => e.stopPropagation()}
@@ -966,7 +962,6 @@ export default function ReviewDashboard() {
   const [sessionItems, setSessionItems] = useState<ClaimItem[]>([]);
   const [roomAllocations, setRoomAllocations] = useState<Record<string, number>>({});
   const [acceptedCodes, setAcceptedCodes] = useState<Set<string>>(new Set());
-  const [addedByRoom, setAddedByRoom] = useState<Record<string, number>>({});
   const [savingRoom, setSavingRoom] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [artAdded, setArtAdded] = useState(false);
@@ -977,15 +972,6 @@ export default function ReviewDashboard() {
     if (hydrated) loadData(sessionId, mode);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, sessionId]);
-
-  // Debug log whenever items change
-  useEffect(() => {
-    if (sessionItems.length > 0) {
-      const total = sessionItems.reduce((s, i) => s + i.unit_cost * i.qty, 0);
-      console.log("Total from items:", total);
-      console.log("Item count:", sessionItems.length);
-    }
-  }, [sessionItems]);
 
   // Mode toggle handler — shows overlay, auto-seeds test if empty, never navigates
   const handleSetMode = useCallback(async (newMode: typeof mode) => {
@@ -1067,14 +1053,27 @@ export default function ReviewDashboard() {
     return t;
   }, [sessionItems]);
 
-  const baseTotal = useMemo(
-    () => Object.values(roomTotals).reduce((s, v) => s + v, 0) + (artAdded ? 300_000 : 0),
-    [roomTotals, artAdded]
+  const lineItemsTotal = useMemo(
+    () => sessionItems.reduce((sum, item) => sum + item.qty * item.unit_cost, 0),
+    [sessionItems]
   );
 
-  // FIX 1: grandTotal is ONLY from claim_items — never add bundle allocations on top
-  // (bundle items are already IN claim_items when accepted, so distributed would double-count)
-  const grandTotal = baseTotal;
+  /** Claim line items + optional art placeholder — single total for the app. */
+  const grandTotal = lineItemsTotal + (artAdded ? 300_000 : 0);
+
+  const breakdown = useMemo(() => {
+    let original = 0;
+    let upgrade = 0;
+    let bundle = 0;
+    for (const item of sessionItems) {
+      const line = item.qty * item.unit_cost;
+      const src = item.source ?? "original";
+      if (src === "upgrade") upgrade += line;
+      else if (src === "bundle") bundle += line;
+      else original += line;
+    }
+    return { original, upgrade, bundle };
+  }, [sessionItems]);
 
   const toDistribute = Math.max(0, TARGET - grandTotal);
   const distributed = Object.values(roomAllocations).reduce((s, v) => s + v, 0);
@@ -1097,39 +1096,22 @@ export default function ReviewDashboard() {
         if (bdErr) console.warn("bundle_decisions write blocked (RLS?):", bdErr.message, "— decision saved to localStorage only");
       } catch (e) { console.warn("bundle_decisions network error:", e); }
 
-      // FIX 2: Update-or-insert — never silently skip bundle items
-      // Items that already exist in this room get their value updated to the bundle version.
-      // Brand-new items (not already in any form) are appended.
-      const bundleItemMap = new Map(
-        bundle.items.map((bi) => [`${bundle.room}::${bi.description}`, bi])
-      );
+      const incoming: ClaimItem[] = bundle.items.map((bi) => ({
+        room: bundle.room,
+        description: bi.description,
+        brand: bi.brand,
+        model: "",
+        qty: bi.qty,
+        age_years: 0,
+        age_months: 0,
+        condition: "New",
+        unit_cost: bi.unit_cost,
+        category: bi.category,
+        source: "bundle",
+      }));
 
-      // Pass 1: update any existing items that the bundle also contains
-      const updatedExisting = sessionItems.map((ci) => {
-        const bundleVersion = bundleItemMap.get(`${ci.room}::${ci.description}`);
-        if (bundleVersion) {
-          return {
-            ...ci,
-            brand: bundleVersion.brand || ci.brand,
-            unit_cost: bundleVersion.unit_cost,
-            qty: bundleVersion.qty,
-            condition: "New",
-            age_years: 0,
-            age_months: 0,
-          };
-        }
-        return ci;
-      });
+      const merged = mergeClaimIncoming(sessionItems, incoming, "bundle");
 
-      // Pass 2: append items from the bundle that don't exist at all
-      const existingKeys = new Set(sessionItems.map((i) => `${i.room}::${i.description}`));
-      const brandNewItems: ClaimItem[] = bundle.items
-        .filter((bi) => !existingKeys.has(`${bundle.room}::${bi.description}`))
-        .map((bi) => ({ room: bundle.room, description: bi.description, brand: bi.brand, model: "", qty: bi.qty, age_years: 0, age_months: 0, condition: "New", unit_cost: bi.unit_cost, category: bi.category }));
-
-      const merged = [...updatedExisting, ...brandNewItems];
-
-      // Always save the merged array (even if no brand-new items — existing items may have been updated)
       await saveSession({ claim_items: merged }, sessionId);
       setSessionItems(merged);
 
@@ -1138,8 +1120,6 @@ export default function ReviewDashboard() {
       await saveSession({ room_budgets: newAllocs }, sessionId);
 
       setAcceptedCodes((prev) => new Set([...prev, bundle.bundle_code]));
-      const addedValue = brandNewItems.reduce((s, i) => s + i.unit_cost * i.qty, 0);
-      setAddedByRoom((prev) => ({ ...prev, [roomName]: (prev[roomName] ?? 0) + addedValue }));
       setToast(`${bundle.name} added — ${formatCurrency(bundle.total_value)}`);
     } finally {
       setSavingRoom(null);
@@ -1162,19 +1142,32 @@ export default function ReviewDashboard() {
   }
 
   async function handleCheckedItemsAdd(roomName: string, items: BundleItem[]) {
-    const existingKeys = new Set(sessionItems.map((i) => `${i.room}::${i.description}`));
-    const newItems: ClaimItem[] = items
-      .filter((bi) => !existingKeys.has(`${roomName}::${bi.description}`))
-      .map((bi) => ({
-        room: roomName, description: bi.description, brand: bi.brand,
-        model: "", qty: bi.qty, age_years: 0, age_months: 0,
-        condition: "New", unit_cost: bi.unit_cost, category: bi.category,
-      }));
-    if (!newItems.length) { setToast("All selected items already in claim"); return; }
-    const updated = [...sessionItems, ...newItems];
-    await saveSession({ claim_items: updated }, sessionId);
-    setSessionItems(updated);
-    setToast(`${newItems.length} item${newItems.length !== 1 ? "s" : ""} added — ${formatCurrency(newItems.reduce((s, i) => s + i.unit_cost * i.qty, 0))}`);
+    const incoming: ClaimItem[] = items.map((bi) => ({
+      room: roomName,
+      description: bi.description,
+      brand: bi.brand,
+      model: "",
+      qty: bi.qty,
+      age_years: 0,
+      age_months: 0,
+      condition: "New",
+      unit_cost: bi.unit_cost,
+      category: bi.category,
+      source: "bundle",
+    }));
+    const merged = mergeClaimIncoming(sessionItems, incoming, "bundle");
+    const unchanged =
+      merged.length === sessionItems.length &&
+      merged.every((item, i) => item === sessionItems[i]);
+    if (unchanged) {
+      setToast("No changes — duplicates skipped or prices not higher");
+      return;
+    }
+    await saveSession({ claim_items: merged }, sessionId);
+    setSessionItems(merged);
+    const before = sessionItems.reduce((s, i) => s + i.qty * i.unit_cost, 0);
+    const after = merged.reduce((s, i) => s + i.qty * i.unit_cost, 0);
+    setToast(`Items merged — ${formatCurrency(after - before)} net`);
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -1238,6 +1231,25 @@ export default function ReviewDashboard() {
           {/* Budget Pool */}
           <div className="mt-6 rounded-2xl border border-gray-200 bg-gray-50 px-5 py-5">
             <h2 className="text-base font-bold uppercase tracking-wider text-gray-400 mb-4">Budget Pool</h2>
+            <div className="mb-4 rounded-xl border border-gray-200 bg-white px-4 py-3 space-y-1.5 text-sm">
+              <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Claim breakdown</p>
+              <div className="flex justify-between tabular-nums">
+                <span className="text-gray-600">Original (PDF)</span>
+                <span className="font-semibold text-gray-900">{formatCurrency(breakdown.original)}</span>
+              </div>
+              <div className="flex justify-between tabular-nums">
+                <span className="text-gray-600">Upgrades applied</span>
+                <span className="font-semibold text-gray-900">{formatCurrency(breakdown.upgrade)}</span>
+              </div>
+              <div className="flex justify-between tabular-nums">
+                <span className="text-gray-600">New items (bundles)</span>
+                <span className="font-semibold text-gray-900">{formatCurrency(breakdown.bundle)}</span>
+              </div>
+              <div className="flex justify-between border-t border-gray-100 pt-2 tabular-nums">
+                <span className="font-bold text-gray-800">Total (line items)</span>
+                <span className="font-bold text-gray-900">{formatCurrency(lineItemsTotal)}</span>
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-y-4 gap-x-6 mb-5">
               <div>
                 <p className="text-sm text-gray-500">Total goal</p>
@@ -1245,7 +1257,7 @@ export default function ReviewDashboard() {
               </div>
               <div>
                 <p className="text-sm text-gray-500">Already have</p>
-                <p className="text-2xl font-bold tabular-nums text-gray-900">{formatCurrency(baseTotal)}</p>
+                <p className="text-2xl font-bold tabular-nums text-gray-900">{formatCurrency(grandTotal)}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-500">To distribute</p>
@@ -1286,7 +1298,6 @@ export default function ReviewDashboard() {
                 acceptedCodes={acceptedCodes}
                 saving={savingRoom === room.name}
                 isPoolFull={isPoolFull}
-                addedThisSession={addedByRoom[room.name] ?? 0}
                 onAccept={(bundle) => handleAccept(room.name, bundle)}
                 onItemUpdate={handleItemUpdate}
                 onAllocationChange={handleAllocationChange}
@@ -1308,7 +1319,7 @@ export default function ReviewDashboard() {
               <span className="text-gray-400 text-sm ml-1">/ {formatCurrency(TARGET)}</span>
             </div>
             <a
-              href="/api/export-xact"
+              href={`/api/export-xact?sessionId=${encodeURIComponent(sessionId)}`}
               className="min-h-[48px] flex items-center rounded-xl px-5 py-2.5 text-base font-bold bg-[#16A34A] text-white hover:bg-green-700 transition-colors"
             >
               Download Claim

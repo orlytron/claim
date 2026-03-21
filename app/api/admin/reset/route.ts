@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "../../../lib/supabase";
+import { supabaseAdmin } from "../../../lib/supabase-admin";
 import { ORIGINAL_CLAIM_ITEMS, ORIGINAL_TOTAL, computeOriginalRoomSummary } from "../../../lib/original-claim-data";
 
 export async function POST(req: NextRequest) {
@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
   const roomSummary = computeOriginalRoomSummary();
 
   // 1. Delete all bundle decisions
-  const { error: bdErr } = await supabase
+  const { error: bdErr } = await supabaseAdmin
     .from("bundle_decisions")
     .delete()
     .neq("id", "00000000-0000-0000-0000-000000000000"); // delete all rows
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
   if (bdErr) console.warn("bundle_decisions delete warning:", bdErr.message);
 
   // 2. Delete all client suggestions
-  const { error: csErr } = await supabase
+  const { error: csErr } = await supabaseAdmin
     .from("client_suggestions")
     .delete()
     .neq("id", "00000000-0000-0000-0000-000000000000");
@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
   if (csErr) console.warn("client_suggestions delete warning:", csErr.message);
 
   // 3. Reset claim_session to original data
-  const { error: sessErr } = await supabase
+  const { error: sessErr } = await supabaseAdmin
     .from("claim_session")
     .upsert(
       {
