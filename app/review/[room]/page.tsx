@@ -57,6 +57,126 @@ function writeLocked(keys: string[]) {
   localStorage.setItem(LS_LOCKED, JSON.stringify(keys));
 }
 
+/** Lines shown in the upgrade table + guided walkthrough (excludes art / low-value decor). */
+function isUpgradeCandidate(item: ClaimItem): boolean {
+  const desc = item.description.toLowerCase();
+  const brand = (item.brand || "").toLowerCase();
+
+  const artKeywords = [
+    "artwork",
+    "print",
+    "painting",
+    "sculpture",
+    "photograph",
+    "photo",
+    "poster",
+    "jersey",
+    "memorabilia",
+    "signed",
+    "autographed",
+    "emmy",
+    "golden globe",
+    "award",
+    "pokemon",
+    "simpsons",
+    "banksy",
+    "cameupinthedrought",
+    "album",
+    "plexiglas",
+    "elephant",
+    "zebra",
+    "heart artwork",
+    "collectible",
+    "vintage t-shirt",
+  ];
+  if (artKeywords.some((k) => desc.includes(k))) return false;
+
+  const genericKeywords = [
+    "dental",
+    "toothpaste",
+    "soap",
+    "floss",
+    "candle",
+    "vase",
+    "bowl",
+    "basket",
+    "textile",
+    "fabric",
+    "curtain",
+    "mat",
+    "tack",
+    "sharpie",
+    "marker",
+    "cord",
+    "decorative",
+    "diffuser",
+    "crystal",
+    "plant",
+    "wax",
+    "brush",
+    "paint",
+    "thumbtack",
+    "bulletin",
+    "milk crate",
+    "craft supply",
+    "coaster",
+  ];
+  if (genericKeywords.some((k) => desc.includes(k)) && !brand) return false;
+
+  const goodBrands = [
+    "sony",
+    "apple",
+    "dji",
+    "epson",
+    "sennheiser",
+    "rh",
+    "restoration hardware",
+    "george smith",
+    "glas italia",
+    "knoll",
+    "west elm",
+    "wilson",
+    "titleist",
+    "specialized",
+    "yamaha",
+    "kawai",
+    "seagull",
+    "martin",
+    "sub-zero",
+    "casper",
+    "saatva",
+    "nectar",
+    "chilewich",
+    "east fork",
+    "vitamix",
+    "manfrotto",
+    "rode",
+    "beyerdynamic",
+    "audio-technica",
+    "razer",
+    "benq",
+    "dell",
+    "quince",
+    "rimowa",
+    "away",
+    "patagonia",
+    "rei",
+    "o'neill",
+    "litelok",
+    "hoto",
+    "philips",
+    "heath ceramics",
+  ];
+  if (goodBrands.some((b) => brand.includes(b) || desc.includes(b))) return true;
+
+  if (item.unit_cost >= 500) return true;
+
+  const upgradeCategories = ["furniture", "appliances", "electronics", "sports", "lighting", "kitchen"];
+  if (upgradeCategories.includes(item.category?.toLowerCase() || "")) return true;
+
+  return false;
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type UpgradeOption = {
@@ -539,10 +659,15 @@ export default function RoomReviewPage() {
   }, [guided, guidedLoadBubble, guidedLoadDismissed]);
 
   useEffect(() => {
-    if (!guided || items.length === 0 || baselineOriginalRoomRef.current !== null) return;
-    const o = items
-      .filter((i) => !i.source || i.source === "original")
-      .reduce((s, i) => s + i.qty * i.unit_cost, 0);
+    if (!guided || baselineOriginalRoomRef.current !== null || items.length === 0) return;
+    const candidates = items.filter(isUpgradeCandidate);
+    const o =
+      candidates.length === 0
+        ? 0
+        : candidates.reduce((s, i) => {
+            const unit = i.pre_upgrade_item ? i.pre_upgrade_item.unit_cost : i.unit_cost;
+            return s + i.qty * unit;
+          }, 0);
     baselineOriginalRoomRef.current = o;
   }, [guided, items]);
 
@@ -607,7 +732,9 @@ export default function RoomReviewPage() {
     const def = DEFAULT_ROOM_TARGETS[name] ?? 0;
     setRoomTarget(storedGoal ?? def);
 
-    const descriptions = roomItems.map((i) => i.pre_upgrade_item?.description ?? i.description);
+    const descriptions = roomItems
+      .filter(isUpgradeCandidate)
+      .map((i) => i.pre_upgrade_item?.description ?? i.description);
     const params = new URLSearchParams();
     params.set("room", name);
     descriptions.forEach((d) => params.append("desc", d));
@@ -621,9 +748,14 @@ export default function RoomReviewPage() {
     setIsLoading(false);
   }
 
-  const sortedItems = useMemo(
-    () => [...items].sort((a, b) => b.unit_cost - a.unit_cost),
+  const upgradeItems = useMemo(
+    () => items.filter(isUpgradeCandidate).sort((a, b) => b.unit_cost - a.unit_cost),
     [items]
+  );
+
+  const upgradeSubtotal = useMemo(
+    () => upgradeItems.reduce((s, i) => s + i.qty * i.unit_cost, 0),
+    [upgradeItems]
   );
 
   const missingSuggestions = useMemo(() => {
@@ -981,7 +1113,7 @@ export default function RoomReviewPage() {
             </div>
 
             <div className="divide-y divide-gray-200 border-x border-b border-gray-200 rounded-b-lg overflow-hidden">
-              {sortedItems.map((item, idx) => {
+              {upgradeItems.map((item, idx) => {
                 const lk = lockKeyForItem(item);
                 const locked = lockedKeys.includes(lk);
                 const cacheHas =
@@ -1117,6 +1249,10 @@ export default function RoomReviewPage() {
               })}
             </div>
 
+            <p className="mt-4 px-2 text-center text-sm italic text-gray-500">
+              Art and decorative items are managed separately in the Art Collection section.
+            </p>
+
             {/* Bundle slider */}
             <section className="mt-10 rounded-2xl border border-gray-200 bg-gray-50 p-5">
               <p className="text-base font-semibold text-gray-900">
@@ -1221,7 +1357,11 @@ export default function RoomReviewPage() {
               <SpeechBubble
                 direction="right"
                 visible={guidedLoadVisible}
-                text={`This is the ${roomName}!\nYou have ${items.length} items worth ${formatCurrency(roomTotal)}.\nLet's see what we can upgrade! ✨`}
+                text={
+                  upgradeItems.length > 0
+                    ? `This is the ${roomName}!\nYou have ${upgradeItems.length} upgradeable ${upgradeItems.length === 1 ? "item" : "items"} worth ${formatCurrency(upgradeSubtotal)}.\nLet's see what we can upgrade! ✨`
+                    : `This is the ${roomName}!\nThere are no lines here that need the upgrade assistant right now — art and small decor belong in Art Collection.\nCheck suggested additions below if any! ✨`
+                }
               />
               <button
                 type="button"
@@ -1261,13 +1401,24 @@ export default function RoomReviewPage() {
 
           {showGuidedComplete && (
             <div className="fixed bottom-48 right-4 z-[49] flex w-[min(calc(100vw-2rem),340px)] flex-col items-stretch gap-3 rounded-2xl border border-gray-200 bg-white/95 p-4 shadow-xl backdrop-blur-sm sm:bottom-32 sm:right-[5.5rem]">
+              {(() => {
+                const beforeGuide =
+                  baselineOriginalRoomRef.current ??
+                  items
+                    .filter(isUpgradeCandidate)
+                    .reduce((s, i) => {
+                      const u = i.pre_upgrade_item ? i.pre_upgrade_item.unit_cost : i.unit_cost;
+                      return s + i.qty * u;
+                    }, 0);
+                return (
+                  <>
               <SpeechBubble
                 direction="right"
                 visible
-                text={`Room done! 🎉\n${roomName}: ${formatCurrency(baselineOriginalRoomRef.current ?? originalSub)} → ${formatCurrency(roomTotal)}`}
+                text={`Room done! 🎉\n${roomName}: ${formatCurrency(beforeGuide)} → ${formatCurrency(roomTotal)}`}
               />
               {(() => {
-                const beforeR = baselineOriginalRoomRef.current ?? originalSub;
+                const beforeR = beforeGuide;
                 const added = Math.max(0, roomTotal - beforeR);
                 const pct = beforeR > 0 ? Math.round(((roomTotal - beforeR) / beforeR) * 100) : 100;
                 return (
@@ -1306,6 +1457,9 @@ export default function RoomReviewPage() {
                   Back to dashboard →
                 </Link>
               )}
+                  </>
+                );
+              })()}
             </div>
           )}
         </>
