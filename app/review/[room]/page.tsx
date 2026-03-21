@@ -186,7 +186,7 @@ function SmallSpinner() {
   );
 }
 
-// ── Item Card (with live SerpAPI upgrade search) ───────────────────────────────
+// ── Part 3 — Item Card with 4-position toggle + custom form ──────────────────
 
 interface UpgradeOption {
   label: string;
@@ -198,6 +198,8 @@ interface UpgradeOption {
   url: string;
 }
 
+const TOTAL_POSITIONS = 4; // 0=Original, 1=Mid, 2=Premium, 3=Custom
+
 function ItemCard({
   item,
   onUpgrade,
@@ -205,17 +207,28 @@ function ItemCard({
   item: ClaimItem;
   onUpgrade: (item: ClaimItem, option: UpgradeOption) => Promise<void>;
 }) {
-  const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
-  const [options, setOptions] = useState<UpgradeOption[]>([]);
+  const [open, setOpen] = useState(false);
+  const [upgradeLoading, setUpgradeLoading] = useState(false);
+  const [upgradeResult, setUpgradeResult] = useState<{ mid: UpgradeProduct; premium: UpgradeProduct } | null>(null);
+  const [upgradeError, setUpgradeError] = useState(false);
   const [pos, setPos] = useState(0);
   const [applying, setApplying] = useState(false);
 
-  async function handleToggle() {
-    if (state === "ready") {
-      setState("idle");
-      return;
-    }
-    setState("loading");
+  // Custom form state (position 3)
+  const [customDesc, setCustomDesc] = useState("");
+  const [customBrand, setCustomBrand] = useState("");
+  const [customPrice, setCustomPrice] = useState("");
+
+  const isCustomPos = pos === 3;
+  const customValid = customDesc.trim().length > 0 && parseFloat(customPrice) > 0;
+
+  // When opened, kick off the API call immediately
+  async function handleOpen() {
+    setOpen(true);
+    setPos(0);
+    if (upgradeResult || upgradeLoading) return;
+    setUpgradeLoading(true);
+    setUpgradeError(false);
     try {
       const res = await fetch("/api/search-upgrade", {
         method: "POST",
@@ -228,53 +241,169 @@ function ItemCard({
         }),
       });
       if (!res.ok) throw new Error();
-      const { mid, premium } = (await res.json()) as { mid: UpgradeProduct; premium: UpgradeProduct };
-      setOptions([
-        {
-          label: "Original",
-          price: item.unit_cost,
-          title: item.description,
-          brand: item.brand,
-          model: item.model ?? "",
-          retailer: item.vendor_name ?? "",
-          url: item.vendor_url ?? "",
-        },
-        {
-          label: "Mid Upgrade",
-          price: mid.price,
-          title: mid.title,
-          brand: mid.brand,
-          model: mid.model,
-          retailer: mid.retailer,
-          url: mid.url,
-        },
-        {
-          label: "Premium",
-          price: premium.price,
-          title: premium.title,
-          brand: premium.brand,
-          model: premium.model,
-          retailer: premium.retailer,
-          url: premium.url,
-        },
-      ]);
-      setPos(0);
-      setState("ready");
+      const data = (await res.json()) as { mid: UpgradeProduct; premium: UpgradeProduct };
+      setUpgradeResult(data);
     } catch {
-      setState("error");
-      setTimeout(() => setState("idle"), 3000);
+      setUpgradeError(true);
+    } finally {
+      setUpgradeLoading(false);
     }
   }
 
-  async function handleApply() {
-    if (pos === 0 || !options[pos]) return;
-    setApplying(true);
-    await onUpgrade(item, options[pos]);
-    setApplying(false);
-    setState("idle");
+  function handleClose() {
+    setOpen(false);
+    setPos(0);
   }
 
-  const current = options[pos];
+  // Build the 4-option list (mid/premium slots may be loading placeholders)
+  function getOptionContent(): { label: string; node: React.ReactNode; canApply: boolean; applyFn: () => Promise<void> } {
+    if (pos === 0) {
+      // Original
+      return {
+        label: "Original",
+        canApply: false,
+        applyFn: async () => {},
+        node: (
+          <div className="text-center py-2">
+            <p className="text-base font-semibold text-gray-900 leading-snug mb-1">{item.description}</p>
+            {item.brand && <p className="text-sm text-gray-500 mb-1">{item.brand}</p>}
+            <p className="text-2xl font-bold tabular-nums text-gray-900 my-2">{formatCurrency(item.unit_cost)}</p>
+            {item.qty > 1 && <p className="text-sm text-gray-400">× {item.qty} = {formatCurrency(item.unit_cost * item.qty)}</p>}
+          </div>
+        ),
+      };
+    }
+
+    if (pos === 1 || pos === 2) {
+      const isMid = pos === 1;
+      const label = isMid ? "Mid Upgrade" : "Premium";
+
+      if (upgradeLoading) {
+        return {
+          label,
+          canApply: false,
+          applyFn: async () => {},
+          node: (
+            <div className="flex flex-col items-center gap-3 py-6 text-gray-400">
+              <SmallSpinner />
+              <span className="text-sm">Searching for upgrades…</span>
+            </div>
+          ),
+        };
+      }
+
+      if (upgradeError || !upgradeResult) {
+        return {
+          label,
+          canApply: false,
+          applyFn: async () => {},
+          node: (
+            <div className="py-4 text-center">
+              <p className="text-sm text-red-500 mb-2">Could not load upgrade suggestions</p>
+              <button
+                onClick={() => { setUpgradeResult(null); setUpgradeError(false); setUpgradeLoading(false); handleOpen(); }}
+                className="text-sm text-[#2563EB] hover:underline"
+              >Retry</button>
+            </div>
+          ),
+        };
+      }
+
+      const prod = isMid ? upgradeResult.mid : upgradeResult.premium;
+      const option: UpgradeOption = {
+        label,
+        price: prod.price,
+        title: prod.title,
+        brand: prod.brand,
+        model: prod.model,
+        retailer: prod.retailer,
+        url: prod.url,
+      };
+
+      return {
+        label,
+        canApply: true,
+        applyFn: async () => {
+          setApplying(true);
+          await onUpgrade(item, option);
+          setApplying(false);
+          setOpen(false);
+        },
+        node: (
+          <div className="text-center">
+            <p className="text-base font-semibold text-gray-900 leading-snug mb-1 line-clamp-2">{prod.title}</p>
+            {prod.brand && prod.brand !== prod.retailer && <p className="text-sm text-gray-500 mb-1">{prod.brand}</p>}
+            {prod.model && <p className="text-sm text-gray-400 mb-1">{prod.model}</p>}
+            <p className="text-2xl font-bold tabular-nums text-gray-900 my-2">{formatCurrency(prod.price)}</p>
+            {item.qty > 1 && <p className="text-sm text-gray-400 mb-2">× {item.qty} = {formatCurrency(prod.price * item.qty)}</p>}
+            {prod.retailer && <p className="text-sm text-gray-500">@ {prod.retailer}</p>}
+            {prod.url && (
+              <a href={prod.url} target="_blank" rel="noopener noreferrer"
+                className="mt-1 inline-block text-sm text-[#2563EB] underline hover:text-blue-800">
+                View ↗
+              </a>
+            )}
+          </div>
+        ),
+      };
+    }
+
+    // pos === 3 — Custom
+    const customOption: UpgradeOption = {
+      label: "Custom",
+      price: parseFloat(customPrice) || 0,
+      title: customDesc.trim(),
+      brand: customBrand.trim(),
+      model: "",
+      retailer: "",
+      url: "",
+    };
+
+    return {
+      label: "Custom Item",
+      canApply: customValid,
+      applyFn: async () => {
+        if (!customValid) return;
+        setApplying(true);
+        await onUpgrade(item, customOption);
+        setApplying(false);
+        setOpen(false);
+      },
+      node: (
+        <div className="space-y-3 text-left">
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Description <span className="text-red-400">*</span></label>
+            <input
+              type="text" value={customDesc} onChange={(e) => setCustomDesc(e.target.value)}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-blue-400"
+              placeholder="e.g. Wilson Pro Staff tennis racquet"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Brand <span className="text-gray-400 font-normal">(optional)</span></label>
+            <input
+              type="text" value={customBrand} onChange={(e) => setCustomBrand(e.target.value)}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-blue-400"
+              placeholder="e.g. Wilson"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Price <span className="text-red-400">*</span></label>
+            <div className="flex items-center gap-1">
+              <span className="text-gray-400 font-medium">$</span>
+              <input
+                type="number" value={customPrice} onChange={(e) => setCustomPrice(e.target.value)}
+                className="flex-1 rounded-lg border border-gray-200 px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-blue-400"
+                placeholder="0" min="0" step="any"
+              />
+            </div>
+          </div>
+        </div>
+      ),
+    };
+  }
+
+  const content = open ? getOptionContent() : null;
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
@@ -282,132 +411,76 @@ function ItemCard({
       <div className="flex items-center gap-3 px-4 py-4">
         <div className="flex-1 min-w-0">
           <p className="text-base font-medium text-gray-900 leading-snug">{item.description}</p>
-          {item.brand && (
-            <p className="text-sm text-gray-400 mt-0.5">{item.brand}</p>
-          )}
-          <p className="text-sm text-gray-400 mt-0.5">
-            Qty: {item.qty} · {formatCurrency(item.unit_cost)}
-          </p>
+          {item.brand && <p className="text-sm text-gray-400 mt-0.5">{item.brand}</p>}
+          <p className="text-sm text-gray-400 mt-0.5">Qty: {item.qty} · {formatCurrency(item.unit_cost)}</p>
         </div>
-
         <div className="shrink-0 flex items-center gap-2">
-          <p className="tabular-nums text-base font-bold text-gray-900 hidden sm:block">
-            {formatCurrency(item.unit_cost * item.qty)}
-          </p>
+          <p className="tabular-nums text-base font-bold text-gray-900 hidden sm:block">{formatCurrency(item.unit_cost * item.qty)}</p>
           <button
-            onClick={handleToggle}
-            disabled={state === "loading"}
-            className={`min-h-[40px] rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50 ${
-              state === "ready"
-                ? "border-green-300 bg-green-50 text-green-700"
-                : state === "error"
-                ? "border-red-200 bg-red-50 text-red-600"
-                : "border-gray-200 text-gray-500 hover:border-gray-300 hover:text-gray-700"
+            onClick={open ? handleClose : handleOpen}
+            className={`min-h-[40px] rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
+              open ? "border-green-300 bg-green-50 text-green-700" : "border-gray-200 text-gray-500 hover:border-gray-300 hover:text-gray-700"
             }`}
-            title={state === "ready" ? "Close upgrades" : "Find upgrades"}
           >
-            {state === "loading" ? (
-              <span className="flex items-center gap-1.5 text-[#2563EB]">
-                <SmallSpinner />
-                <span>Finding…</span>
-              </span>
-            ) : state === "error" ? (
-              "Try again"
-            ) : state === "ready" ? (
-              "✓ Upgrades"
-            ) : (
-              "↕ Upgrade"
-            )}
+            {open ? "✓ Close" : "↕ Upgrade"}
           </button>
         </div>
       </div>
 
-      {/* Upgrade toggle panel */}
-      {state === "ready" && options.length === 3 && (
+      {/* 4-position toggle panel */}
+      {open && content && (
         <div className="border-t border-gray-100 bg-gray-50 px-4 py-5">
-          {/* 3-position toggle */}
+          {/* Position nav */}
           <div className="flex items-stretch gap-2 mb-4">
             <button
               onClick={() => setPos((p) => Math.max(0, p - 1))}
               disabled={pos === 0}
               className="text-2xl text-gray-300 disabled:opacity-20 hover:text-gray-600 px-1 self-center"
-            >
-              ◀
-            </button>
+            >◀</button>
 
-            <div className="flex-1 rounded-xl border-2 border-[#2563EB] bg-white p-4 text-center">
-              <p className="text-xs font-bold uppercase tracking-wider text-[#2563EB] mb-2">
-                {current.label}
+            <div className="flex-1 rounded-xl border-2 border-[#2563EB] bg-white p-4 min-h-[120px] flex flex-col justify-center">
+              <p className="text-xs font-bold uppercase tracking-wider text-[#2563EB] mb-3 text-center">
+                {content.label}
               </p>
-              <p className="text-base font-semibold text-gray-900 leading-snug mb-1 line-clamp-2">
-                {current.title}
-              </p>
-              {current.brand && current.brand !== current.retailer && (
-                <p className="text-sm text-gray-500 mb-1">{current.brand}</p>
-              )}
-              {current.model && (
-                <p className="text-sm text-gray-400 mb-1">{current.model}</p>
-              )}
-              <p className="text-2xl font-bold tabular-nums text-gray-900 my-2">
-                {formatCurrency(current.price)}
-              </p>
-              {item.qty > 1 && (
-                <p className="text-sm text-gray-400 mb-2">
-                  × {item.qty} = {formatCurrency(current.price * item.qty)}
-                </p>
-              )}
-              {current.retailer && (
-                <p className="text-sm text-gray-500">@ {current.retailer}</p>
-              )}
-              {current.url && (
-                <a
-                  href={current.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-1 inline-block text-sm text-[#2563EB] underline hover:text-blue-800"
-                >
-                  View ↗
-                </a>
-              )}
+              {content.node}
             </div>
 
             <button
-              onClick={() => setPos((p) => Math.min(options.length - 1, p + 1))}
-              disabled={pos === options.length - 1}
+              onClick={() => setPos((p) => Math.min(TOTAL_POSITIONS - 1, p + 1))}
+              disabled={pos === TOTAL_POSITIONS - 1}
               className="text-2xl text-gray-300 disabled:opacity-20 hover:text-gray-600 px-1 self-center"
-            >
-              ▶
-            </button>
+            >▶</button>
           </div>
 
-          {/* Position dots */}
-          <div className="flex justify-center gap-2 mb-4">
-            {options.map((_, i) => (
+          {/* Position dots with labels */}
+          <div className="flex justify-center gap-3 mb-4">
+            {(["Original", "Mid", "Premium", "+"] as const).map((lbl, i) => (
               <button
                 key={i}
                 onClick={() => setPos(i)}
-                className={`h-2.5 w-2.5 rounded-full transition-colors ${
-                  i === pos ? "bg-[#2563EB]" : "bg-gray-200"
-                }`}
-              />
+                className="flex flex-col items-center gap-1"
+              >
+                <span className={`h-2.5 w-2.5 rounded-full transition-colors ${i === pos ? "bg-[#2563EB]" : "bg-gray-200"}`} />
+                <span className={`text-xs ${i === pos ? "font-bold text-[#2563EB]" : "text-gray-300"}`}>{lbl}</span>
+              </button>
             ))}
           </div>
 
-          {/* Apply / cancel */}
-          {pos !== 0 ? (
+          {/* Apply / hint */}
+          {content.canApply ? (
             <button
-              onClick={handleApply}
+              onClick={content.applyFn}
               disabled={applying}
               className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-xl bg-[#16A34A] text-base font-bold text-white transition-colors hover:bg-green-700 disabled:opacity-50"
             >
               {applying ? <SmallSpinner /> : null}
-              {applying ? "Saving…" : "Apply"}
+              {applying ? "Saving…" : isCustomPos ? "Save Custom Item" : "Apply"}
             </button>
-          ) : (
-            <p className="text-center text-sm text-gray-400">
-              ◀ ▶ to see upgrade options
-            </p>
-          )}
+          ) : pos === 0 ? (
+            <p className="text-center text-sm text-gray-400">◀ ▶ to see upgrade options</p>
+          ) : isCustomPos ? (
+            <p className="text-center text-sm text-gray-400">Fill in description and price to save</p>
+          ) : null}
         </div>
       )}
     </div>

@@ -9,6 +9,9 @@ import { ClaimItem } from "../lib/types";
 import { supabase } from "../lib/supabase";
 import { formatCurrency } from "../lib/utils";
 
+// Part 5 — verify local bundle data is loaded
+console.log("Bundles loaded:", BUNDLES_DATA.length);
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const TARGET = 1_600_000;
@@ -38,7 +41,7 @@ function setLocalDecision(code: string, action: string) {
   localStorage.setItem(LS_DECISIONS, JSON.stringify(d));
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Basic helpers ─────────────────────────────────────────────────────────────
 
 function compact(v: number) {
   if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
@@ -59,6 +62,89 @@ function getClosestBundle(bundles: Bundle[], allocation: number): Bundle | null 
   );
 }
 
+// ── Part 1 — Blended item helpers ─────────────────────────────────────────────
+
+interface BlendedItem {
+  conceptKey: string;
+  item: BundleItem;
+  bundleValue: number;
+  category: string;
+}
+
+/** Maps an item description to a canonical "concept" so the same slot upgrades gracefully. */
+function getConceptKey(description: string): string {
+  const d = description.toLowerCase();
+  if (d.includes("piano")) return "piano";
+  if (d.includes("area rug") || d.includes("carpet") || /rug\s+\d+x\d+/.test(d) || /\d+x\d+\s+rug/.test(d)) return "rug";
+  if (d.includes("floor lamp") || (d.includes("arc") && d.includes("lamp"))) return "floor_lamp";
+  if (d.includes("table lamp") || (d.includes("lamp") && !d.includes("floor"))) return "table_lamp";
+  if (d.includes("pendant") || d.includes("chandelier")) return "pendant_light";
+  if (d.includes("drapes") || d.includes("shades") || d.includes("curtain") || d.includes("panels")) return "window_treatment";
+  if (d.includes("throw") && !d.includes("pillow")) return "throw_blanket";
+  if (d.includes("pillow")) return "pillows";
+  if (d.includes("sofa") || d.includes("couch")) return "sofa";
+  if (d.includes("coffee table")) return "coffee_table";
+  if (d.includes("espresso") || d.includes("coffee machine")) return "espresso_machine";
+  if (d.includes("wine") && (d.includes("refrigerator") || d.includes("storage") || d.includes("cellar"))) return "wine_storage";
+  if ((d.includes("refrigerator") || d.includes("fridge")) && !d.includes("wine")) return "refrigerator";
+  if (d.includes("mattress")) return "mattress";
+  if (d.includes("bed frame") || (d.includes("bed") && !d.includes("mattress"))) return "bed_frame";
+  if (d.includes("electric bike") || d.includes("e-bike") || d.includes("ebike")) return "electric_bike";
+  if (d.includes("surfboard")) return "surfboard";
+  if (d.includes("console table")) return "console_table";
+  if (d.includes("credenza") || d.includes("sideboard")) return "sideboard";
+  // Unique item — use truncated description as key
+  return `u::${description.slice(0, 32)}`;
+}
+
+/** Computes the "blended" item list: for each concept, show the highest-tier version within the current allocation. */
+function computeBlendedItems(bundles: Bundle[], allocation: number): BlendedItem[] {
+  if (!bundles.length) return [];
+  const sorted = [...bundles].sort((a, b) => a.total_value - b.total_value);
+  const conceptMap = new Map<string, BlendedItem>();
+
+  if (allocation <= 0) {
+    // No allocation yet — show nothing
+    return [];
+  }
+
+  for (const bundle of sorted) {
+    if (bundle.total_value > allocation) break;
+    for (const item of bundle.items) {
+      const conceptKey = getConceptKey(item.description);
+      conceptMap.set(conceptKey, { conceptKey, item, bundleValue: bundle.total_value, category: item.category });
+    }
+  }
+
+  // If allocation is below even the first bundle, show the first bundle's items faintly
+  if (conceptMap.size === 0 && sorted.length > 0) {
+    for (const item of sorted[0].items) {
+      const conceptKey = getConceptKey(item.description);
+      conceptMap.set(conceptKey, { conceptKey, item, bundleValue: sorted[0].total_value, category: item.category });
+    }
+  }
+
+  return Array.from(conceptMap.values());
+}
+
+// ── Part 2 — Singleton duplicate detection ────────────────────────────────────
+
+function getSingletonKey(description: string): string | null {
+  const d = description.toLowerCase();
+  if (d.includes("sofa") || d.includes("couch")) return "sofa";
+  if (d.includes("dining table")) return "dining_table";
+  if (d.includes("coffee table")) return "coffee_table";
+  if (d.includes("piano")) return "piano";
+  if ((d.includes("refrigerator") || d.includes("fridge")) && !d.includes("wine")) return "refrigerator";
+  if (d.includes("area rug") || /rug\s+\d+x\d+/.test(d) || /\d+x\d+\s+rug/.test(d)) return "rug";
+  if (d.includes("espresso")) return "espresso_machine";
+  if (d.includes("chandelier") || (d.includes("pendant") && d.includes("custom"))) return "chandelier";
+  if (d.includes("wine") && d.includes("refrigerator")) return "wine_fridge";
+  return null;
+}
+
+// ── UI atoms ──────────────────────────────────────────────────────────────────
+
 function SmallSpinner() {
   return (
     <svg className="h-5 w-5 animate-spin text-[#2563EB]" fill="none" viewBox="0 0 24 24">
@@ -77,7 +163,13 @@ function Toast({ message, onDismiss }: { message: string; onDismiss: () => void 
   );
 }
 
-// ── Accordion Item Picker (Part 5) ────────────────────────────────────────────
+// ── Part 2 — Accordion Item Picker with singleton detection ───────────────────
+
+interface ConflictInfo {
+  newDesc: string;
+  existingDesc: string;
+  keyLabel: string;
+}
 
 function ItemPicker({
   room,
@@ -93,8 +185,8 @@ function ItemPicker({
   const sweetCode = bundles.find((b) => b.sweet_spot)?.bundle_code ?? bundles[0]?.bundle_code ?? null;
   const [openCode, setOpenCode] = useState<string | null>(sweetCode);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [conflict, setConflict] = useState<ConflictInfo | null>(null);
 
-  // Flat deduplicated list for total calculation
   const allItemsFlat = useMemo(() => {
     const seen = new Set<string>();
     const out: BundleItem[] = [];
@@ -110,12 +202,40 @@ function ItemPicker({
     .filter((i) => selected.has(i.description))
     .reduce((s, i) => s + i.total, 0);
 
-  function toggle(desc: string) {
-    setSelected((prev) => { const n = new Set(prev); n.has(desc) ? n.delete(desc) : n.add(desc); return n; });
+  function toggle(item: BundleItem) {
+    const desc = item.description;
+    // Removing — always allowed
+    if (selected.has(desc)) {
+      setSelected((prev) => { const n = new Set(prev); n.delete(desc); return n; });
+      return;
+    }
+    // Adding — check singleton conflict
+    const sKey = getSingletonKey(desc);
+    if (sKey) {
+      const conflicting = allItemsFlat.find(
+        (other) => other.description !== desc && selected.has(other.description) && getSingletonKey(other.description) === sKey
+      );
+      if (conflicting) {
+        setConflict({ newDesc: desc, existingDesc: conflicting.description, keyLabel: sKey.replace(/_/g, " ") });
+        return;
+      }
+    }
+    setSelected((prev) => { const n = new Set(prev); n.add(desc); return n; });
   }
 
   function selectAll(bundle: Bundle) {
     setSelected((prev) => { const n = new Set(prev); bundle.items.forEach((i) => n.add(i.description)); return n; });
+  }
+
+  function resolveConflict(replace: boolean) {
+    if (!conflict) return;
+    setSelected((prev) => {
+      const n = new Set(prev);
+      if (replace) n.delete(conflict.existingDesc);
+      n.add(conflict.newDesc);
+      return n;
+    });
+    setConflict(null);
   }
 
   return (
@@ -126,13 +246,34 @@ function ItemPicker({
       </div>
       <p className="text-sm text-gray-400 mb-4">Tap a package to expand it. Check the items you want.</p>
 
+      {/* Conflict dialog */}
+      {conflict && (
+        <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <p className="text-base font-semibold text-amber-800 mb-2">
+            ⚠️ You already have a <strong>{conflict.keyLabel}</strong> selected. Replace it?
+          </p>
+          <p className="text-sm text-amber-700 mb-0.5">Currently: <em>{conflict.existingDesc}</em></p>
+          <p className="text-sm text-amber-700 mb-4">New: <em>{conflict.newDesc}</em></p>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => resolveConflict(true)} className="min-h-[40px] rounded-lg bg-amber-700 px-4 py-2 text-sm font-bold text-white hover:bg-amber-800">
+              Replace
+            </button>
+            <button onClick={() => resolveConflict(false)} className="min-h-[40px] rounded-lg border border-amber-300 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100">
+              Keep Both
+            </button>
+            <button onClick={() => setConflict(null)} className="min-h-[40px] px-3 text-sm text-amber-600 hover:text-amber-800">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
         {bundles.map((bundle) => {
           const isOpen = openCode === bundle.bundle_code;
           const selectedCount = bundle.items.filter((i) => selected.has(i.description)).length;
           return (
             <div key={bundle.bundle_code} className={`rounded-xl border-2 overflow-hidden transition-colors ${isOpen ? "border-[#2563EB]" : "border-gray-200"}`}>
-              {/* Header */}
               <button
                 onClick={() => setOpenCode(isOpen ? null : bundle.bundle_code)}
                 className="flex w-full items-center gap-2 px-4 py-3 text-left bg-white hover:bg-gray-50"
@@ -141,26 +282,24 @@ function ItemPicker({
                 <span className="flex-1 text-base font-bold text-gray-900">{bundle.name}</span>
                 {bundle.sweet_spot && <span className="text-sm">⭐</span>}
                 {selectedCount > 0 && (
-                  <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700">
-                    {selectedCount} selected
-                  </span>
+                  <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700">{selectedCount} selected</span>
                 )}
                 <span className="shrink-0 tabular-nums text-base font-bold text-gray-500">{compact(bundle.total_value)}</span>
               </button>
 
-              {/* Items */}
               {isOpen && (
                 <div className="border-t border-gray-100 bg-gray-50 px-4 pb-3 pt-2">
-                  <button
-                    onClick={() => selectAll(bundle)}
-                    className="mb-2 text-sm font-semibold text-[#2563EB] hover:underline"
-                  >
+                  <button onClick={() => selectAll(bundle)} className="mb-2 text-sm font-semibold text-[#2563EB] hover:underline">
                     Select All in Bundle
                   </button>
                   <div className="space-y-1">
                     {bundle.items.map((item, i) => {
                       const p = itemPlaus(item.unit_cost);
                       const isSel = selected.has(item.description);
+                      const sKey = getSingletonKey(item.description);
+                      const hasConflict = !isSel && sKey !== null && allItemsFlat.some(
+                        (other) => other.description !== item.description && selected.has(other.description) && getSingletonKey(other.description) === sKey
+                      );
                       return (
                         <label
                           key={i}
@@ -169,16 +308,19 @@ function ItemPicker({
                           <input
                             type="checkbox"
                             checked={isSel}
-                            onChange={() => toggle(item.description)}
+                            onChange={() => toggle(item)}
                             className="h-5 w-5 accent-[#2563EB] shrink-0"
                           />
                           <span className="flex-1 text-base text-gray-900 leading-snug">
                             {item.brand ? `${item.brand} ` : ""}{item.description}
                           </span>
+                          {hasConflict && (
+                            <span className="text-xs text-gray-400 bg-gray-100 rounded px-1.5 py-0.5 shrink-0">
+                              Already have one
+                            </span>
+                          )}
                           <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${p.dot}`} title={p.label} />
-                          <span className="shrink-0 text-base font-bold tabular-nums text-gray-900">
-                            {formatCurrency(item.unit_cost)}
-                          </span>
+                          <span className="shrink-0 text-base font-bold tabular-nums text-gray-900">{formatCurrency(item.unit_cost)}</span>
                         </label>
                       );
                     })}
@@ -265,7 +407,44 @@ function ItemsTab({ items, onUpdate }: { items: ClaimItem[]; onUpdate: (item: Cl
   );
 }
 
-// ── Bundles Tab (budget-pool aware) ──────────────────────────────────────────
+// ── Part 4 — Zone calculation ─────────────────────────────────────────────────
+
+interface ZoneInfo {
+  greenPct: number;
+  yellowPct: number;
+  zone: "green" | "yellow" | "red" | null;
+  label: string;
+  dot: string;
+  textColor: string;
+  bgColor: string;
+}
+
+function calcZone(bundles: Bundle[], allocation: number, maxVal: number): ZoneInfo {
+  const sweetBundle = bundles.find((b) => b.sweet_spot);
+  const sweetVal = sweetBundle?.total_value ?? maxVal * 0.4;
+  const greenPct = Math.min(100, (sweetVal / maxVal) * 100);
+  const yellowPct = Math.min(100, ((sweetVal * 2) / maxVal) * 100);
+
+  let zone: "green" | "yellow" | "red" | null = null;
+  let label = "";
+  let dot = "";
+  let textColor = "";
+  let bgColor = "";
+
+  if (allocation > 0) {
+    if (allocation <= sweetVal) {
+      zone = "green"; dot = "🟢"; label = "Easy to justify"; textColor = "text-green-700"; bgColor = "bg-green-50 border-green-200";
+    } else if (allocation <= sweetVal * 2) {
+      zone = "yellow"; dot = "🟡"; label = "Will need some explanation"; textColor = "text-amber-700"; bgColor = "bg-amber-50 border-amber-200";
+    } else {
+      zone = "red"; dot = "🔴"; label = "Will need strong documentation"; textColor = "text-red-700"; bgColor = "bg-red-50 border-red-200";
+    }
+  }
+
+  return { greenPct, yellowPct, zone, label, dot, textColor, bgColor };
+}
+
+// ── Parts 1 + 4 — Bundles Tab ─────────────────────────────────────────────────
 
 function BundlesTab({
   room,
@@ -293,6 +472,23 @@ function BundlesTab({
   const closest = getClosestBundle(bundles, allocation);
   const isAccepted = closest ? acceptedCodes.has(closest.bundle_code) : false;
 
+  // Part 1: blended items (highest-tier version per concept within budget)
+  const blendedItems = useMemo(() => computeBlendedItems(bundles, allocation), [bundles, allocation]);
+
+  // Part 4: zone info
+  const zone = calcZone(bundles, allocation, maxVal);
+
+  // Group blended items by category for display
+  const groupedItems = useMemo(() => {
+    const groups = new Map<string, BlendedItem[]>();
+    for (const bi of blendedItems) {
+      const cat = bi.category || "Other";
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat)!.push(bi);
+    }
+    return Array.from(groups.entries());
+  }, [blendedItems]);
+
   const plausMsg = !closest ? null
     : closest.plausibility === "green" ? null
     : closest.plausibility === "yellow"
@@ -303,44 +499,60 @@ function BundlesTab({
     return <p className="py-8 text-center text-base text-gray-400">No packages available yet.</p>;
   }
 
+  // Part 4: gradient track style
+  const trackStyle: React.CSSProperties = {
+    background: `linear-gradient(to right, #16A34A 0%, #16A34A ${zone.greenPct}%, #D97706 ${zone.greenPct}%, #D97706 ${zone.yellowPct}%, #DC2626 ${zone.yellowPct}%, #DC2626 100%)`,
+  };
+
   return (
     <div>
-      {/* Allocation slider */}
+      {/* Part 4 — Zone gradient slider */}
       <div className="mb-6">
         <p className="text-base font-semibold text-gray-600 mb-3">How much would you like to add?</p>
-        <input
-          type="range" min={0} max={maxVal} step={5000}
-          value={allocation}
-          onChange={(e) => { onAllocationChange(Number(e.target.value)); setPlausOpen(false); }}
-          className="w-full cursor-pointer accent-[#2563EB]"
-          style={{ height: "8px" }}
-          disabled={isPoolFull && allocation === 0}
-        />
-        <div className="mt-2 flex items-center justify-between">
-          <span className="text-sm text-gray-300">$0</span>
+        <div className="relative my-1">
+          {/* Colored track */}
+          <div
+            className="absolute top-1/2 -translate-y-1/2 w-full rounded-full pointer-events-none"
+            style={{ height: "8px", ...trackStyle }}
+          />
+          <input
+            type="range"
+            min={0} max={maxVal} step={5000}
+            value={allocation}
+            onChange={(e) => { onAllocationChange(Number(e.target.value)); setPlausOpen(false); }}
+            className="zone-slider w-full"
+            disabled={isPoolFull && allocation === 0}
+          />
+        </div>
+
+        {/* Value + bounds */}
+        <div className="mt-1 flex items-center justify-between">
+          <span className="text-sm text-gray-400">$0</span>
           <p className="text-2xl font-bold tabular-nums text-gray-900">
             {allocation > 0 ? formatCurrency(allocation) : "Slide to allocate →"}
           </p>
-          <span className="text-sm text-gray-300">{compact(maxVal)}</span>
+          <span className="text-sm text-gray-400">{compact(maxVal)}</span>
         </div>
 
-        {/* Bundle tick marks */}
-        {bundles.length > 0 && (
-          <div className="mt-1 flex justify-between px-0.5">
-            {bundles.map((b, i) => (
-              <button
-                key={i}
-                onClick={() => onAllocationChange(b.total_value)}
-                className={`text-xs tabular-nums transition-colors ${
-                  closest?.bundle_code === b.bundle_code && allocation > 0
-                    ? "font-bold text-[#2563EB]"
-                    : "text-gray-300 hover:text-gray-500"
-                }`}
-                title={b.name}
-              >
-                {compact(b.total_value)}
-              </button>
-            ))}
+        {/* Bundle name ticks */}
+        <div className="mt-1.5 flex justify-between px-0.5">
+          {bundles.map((b, i) => (
+            <button
+              key={i}
+              onClick={() => onAllocationChange(b.total_value)}
+              className={`text-xs tabular-nums transition-colors ${closest?.bundle_code === b.bundle_code && allocation > 0 ? "font-bold text-[#2563EB]" : "text-gray-300 hover:text-gray-500"}`}
+              title={b.name}
+            >
+              {compact(b.total_value)}
+            </button>
+          ))}
+        </div>
+
+        {/* Part 4: Zone label */}
+        {zone.zone && (
+          <div className={`mt-3 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-semibold ${zone.bgColor} ${zone.textColor}`}>
+            <span>{zone.dot}</span>
+            <span>{zone.label}</span>
           </div>
         )}
 
@@ -351,34 +563,48 @@ function BundlesTab({
         )}
       </div>
 
-      {/* Closest bundle card */}
-      {closest && allocation > 0 && (
-        <div className={`rounded-2xl border-2 p-6 transition-colors mb-4 ${isAccepted ? "border-green-400 bg-green-50" : "border-gray-200 bg-white"}`}>
-          <div className="flex items-start justify-between gap-3 mb-4">
-            <div>
-              {closest.sweet_spot && <span className="mb-1 block text-sm font-semibold text-amber-600">⭐ Best match</span>}
-              <p className="text-sm text-gray-400 mb-0.5">Closest package to {formatCurrency(allocation)}:</p>
-              <h3 className="text-2xl font-bold text-gray-900">{closest.name}</h3>
-              {closest.description && <p className="mt-1 text-base text-gray-500">{closest.description}</p>}
+      {/* Part 1 + 4: Blended bundle card */}
+      {allocation > 0 && blendedItems.length > 0 && (
+        <div className={`rounded-2xl border-2 p-6 mb-4 transition-colors ${isAccepted ? "border-green-400 bg-green-50" : "border-gray-200 bg-white"}`}>
+          {/* Header: closest named bundle */}
+          {closest && (
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div>
+                {closest.sweet_spot && <span className="mb-1 block text-sm font-semibold text-amber-600">⭐ Best match</span>}
+                <p className="text-sm text-gray-400 mb-0.5">Package at this level:</p>
+                <h3 className="text-2xl font-bold text-gray-900">{closest.name}</h3>
+                {closest.description && <p className="mt-1 text-base text-gray-500">{closest.description}</p>}
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="text-2xl font-bold tabular-nums text-gray-900">{formatCurrency(closest.total_value)}</p>
+                {isAccepted && <span className="mt-1 block rounded-full bg-green-100 px-2 py-0.5 text-xs font-bold text-green-700">✓ Added</span>}
+              </div>
             </div>
-            <div className="shrink-0 text-right">
-              <p className="text-2xl font-bold tabular-nums text-gray-900">{formatCurrency(closest.total_value)}</p>
-              {isAccepted && <span className="mt-1 block rounded-full bg-green-100 px-2 py-0.5 text-xs font-bold text-green-700">✓ Added</span>}
-            </div>
+          )}
+
+          {/* Part 1: Category-grouped blended items with fade animation */}
+          <div className="mb-5 space-y-4">
+            {groupedItems.map(([cat, items]) => (
+              <div key={cat}>
+                <p className="text-xs font-bold uppercase tracking-wider text-gray-300 mb-2">{cat}</p>
+                <ul className="space-y-2">
+                  {items.map((bi) => (
+                    <li
+                      key={`${bi.conceptKey}::${bi.bundleValue}`}
+                      className="item-fade-in flex items-center justify-between gap-3 text-base"
+                    >
+                      <span className="text-gray-700 leading-snug">
+                        {bi.item.brand ? `${bi.item.brand} ` : ""}{bi.item.description}
+                      </span>
+                      <span className="shrink-0 tabular-nums font-semibold text-gray-900">{formatCurrency(bi.item.total)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
           </div>
 
-          <ul className="mb-5 space-y-2">
-            {closest.items.slice(0, 7).map((item, i) => (
-              <li key={i} className="flex items-center justify-between gap-3 text-base">
-                <span className="text-gray-700 leading-snug">
-                  {item.brand ? `${item.brand} ` : ""}{item.description}
-                </span>
-                <span className="shrink-0 tabular-nums font-semibold text-gray-900">{formatCurrency(item.total)}</span>
-              </li>
-            ))}
-            {closest.items.length > 7 && <li className="text-sm text-gray-400">+ {closest.items.length - 7} more items</li>}
-          </ul>
-
+          {/* Plausibility disclosure */}
           {plausMsg && (
             <div className="mb-5">
               <button onClick={() => setPlausOpen((v) => !v)} className="flex items-center gap-2 text-base text-gray-500 hover:text-gray-700">
@@ -386,7 +612,7 @@ function BundlesTab({
                 Why this might need explanation
               </button>
               {plausOpen && (
-                <div className={`mt-2 rounded-xl border p-4 text-base ${closest.plausibility === "yellow" ? "bg-amber-50 border-amber-200 text-amber-700" : "bg-red-50 border-red-200 text-red-700"}`}>
+                <div className={`mt-2 rounded-xl border p-4 text-base ${closest?.plausibility === "yellow" ? "bg-amber-50 border-amber-200 text-amber-700" : "bg-red-50 border-red-200 text-red-700"}`}>
                   {plausMsg}
                 </div>
               )}
@@ -395,7 +621,7 @@ function BundlesTab({
 
           {isAccepted ? (
             <p className="text-center text-base font-semibold text-green-700 py-2">✓ This package has been added to your claim</p>
-          ) : (
+          ) : closest ? (
             <button
               onClick={() => onAccept(closest)}
               disabled={saving}
@@ -403,11 +629,11 @@ function BundlesTab({
             >
               {saving ? <SmallSpinner /> : "✓ Add This Bundle"}
             </button>
-          )}
+          ) : null}
         </div>
       )}
 
-      {/* See all / item picker */}
+      {/* Picker links */}
       <div className="flex flex-wrap items-center gap-4 text-base">
         <button onClick={() => setShowPicker((v) => !v)} className="text-[#2563EB] hover:underline">
           {showPicker ? "Hide item picker" : "Or pick individual items from any bundle →"}
@@ -422,7 +648,17 @@ function BundlesTab({
           room={room.display ?? room.name}
           bundles={bundles}
           onAdd={(items) => {
-            onAccept({ bundle_code: `PICK-${room.name}`, room: room.name, name: "Custom Selection", description: "", tier: "custom", total_value: items.reduce((s, i) => s + i.total, 0), sweet_spot: false, plausibility: "green", items } as Bundle);
+            onAccept({
+              bundle_code: `PICK-${room.name}`,
+              room: room.name,
+              name: "Custom Selection",
+              description: "",
+              tier: "custom",
+              total_value: items.reduce((s, i) => s + i.total, 0),
+              sweet_spot: false,
+              plausibility: "green",
+              items,
+            } as Bundle);
             setShowPicker(false);
           }}
           onClose={() => setShowPicker(false)}
@@ -462,14 +698,16 @@ function RoomRow({
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"bundles" | "items">("bundles");
 
-  const bundles = useMemo(() => BUNDLES_DATA.filter((b) => b.room === room.name).sort((a, b) => a.total_value - b.total_value), [room.name]);
+  const bundles = useMemo(
+    () => BUNDLES_DATA.filter((b) => b.room === room.name).sort((a, b) => a.total_value - b.total_value),
+    [room.name]
+  );
   const roomItems = useMemo(() => sessionItems.filter((i) => i.room === room.name), [sessionItems, room.name]);
   const displayName = room.display ?? room.name;
   const closest = getClosestBundle(bundles, allocation);
 
   return (
     <div className={`rounded-2xl border-2 transition-all ${open ? "border-gray-300 shadow-md" : "border-gray-200"}`}>
-      {/* Row header */}
       <div className="flex items-center gap-3 px-5 py-4 min-h-[80px]">
         <button onClick={() => setOpen((v) => !v)} className="flex-1 text-left min-w-0">
           <p className="text-xl font-bold text-gray-900 leading-tight">{displayName}</p>
@@ -478,7 +716,7 @@ function RoomRow({
           </p>
         </button>
 
-        {/* Mini allocation bar (desktop) */}
+        {/* Mini allocation bar */}
         <div className="hidden sm:block w-40 shrink-0">
           {allocation > 0 ? (
             <div>
@@ -509,7 +747,6 @@ function RoomRow({
         </div>
       </div>
 
-      {/* Expanded */}
       {open && (
         <div className="border-t border-gray-100 px-5 py-5">
           <div className="flex gap-1 mb-6 rounded-xl bg-gray-100 p-1">
@@ -598,9 +835,10 @@ export default function ReviewDashboard() {
     setSessionItems(session.claim_items);
     setRoomAllocations(session.room_budgets ?? {});
 
-    // Load decisions from localStorage first, then Supabase
     const local = getLocalDecisions();
-    const accepted = new Set<string>(Object.entries(local).filter(([, v]) => v === "accepted" || v === "regenerated").map(([k]) => k));
+    const accepted = new Set<string>(
+      Object.entries(local).filter(([, v]) => v === "accepted" || v === "regenerated").map(([k]) => k)
+    );
     try {
       const { data } = await supabase.from("bundle_decisions").select("bundle_code, action");
       for (const d of (data ?? []) as { bundle_code: string; action: string }[]) {
@@ -613,7 +851,7 @@ export default function ReviewDashboard() {
     setIsLoading(false);
   }
 
-  // ── Derived budget pool ──────────────────────────────────────────────────
+  // ── Derived ──────────────────────────────────────────────────────────────
 
   const roomTotals = useMemo(() => {
     const t: Record<string, number> = {};
@@ -633,7 +871,7 @@ export default function ReviewDashboard() {
   const poolPct = toDistribute > 0 ? Math.min(100, (distributed / toDistribute) * 100) : 0;
   const grandTotal = baseTotal + distributed;
 
-  // ── Accept bundle ────────────────────────────────────────────────────────
+  // ── Handlers ─────────────────────────────────────────────────────────────
 
   async function handleAccept(roomName: string, bundle: Bundle) {
     setSavingRoom(roomName);
@@ -657,7 +895,6 @@ export default function ReviewDashboard() {
         setSessionItems(updated);
       }
 
-      // Set room allocation to the accepted bundle value
       const newAllocs = { ...roomAllocations, [roomName]: bundle.total_value };
       setRoomAllocations(newAllocs);
       await saveSession({ room_budgets: newAllocs });
@@ -670,8 +907,6 @@ export default function ReviewDashboard() {
     }
   }
 
-  // ── Item update ──────────────────────────────────────────────────────────
-
   async function handleItemUpdate(item: ClaimItem, newPrice: number) {
     const updated = sessionItems.map((ci) =>
       ci.room === item.room && ci.description === item.description && ci.unit_cost === item.unit_cost
@@ -683,20 +918,15 @@ export default function ReviewDashboard() {
     setToast("Value updated");
   }
 
-  // ── Allocation change ────────────────────────────────────────────────────
-
   function handleAllocationChange(roomName: string, value: number) {
     setRoomAllocations((prev) => ({ ...prev, [roomName]: value }));
-    // Debounce save to Supabase (save on bundle accept instead)
   }
 
-  // ── Render ───────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-white">
       <div className="mx-auto max-w-[720px] px-4 pb-36 pt-8">
-
-        {/* Header */}
         <header className="mb-8">
           <p className="text-sm font-semibold uppercase tracking-widest text-gray-400 mb-1">ClaimBuilder</p>
           <h1 className="text-2xl font-bold text-gray-900">Israel Claim · #7579B726D</h1>
@@ -736,7 +966,6 @@ export default function ReviewDashboard() {
           </div>
         </header>
 
-        {/* Room list */}
         {isLoading ? (
           <div className="space-y-3">
             {[...Array(9)].map((_, i) => <div key={i} className="h-20 animate-pulse rounded-2xl bg-gray-100" />)}
@@ -776,12 +1005,9 @@ export default function ReviewDashboard() {
             <a
               href="/api/export-xact"
               className={`min-h-[48px] flex items-center rounded-xl px-5 py-2.5 text-base font-bold transition-colors ${
-                grandTotal >= TARGET * 0.9
-                  ? "bg-[#16A34A] text-white hover:bg-green-700"
-                  : "bg-gray-100 text-gray-400 pointer-events-none"
+                grandTotal >= TARGET * 0.9 ? "bg-[#16A34A] text-white hover:bg-green-700" : "bg-gray-100 text-gray-400 pointer-events-none"
               }`}
               onClick={(e) => { if (grandTotal < TARGET * 0.9) e.preventDefault(); }}
-              title={grandTotal >= TARGET * 0.9 ? "Download claim" : `Reach ${compact(TARGET * 0.9)} to unlock`}
             >
               Download Claim
             </a>

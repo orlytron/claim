@@ -18,3 +18,68 @@ body {
   font-family: var(--font-geist-sans), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+
+/* ── Zone-gradient range slider ───────────────────────────────────────────── */
+
+.zone-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent !important;
+  height: 24px;
+  cursor: pointer;
+}
+
+.zone-slider::-webkit-slider-runnable-track {
+  background: transparent;
+  height: 8px;
+}
+
+.zone-slider::-moz-range-track {
+  background: transparent;
+  height: 8px;
+}
+
+.zone-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 26px;
+  width: 26px;
+  border-radius: 50%;
+  background: white;
+  border: 3px solid #2563EB;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  margin-top: -9px;
+  position: relative;
+  z-index: 2;
+}
+
+.zone-slider::-moz-range-thumb {
+  height: 26px;
+  width: 26px;
+  border-radius: 50%;
+  background: white;
+  border: 3px solid #2563EB;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.zone-slider:disabled::-webkit-slider-thumb {
+  border-color: #9CA3AF;
+}
+
+/* ── Item fade-in animation ───────────────────────────────────────────────── */
+
+@keyframes itemFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.item-fade-in {
+  animation: itemFadeIn 0.35s ease both;
+}
