@@ -15,7 +15,7 @@ import { formatCurrency } from "../../../lib/utils";
 
 // ── Slug ↔ room name ──────────────────────────────────────────────────────────
 
-const ROOM_SLUG_MAP: Record<string, string> = {
+const SLUG_TO_ROOM: Record<string, string> = {
   "living-room": "Living Room",
   "kitchen": "Kitchen",
   "bedroom-rafe": "Bedroom Rafe",
@@ -27,10 +27,6 @@ const ROOM_SLUG_MAP: Record<string, string> = {
   "david-office-guest-room": "David Office / Guest Room",
   "art": "Art",
 };
-
-function decodeRoomSlug(slug: string): string {
-  return ROOM_SLUG_MAP[slug] ?? slug;
-}
 
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -578,7 +574,9 @@ export default function BundleBrowserPage() {
       session?.room_summary?.map((r) => r.room) ??
       [...new Set(session?.claim_items?.map((i) => i.room) ?? [])];
 
-    const name = decodeRoomSlug(roomSlug);
+    console.log("URL param:", roomSlug);
+    console.log("Decoded room:", SLUG_TO_ROOM[roomSlug]);
+    const name = SLUG_TO_ROOM[roomSlug] || roomSlug;
     setRoomName(name);
 
     if (session) {
