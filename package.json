@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "seed": "npx ts-node --project scripts/tsconfig.json scripts/seed-israel.ts",
-    "seed-bundles": "npx ts-node --project scripts/tsconfig.json scripts/seed-bundles.ts"
+    "seed-bundles": "npx ts-node --project scripts/tsconfig.json scripts/seed-bundles.ts",
+    "seed-upgrades": "npx ts-node --project scripts/tsconfig.json scripts/seed-upgrades.ts",
+    "cleanup-upgrades": "npx ts-node --project scripts/tsconfig.json scripts/cleanup-upgrades.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

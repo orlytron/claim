@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { supabase } from "../../lib/supabase";
 
 const SERP_KEY = process.env.SERP_API_KEY ?? "";
 
@@ -10,6 +11,7 @@ export interface UpgradeProduct {
   price: number;
   retailer: string;
   url: string;
+  thumbnail: string;
   available_since: string;
   age_years: 0;
   age_months: 0;
@@ -39,6 +41,7 @@ function fillFallbacks(
     price: p.price ?? 0,
     retailer,
     url,
+    thumbnail: p.thumbnail ?? "",
     available_since: "2024 or earlier",
     age_years: 0,
     age_months: 0,
@@ -82,6 +85,7 @@ async function serpSearchBoth(
       source?: string;
       link?: string;
       product_link?: string;
+      thumbnail?: string;
     }> = (data.shopping_results?.length ? data.shopping_results : data.organic_results) ?? [];
 
     console.log("shopping_results count:", data.shopping_results?.length ?? 0);
@@ -90,7 +94,6 @@ async function serpSearchBoth(
     if (!results.length) return [null, null];
 
     const toProduct = (r: typeof results[0]): UpgradeProduct => {
-      // Prefer extracted_price (already numeric) over price string
       const price = r.extracted_price ?? parsePrice(r.price);
       return {
         title: r.title ?? query,
@@ -99,6 +102,7 @@ async function serpSearchBoth(
         price,
         retailer: r.source ?? "",
         url: r.product_link ?? r.link ?? "",
+        thumbnail: r.thumbnail ?? "",
         available_since: "2024 or earlier",
         age_years: 0,
         age_months: 0,
@@ -188,6 +192,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   }
 
+  // ── Cache check ────────────────────────────────────────────────────────────
+  try {
+    const { data: cached } = await supabase
+      .from("upgrades_cache")
+      .select("mid, premium")
+      .eq("item_description", item_description)
+      .maybeSingle();
+
+    if (cached?.mid) {
+      console.log("Cache HIT:", item_description);
+      return NextResponse.json({ mid: cached.mid, premium: cached.premium, source: "cache" });
+    }
+  } catch (e) {
+    console.log("Cache lookup error (non-fatal):", e);
+  }
+
   const brandPrefix = brand ? `${brand} ` : "";
   const catSuffix = category ? ` ${category}` : "";
   const baseQuery = `${brandPrefix}${item_description} 2024${catSuffix}`.trim();
@@ -221,6 +241,20 @@ export async function POST(req: NextRequest) {
     const both = await claudeFallbackBoth(item_description, brand, current_price);
     mid = both.mid;
     premium = both.premium;
+  }
+
+  // ── Store in cache for next time ──────────────────────────────────────────
+  try {
+    await supabase.from("upgrades_cache").insert({
+      item_description,
+      brand: brand ?? "",
+      search_query: baseQuery,
+      mid,
+      premium,
+    });
+    console.log("Cache STORED:", item_description);
+  } catch (e) {
+    console.log("Cache store error (non-fatal):", e);
   }
 
   return NextResponse.json({ mid, premium });

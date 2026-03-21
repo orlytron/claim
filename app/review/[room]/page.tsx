@@ -13,6 +13,7 @@ interface UpgradeProduct {
   price: number;
   retailer: string;
   url: string;
+  thumbnail?: string;
 }
 
 // ── Slug → room name ──────────────────────────────────────────────────────────
@@ -271,7 +272,6 @@ function ItemCard({
   // Build the 4-option list (mid/premium slots may be loading placeholders)
   function getOptionContent(): { label: string; node: React.ReactNode; canApply: boolean; applyFn: () => Promise<void> } {
     if (pos === 0) {
-      // Original
       return {
         label: "Original",
         canApply: false,
@@ -280,8 +280,8 @@ function ItemCard({
           <div className="text-center py-2">
             <p className="text-base font-semibold text-gray-900 leading-snug mb-1">{item.description}</p>
             {item.brand && <p className="text-sm text-gray-500 mb-1">{item.brand}</p>}
-            <p className="text-2xl font-bold tabular-nums text-gray-900 my-2">{formatCurrency(item.unit_cost)}</p>
-            {item.qty > 1 && <p className="text-sm text-gray-400">× {item.qty} = {formatCurrency(item.unit_cost * item.qty)}</p>}
+            <p className="text-sm text-gray-400 mb-1">Qty: {item.qty} · {formatCurrency(item.unit_cost)}</p>
+            <p className="text-2xl font-bold tabular-nums text-gray-900 mt-2">{formatCurrency(item.unit_cost * item.qty)}</p>
           </div>
         ),
       };
@@ -299,24 +299,38 @@ function ItemCard({
           node: (
             <div className="flex flex-col items-center gap-3 py-6 text-gray-400">
               <SmallSpinner />
-              <span className="text-sm">Searching for upgrades…</span>
+              <span className="text-sm">Finding upgrades…</span>
             </div>
           ),
         };
       }
 
-      if (upgradeError || !upgradeResult) {
+      if (upgradeError) {
         return {
           label,
           canApply: false,
           applyFn: async () => {},
           node: (
             <div className="py-4 text-center">
-              <p className="text-sm text-red-500 mb-2">Could not load upgrade suggestions</p>
+              <p className="text-sm text-gray-500 mb-1">No upgrades found for this item.</p>
+              <p className="text-xs text-gray-400 mb-3">Add a custom item below ↓</p>
               <button
                 onClick={() => { setUpgradeResult(null); setUpgradeError(false); fetchUpgrades(); }}
-                className="text-sm text-[#2563EB] hover:underline"
-              >Retry</button>
+                className="text-xs text-[#2563EB] hover:underline"
+              >Try again</button>
+            </div>
+          ),
+        };
+      }
+
+      if (!upgradeResult) {
+        return {
+          label,
+          canApply: false,
+          applyFn: async () => {},
+          node: (
+            <div className="py-4 text-center text-gray-400 text-sm">
+              ◀ Select this option to load
             </div>
           ),
         };
@@ -344,19 +358,34 @@ function ItemCard({
         },
         node: (
           <div className="text-center">
-            <p className="text-base font-semibold text-gray-900 leading-snug mb-1 line-clamp-2">{prod.title}</p>
-            {prod.brand && prod.brand !== prod.retailer && <p className="text-sm text-gray-500 mb-1">{prod.brand}</p>}
-            {prod.model && <p className="text-sm text-gray-400 mb-1">{prod.model}</p>}
-            <p className="text-2xl font-bold tabular-nums text-gray-900 my-2">{formatCurrency(prod.price)}</p>
-            {item.qty > 1 && <p className="text-sm text-gray-400 mb-2">× {item.qty} = {formatCurrency(prod.price * item.qty)}</p>}
-            {prod.retailer && <p className="text-sm text-gray-500 mb-0.5">@ {prod.retailer}</p>}
-            <p className="text-xs text-gray-400 mb-1">Available as of 2024</p>
-            {prod.url && (
-              <a href={prod.url} target="_blank" rel="noopener noreferrer"
-                className="mt-1 inline-block text-sm font-medium text-blue-600 underline hover:text-blue-800">
-                View at {prod.retailer || "retailer"} ↗
-              </a>
+            {prod.thumbnail && (
+              <img
+                src={prod.thumbnail}
+                alt={prod.title}
+                className="mx-auto mb-3 h-[60px] w-[60px] rounded-lg object-contain border border-gray-100"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+              />
             )}
+            <p className="text-base font-semibold text-gray-900 leading-snug mb-1 line-clamp-2">{prod.title}</p>
+            {prod.brand && prod.brand !== prod.retailer && (
+              <p className="text-sm text-gray-500 mb-0.5">{prod.brand}</p>
+            )}
+            {prod.retailer && (
+              <p className="text-sm text-gray-500 mb-0.5">{prod.retailer}</p>
+            )}
+            <p className="text-2xl font-bold tabular-nums text-gray-900 my-2">{formatCurrency(prod.price)}</p>
+            {item.qty > 1 && (
+              <p className="text-sm text-gray-400 mb-2">× {item.qty} = {formatCurrency(prod.price * item.qty)}</p>
+            )}
+            <p className="text-xs text-gray-400 mb-2">Available as of 2024</p>
+            <a
+              href={prod.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block text-sm font-medium text-blue-600 underline hover:text-blue-800"
+            >
+              View at {prod.retailer || "retailer"} ↗
+            </a>
           </div>
         ),
       };
@@ -430,14 +459,16 @@ function ItemCard({
         </div>
         <div className="shrink-0 flex items-center gap-2">
           <p className="tabular-nums text-base font-bold text-gray-900 hidden sm:block">{formatCurrency(item.unit_cost * item.qty)}</p>
-          <button
-            onClick={open ? handleClose : handleOpen}
-            className={`min-h-[40px] rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
-              open ? "border-green-300 bg-green-50 text-green-700" : "border-gray-200 text-gray-500 hover:border-gray-300 hover:text-gray-700"
-            }`}
-          >
-            {open ? "✓ Close" : "↕ Upgrade"}
-          </button>
+          {item.unit_cost >= 100 && (
+            <button
+              onClick={open ? handleClose : handleOpen}
+              className={`min-h-[40px] rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
+                open ? "border-green-300 bg-green-50 text-green-700" : "border-gray-200 text-gray-500 hover:border-gray-300 hover:text-gray-700"
+              }`}
+            >
+              {open ? "✓ Close" : "↕"}
+            </button>
+          )}
         </div>
       </div>
 
