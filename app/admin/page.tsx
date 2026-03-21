@@ -2,8 +2,18 @@
 
 import { useEffect, useState, useCallback } from "react";
 import ClientSuggestionForm from "../components/ClientSuggestionForm";
+import { mergeClaimIncoming } from "../lib/claim-item-merge";
 import { supabase } from "../lib/supabase";
+import type { ClaimItem } from "../lib/types";
 import { formatCurrency } from "../lib/utils";
+
+export type ParsedArtItem = {
+  description: string;
+  artist: string;
+  medium: string;
+  size: string;
+  unit_cost: number;
+};
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -60,6 +70,7 @@ function formatDate(iso: string) {
 function Badge({ status }: { status: string }) {
   const colors: Record<string, string> = {
     accepted: "bg-green-100 text-green-700",
+    partial_accept: "bg-emerald-100 text-emerald-800",
     regenerated: "bg-purple-100 text-purple-700",
     pending: "bg-amber-100 text-amber-700",
     rejected: "bg-gray-100 text-gray-500",
@@ -151,7 +162,9 @@ export default function AdminPage() {
   const [roomSummary, setRoomSummary] = useState<RoomSummaryRow[]>([]);
 
   const [decisions, setDecisions] = useState<BundleDecision[]>([]);
-  const [decisionsFilter, setDecisionsFilter] = useState<"all" | "accepted" | "rejected" | "noted" | "regenerated">("all");
+  const [decisionsFilter, setDecisionsFilter] = useState<
+    "all" | "accepted" | "partial_accept" | "rejected" | "noted" | "regenerated"
+  >("all");
 
   const [feedback, setFeedback] = useState<FeedbackItem[]>([]);
   const [feedbackFilter, setFeedbackFilter] = useState<"all" | "bundle_note" | "suggestion">("all");
@@ -161,6 +174,12 @@ export default function AdminPage() {
   const [resetConfirm, setResetConfirm] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
   const [resetMsg, setResetMsg] = useState<string | null>(null);
+
+  const [artParsed, setArtParsed] = useState<ParsedArtItem[]>([]);
+  const [artChecked, setArtChecked] = useState<boolean[]>([]);
+  const [artLoading, setArtLoading] = useState(false);
+  const [artError, setArtError] = useState<string | null>(null);
+  const [artAdding, setArtAdding] = useState(false);
 
   useEffect(() => {
     fetchAll();
@@ -276,6 +295,84 @@ export default function AdminPage() {
   }
 
   // FIX 7: Copy live to test
+  async function handleArtPdfUpload(file: File) {
+    if (file.type !== "application/pdf") {
+      setArtError("Please choose a PDF file.");
+      return;
+    }
+    setArtError(null);
+    setArtLoading(true);
+    setArtParsed([]);
+    setArtChecked([]);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result));
+        r.onerror = () => reject(new Error("read failed"));
+        r.readAsDataURL(file);
+      });
+      const base64Data = dataUrl.includes(",") ? dataUrl.split(",")[1]! : dataUrl;
+      const res = await fetch("/api/parse-art-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base64Data }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || res.statusText);
+      const rows = body as ParsedArtItem[];
+      if (!Array.isArray(rows)) throw new Error("Invalid response");
+      setArtParsed(rows);
+      setArtChecked(rows.map(() => true));
+    } catch (e) {
+      setArtError(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setArtLoading(false);
+    }
+  }
+
+  async function handleAddArtToClaim() {
+    const rows = artParsed.filter((_, i) => artChecked[i]);
+    if (rows.length === 0) return;
+    setArtAdding(true);
+    setArtError(null);
+    try {
+      const { data: session, error: loadErr } = await supabase
+        .from("claim_session")
+        .select("claim_items")
+        .eq("id", "trial")
+        .single();
+      if (loadErr) throw new Error(loadErr.message);
+      const current = (session?.claim_items ?? []) as ClaimItem[];
+      const incoming: ClaimItem[] = rows.map((row) => ({
+        room: "Art Collection",
+        description: row.description,
+        brand: row.artist,
+        model: [row.medium, row.size].filter(Boolean).join(" · "),
+        qty: 1,
+        age_years: 0,
+        age_months: 0,
+        condition: "Listed",
+        unit_cost: row.unit_cost,
+        category: "Art",
+        source: "art",
+      }));
+      const merged = mergeClaimIncoming(current, incoming, "art");
+      const { error: upErr } = await supabase
+        .from("claim_session")
+        .update({
+          claim_items: merged,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", "trial");
+      if (upErr) throw new Error(upErr.message);
+      await fetchAll();
+    } catch (e) {
+      setArtError(e instanceof Error ? e.message : "Failed to add items");
+    } finally {
+      setArtAdding(false);
+    }
+  }
+
   async function handleCopyToTest() {
     const { data: live } = await supabase.from("claim_session").select("*").eq("id", "trial").single();
     if (!live) { alert("Could not load live session"); return; }
@@ -334,6 +431,84 @@ export default function AdminPage() {
       </header>
 
       <main className="mx-auto max-w-5xl px-6 py-8 space-y-10">
+
+        {/* ── Art collection PDF ─────────────────────────────────────────── */}
+        <section>
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-4">
+            Art collection upload
+          </h2>
+          <div className="rounded-xl border border-gray-200 bg-white p-6 max-w-3xl">
+            <p className="text-sm font-semibold text-gray-900 mb-1">ART COLLECTION UPLOAD</p>
+            <p className="text-xs text-gray-500 mb-4">PDF only. Parsed with Claude for review before adding to the claim.</p>
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-[#2563EB] bg-blue-50 px-4 py-2 text-sm font-medium text-[#2563EB] hover:bg-blue-100">
+              <input
+                type="file"
+                accept="application/pdf,.pdf"
+                className="sr-only"
+                disabled={artLoading}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = "";
+                  if (f) void handleArtPdfUpload(f);
+                }}
+              />
+              {artLoading ? "Parsing…" : "Upload Art PDF"}
+            </label>
+            {artError && <p className="mt-3 text-sm text-red-600">{artError}</p>}
+            {artParsed.length > 0 && (
+              <div className="mt-6">
+                <p className="text-xs font-semibold text-gray-500 mb-2">Parsed line items</p>
+                <div className="overflow-x-auto border border-gray-100 rounded-lg">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+                      <tr>
+                        <th className="w-10 px-2 py-2 text-left" />
+                        <th className="px-2 py-2 text-left">Description</th>
+                        <th className="px-2 py-2 text-left">Artist</th>
+                        <th className="px-2 py-2 text-left">Medium</th>
+                        <th className="px-2 py-2 text-left">Size</th>
+                        <th className="px-2 py-2 text-right">Value</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {artParsed.map((row, i) => (
+                        <tr key={i}>
+                          <td className="px-2 py-2">
+                            <input
+                              type="checkbox"
+                              className="rounded border-gray-300 accent-[#2563EB]"
+                              checked={!!artChecked[i]}
+                              onChange={() =>
+                                setArtChecked((c) => {
+                                  const n = [...c];
+                                  n[i] = !n[i];
+                                  return n;
+                                })
+                              }
+                            />
+                          </td>
+                          <td className="px-2 py-2 text-gray-900">{row.description}</td>
+                          <td className="px-2 py-2 text-gray-700">{row.artist || "—"}</td>
+                          <td className="px-2 py-2 text-gray-700">{row.medium || "—"}</td>
+                          <td className="px-2 py-2 text-gray-700">{row.size || "—"}</td>
+                          <td className="px-2 py-2 text-right tabular-nums">{formatCurrency(row.unit_cost)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <button
+                  type="button"
+                  disabled={artAdding || !artChecked.some(Boolean)}
+                  onClick={() => void handleAddArtToClaim()}
+                  className="mt-4 rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {artAdding ? "Adding…" : "Add to Claim"}
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
 
         {/* ── Client suggestion (admin entry) ─────────────────────────────── */}
         <section>
@@ -399,7 +574,7 @@ export default function AdminPage() {
               Bundle Decisions
             </h2>
             <div className="flex gap-1 flex-wrap">
-              {(["all", "accepted", "regenerated", "noted", "rejected"] as const).map((f) => (
+              {(["all", "accepted", "partial_accept", "regenerated", "noted", "rejected"] as const).map((f) => (
                 <button
                   key={f}
                   onClick={() => setDecisionsFilter(f)}

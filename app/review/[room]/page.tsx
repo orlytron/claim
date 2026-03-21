@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import AniGuide from "../../components/AniGuide";
@@ -227,32 +227,27 @@ function LockButton({ locked, onToggle }: { locked: boolean; onToggle: () => voi
 
 const ENTRY_TITLE_PREFIX = "Entry upgrade —";
 
-function truncUpgradeStr(s: string, max: number): string {
-  const t = s.replace(/\s+/g, " ").trim();
-  if (!t) return "";
-  if (t.length <= max) return t;
-  return t.slice(0, Math.max(1, max - 1)) + "\u2026";
-}
+type UpgradeTabId = "keep" | "A" | "B" | "C" | "custom";
 
 function ExistingUpgradePanel({
   item,
   locked,
   cacheHas,
   onApply,
-  onKeepOriginal,
   onRevert,
 }: {
   item: ClaimItem;
   locked: boolean;
   cacheHas: boolean;
   onApply: (option: UpgradeOption) => Promise<void>;
-  onKeepOriginal?: () => void;
   onRevert?: () => void | Promise<void>;
 }) {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<{ mid: UpgradeProduct; premium: UpgradeProduct | null } | null>(null);
   const [customPrice, setCustomPrice] = useState("");
-  const [applying, setApplying] = useState<"entry" | "mid" | "premium" | "custom" | "keep" | null>(null);
+  const [customDesc, setCustomDesc] = useState("");
+  const [applying, setApplying] = useState(false);
+  const [activeTab, setActiveTab] = useState<UpgradeTabId>("keep");
 
   const baseUnit =
     item.source === "upgrade" && item.pre_upgrade_item ? item.pre_upgrade_item.unit_cost : item.unit_cost;
@@ -260,6 +255,10 @@ function ExistingUpgradePanel({
   const isUpgradedLine = item.source === "upgrade" && !!item.pre_upgrade_item;
   const origDesc = item.pre_upgrade_item?.description ?? item.description;
   const origBrand = item.pre_upgrade_item ? item.pre_upgrade_item.brand || item.brand : item.brand;
+
+  useEffect(() => {
+    setCustomDesc(item.description);
+  }, [item.description]);
 
   useEffect(() => {
     if (!cacheHas || locked) return;
@@ -315,8 +314,7 @@ function ExistingUpgradePanel({
 
   const entryUnitPrice = data?.mid ? Math.round(data.mid.price * 0.7) : 0;
   const showEntry = !!data?.mid && entryUnitPrice > baseUnit * 1.15;
-  const showPremium =
-    !!data?.mid && !!data.premium && data.premium.price > data.mid.price;
+  const showPremium = !!data?.mid && !!data.premium && data.premium.price > data.mid.price;
 
   const entrySelected = isUpgradedLine && item.description.startsWith(ENTRY_TITLE_PREFIX);
   const midSelected =
@@ -333,61 +331,40 @@ function ExistingUpgradePanel({
   const customSelected = isUpgradedLine && !entrySelected && !midSelected && !premSelected;
   const keepSelected = !isUpgradedLine;
 
-  function rowShell(
-    selected: boolean,
-    onRowClick: () => void,
-    inner: ReactNode,
-    opts?: { linkUrl?: string }
-  ) {
+  useEffect(() => {
+    if (keepSelected) setActiveTab("keep");
+    else if (entrySelected) setActiveTab("A");
+    else if (midSelected) setActiveTab("B");
+    else if (premSelected) setActiveTab("C");
+    else setActiveTab("custom");
+  }, [keepSelected, entrySelected, midSelected, premSelected, customSelected]);
+
+  useEffect(() => {
+    if (activeTab === "A" && !showEntry) setActiveTab("keep");
+    if (activeTab === "B" && !data?.mid) setActiveTab("keep");
+    if (activeTab === "C" && !showPremium) setActiveTab("keep");
+  }, [activeTab, showEntry, showPremium, data?.mid]);
+
+  function tabBtn(id: UpgradeTabId, label: string, disabled: boolean, isActive: boolean) {
     return (
-      <div
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onRowClick();
-          }
-        }}
-        onClick={onRowClick}
-        className={`flex h-12 max-h-12 min-h-[48px] cursor-pointer items-center gap-1 overflow-hidden whitespace-nowrap border-b border-gray-200/80 px-0.5 text-sm last:border-b-0 ${
-          selected ? "bg-blue-50/90" : "hover:bg-white/60"
-        }`}
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => !disabled && setActiveTab(id)}
+        className={`flex h-8 w-10 shrink-0 items-center justify-center rounded border text-xs font-semibold transition-colors ${
+          isActive
+            ? "border-[#2563EB] bg-[#2563EB] text-white"
+            : "border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+        } ${disabled ? "cursor-not-allowed opacity-40" : ""}`}
       >
-        <span
-          className={`h-3 w-3 shrink-0 rounded-full border-2 ${
-            selected ? "border-[#2563EB] bg-[#2563EB]" : "border-gray-400 bg-white"
-          }`}
-          aria-hidden
-        />
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">{inner}</div>
-        {opts?.linkUrl ? (
-          <a
-            href={opts.linkUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="shrink-0 px-1 text-base font-semibold text-[#2563EB] hover:underline"
-            title="Open product"
-            onClick={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            ↗
-          </a>
-        ) : null}
-      </div>
+        {label}
+      </button>
     );
   }
 
-  const tierCol = (label: string) => (
-    <span className="w-10 shrink-0 overflow-hidden text-left text-[13px] text-ellipsis whitespace-nowrap text-gray-500">
-      {label}
-    </span>
-  );
-  const dotSep = <span className="shrink-0 text-gray-400">·</span>;
-
   if (locked) {
     return (
-      <div className="max-h-[240px] rounded-lg border border-blue-100 bg-[#EFF6FF] px-2 py-1 text-xs text-gray-600">
+      <div className="max-h-[160px] rounded-lg border border-blue-100 bg-[#EFF6FF] px-2 py-1 text-xs text-gray-600">
         Locked — unlock to change upgrades.
       </div>
     );
@@ -395,202 +372,236 @@ function ExistingUpgradePanel({
 
   if (!cacheHas) return null;
 
+  const contentScroll = "max-h-[128px] min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5 py-1 text-xs";
+
+  function applyEntry() {
+    if (!data?.mid || applying) return;
+    setApplying(true);
+    void onApply({
+      label: "Entry",
+      price: entryUnitPrice,
+      title: `${ENTRY_TITLE_PREFIX} ${origDesc}`.slice(0, 240),
+      brand: data.mid.brand || item.brand,
+      model: "",
+      retailer: "",
+      url: "",
+    }).finally(() => setApplying(false));
+  }
+
+  function applyMid() {
+    if (!data?.mid || applying) return;
+    setApplying(true);
+    void onApply({
+      label: "Mid",
+      price: data.mid.price,
+      title: data.mid.title,
+      brand: data.mid.brand,
+      model: data.mid.model,
+      retailer: data.mid.retailer,
+      url: data.mid.url,
+    }).finally(() => setApplying(false));
+  }
+
+  function applyPremium() {
+    if (!data?.premium || applying) return;
+    setApplying(true);
+    void onApply({
+      label: "Premium",
+      price: data.premium.price,
+      title: data.premium.title,
+      brand: data.premium.brand,
+      model: data.premium.model,
+      retailer: data.premium.retailer,
+      url: data.premium.url,
+    }).finally(() => setApplying(false));
+  }
+
+  function applyCustom() {
+    if (!customOk || applying) return;
+    setApplying(true);
+    const title = customDesc.trim() || `Custom — ${origDesc.slice(0, 120)}`;
+    void onApply({
+      label: "Custom",
+      price: parseFloat(customPrice),
+      title,
+      brand: item.brand,
+      model: "",
+      retailer: "",
+      url: "",
+    }).finally(() => setApplying(false));
+  }
+
+  const retailerLinkLabel = (r: string) => (r.trim() ? `View at ${r} ↗` : "View at retailer ↗");
+
   return (
-    <div className="max-h-[240px] overflow-y-auto overflow-x-hidden rounded-lg border border-gray-200 bg-[#F0F7FF] px-1 text-sm">
+    <div className="flex max-h-[160px] flex-col overflow-hidden rounded-lg border border-gray-200 bg-[#F0F7FF]">
+      <div className="flex h-8 shrink-0 items-center gap-0.5 border-b border-gray-200/80 bg-[#E8F2FC] px-0.5">
+        {tabBtn("keep", "Keep", false, activeTab === "keep")}
+        {tabBtn("A", "A", !showEntry, activeTab === "A")}
+        {tabBtn("B", "B", !data?.mid, activeTab === "B")}
+        {tabBtn("C", "C", !showPremium, activeTab === "C")}
+        {tabBtn("custom", "Custom", false, activeTab === "custom")}
+      </div>
+
       {loading ? (
-        <div className="flex h-12 max-h-12 items-center gap-2 px-1 text-gray-500">
+        <div className={`${contentScroll} flex items-center gap-2 text-gray-500`}>
           <SmallSpinner /> Loading…
         </div>
       ) : (
         <>
-          {rowShell(
-            keepSelected,
-            () => {
-              if (applying !== null) return;
-              if (isUpgradedLine) {
-                setApplying("keep");
-                void Promise.resolve(onRevert?.()).finally(() => setApplying(null));
-              } else {
-                onKeepOriginal?.();
-              }
-            },
-            <>
-              {tierCol("Keep")}
-              {dotSep}
-              <span className="min-w-0 shrink truncate text-gray-900">
-                {truncUpgradeStr(origDesc, 20)}
-              </span>
-              {origBrand ? (
-                <>
-                  {dotSep}
-                  <span className="shrink-0 text-gray-500">({truncUpgradeStr(origBrand, 15)})</span>
-                </>
+          {activeTab === "keep" && (
+            <div className={contentScroll}>
+              <p className="break-words font-medium leading-snug text-gray-900">{origDesc}</p>
+              <p className="mt-0.5 text-gray-700">
+                {origBrand ? <span>{origBrand} · </span> : null}
+                <span className="font-bold tabular-nums text-[#2563EB]">{formatCurrency(lineOriginal)}</span>
+              </p>
+              <p className="mt-1 text-[11px] text-gray-500">No change</p>
+              {isUpgradedLine ? (
+                <button
+                  type="button"
+                  disabled={applying}
+                  onClick={() => {
+                    setApplying(true);
+                    void Promise.resolve(onRevert?.()).finally(() => setApplying(false));
+                  }}
+                  className="mt-1 text-[11px] font-semibold text-[#2563EB] underline disabled:opacity-40"
+                >
+                  Revert to original line
+                </button>
               ) : null}
-              {dotSep}
-              <span className="shrink-0 font-bold tabular-nums text-[#2563EB]">{formatCurrency(lineOriginal)}</span>
-            </>
+            </div>
           )}
 
-          {data?.mid && showEntry
-            ? rowShell(
-                entrySelected,
-                () => {
-                  if (applying !== null) return;
-                  setApplying("entry");
-                  void onApply({
-                    label: "Entry",
-                    price: entryUnitPrice,
-                    title: `${ENTRY_TITLE_PREFIX} ${origDesc}`.slice(0, 240),
-                    brand: data.mid.brand || item.brand,
-                    model: "",
-                    retailer: "",
-                    url: "",
-                  }).finally(() => setApplying(null));
-                },
-                <>
-                  {tierCol("Entry")}
-                  {dotSep}
-                  <span className="min-w-0 shrink truncate text-gray-900">
-                    {truncUpgradeStr(data.mid.title || origDesc, 20)}
-                  </span>
-                  {data.mid.retailer ? (
-                    <>
-                      {dotSep}
-                      <span className="shrink-0 text-gray-500">
-                        ({truncUpgradeStr(data.mid.retailer, 15)})
-                      </span>
-                    </>
-                  ) : null}
-                  {dotSep}
-                  <span className="shrink-0 font-bold tabular-nums text-[#2563EB]">
-                    {formatCurrency(entryUnitPrice * item.qty)}
-                  </span>
-                  {dotSep}
-                  <span className="shrink-0 font-bold tabular-nums text-green-600">
-                    +{formatCurrency((entryUnitPrice - baseUnit) * item.qty)}
-                  </span>
-                </>
-              )
-            : null}
+          {activeTab === "A" && showEntry && data?.mid && (
+            <div className={contentScroll}>
+              <p className="break-words font-medium leading-snug text-gray-900">
+                {data.mid.title || `Entry upgrade (from mid)`}
+              </p>
+              <p className="mt-0.5 break-words text-gray-600">
+                {(data.mid.brand || item.brand || "—") +
+                  (data.mid.retailer ? ` · ${data.mid.retailer}` : "")}
+              </p>
+              <p className="mt-1">
+                <span className="font-bold tabular-nums text-[#2563EB]">
+                  {formatCurrency(entryUnitPrice * item.qty)}
+                </span>
+                <span className="ml-1 font-bold tabular-nums text-green-600">
+                  (+{formatCurrency((entryUnitPrice - baseUnit) * item.qty)} from original)
+                </span>
+              </p>
+              <button
+                type="button"
+                disabled={applying}
+                onClick={applyEntry}
+                className="mt-1.5 w-full rounded-md bg-[#2563EB] py-1 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+              >
+                {applying ? "…" : "✓ Apply This Upgrade"}
+              </button>
+            </div>
+          )}
 
-          {data?.mid
-            ? rowShell(
-                midSelected,
-                () => {
-                  if (applying !== null) return;
-                  setApplying("mid");
-                  void onApply({
-                    label: "Mid",
-                    price: data.mid.price,
-                    title: data.mid.title,
-                    brand: data.mid.brand,
-                    model: data.mid.model,
-                    retailer: data.mid.retailer,
-                    url: data.mid.url,
-                  }).finally(() => setApplying(null));
-                },
-                <>
-                  {tierCol("Mid")}
-                  {dotSep}
-                  <span className="min-w-0 shrink truncate text-gray-900">
-                    {truncUpgradeStr(data.mid.title, 20)}
-                  </span>
-                  {data.mid.retailer ? (
-                    <>
-                      {dotSep}
-                      <span className="shrink-0 text-gray-500">
-                        ({truncUpgradeStr(data.mid.retailer, 15)})
-                      </span>
-                    </>
-                  ) : null}
-                  {dotSep}
-                  <span className="shrink-0 font-bold tabular-nums text-[#2563EB]">
-                    {formatCurrency(data.mid.price * item.qty)}
-                  </span>
-                  {dotSep}
-                  <span className="shrink-0 font-bold tabular-nums text-green-600">
-                    +{formatCurrency((data.mid.price - baseUnit) * item.qty)}
-                  </span>
-                </>,
-                { linkUrl: data.mid.url }
-              )
-            : null}
+          {activeTab === "B" && data?.mid && (
+            <div className={contentScroll}>
+              <p className="break-words font-medium leading-snug text-gray-900">{data.mid.title}</p>
+              <p className="mt-0.5 break-words text-gray-600">
+                {(data.mid.brand || "—") + (data.mid.retailer ? ` · ${data.mid.retailer}` : "")}
+              </p>
+              <p className="mt-1">
+                <span className="font-bold tabular-nums text-[#2563EB]">
+                  {formatCurrency(data.mid.price * item.qty)}
+                </span>
+                <span className="ml-1 font-bold tabular-nums text-green-600">
+                  (+{formatCurrency((data.mid.price - baseUnit) * item.qty)} from original)
+                </span>
+              </p>
+              {data.mid.url ? (
+                <a
+                  href={data.mid.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1 inline-block text-[11px] font-semibold text-[#2563EB] underline"
+                >
+                  {retailerLinkLabel(data.mid.retailer)}
+                </a>
+              ) : null}
+              <button
+                type="button"
+                disabled={applying}
+                onClick={applyMid}
+                className="mt-1.5 w-full rounded-md bg-[#2563EB] py-1 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+              >
+                {applying ? "…" : "✓ Apply This Upgrade"}
+              </button>
+            </div>
+          )}
 
-          {data?.mid && showPremium && data.premium
-            ? rowShell(
-                premSelected,
-                () => {
-                  if (applying !== null) return;
-                  setApplying("premium");
-                  void onApply({
-                    label: "Premium",
-                    price: data.premium!.price,
-                    title: data.premium!.title,
-                    brand: data.premium!.brand,
-                    model: data.premium!.model,
-                    retailer: data.premium!.retailer,
-                    url: data.premium!.url,
-                  }).finally(() => setApplying(null));
-                },
-                <>
-                  {tierCol("Premium")}
-                  {dotSep}
-                  <span className="min-w-0 shrink truncate text-gray-900">
-                    {truncUpgradeStr(data.premium.title, 20)}
-                  </span>
-                  {data.premium.retailer ? (
-                    <>
-                      {dotSep}
-                      <span className="shrink-0 text-gray-500">
-                        ({truncUpgradeStr(data.premium.retailer, 15)})
-                      </span>
-                    </>
-                  ) : null}
-                  {dotSep}
-                  <span className="shrink-0 font-bold tabular-nums text-[#2563EB]">
-                    {formatCurrency(data.premium.price * item.qty)}
-                  </span>
-                  {dotSep}
-                  <span className="shrink-0 font-bold tabular-nums text-green-600">
-                    +{formatCurrency((data.premium.price - baseUnit) * item.qty)}
-                  </span>
-                </>,
-                { linkUrl: data.premium.url }
-              )
-            : null}
+          {activeTab === "C" && showPremium && data?.premium && (
+            <div className={contentScroll}>
+              <p className="break-words font-medium leading-snug text-gray-900">{data.premium.title}</p>
+              <p className="mt-0.5 break-words text-gray-600">
+                {(data.premium.brand || "—") +
+                  (data.premium.retailer ? ` · ${data.premium.retailer}` : "")}
+              </p>
+              <p className="mt-1">
+                <span className="font-bold tabular-nums text-[#2563EB]">
+                  {formatCurrency(data.premium.price * item.qty)}
+                </span>
+                <span className="ml-1 font-bold tabular-nums text-green-600">
+                  (+{formatCurrency((data.premium.price - baseUnit) * item.qty)} from original)
+                </span>
+              </p>
+              {data.premium.url ? (
+                <a
+                  href={data.premium.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1 inline-block text-[11px] font-semibold text-[#2563EB] underline"
+                >
+                  {retailerLinkLabel(data.premium.retailer)}
+                </a>
+              ) : null}
+              <button
+                type="button"
+                disabled={applying}
+                onClick={applyPremium}
+                className="mt-1.5 w-full rounded-md bg-[#2563EB] py-1 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+              >
+                {applying ? "…" : "✓ Apply This Upgrade"}
+              </button>
+            </div>
+          )}
 
-          {rowShell(
-            customSelected,
-            () => {
-              if (applying !== null || !customOk) return;
-              setApplying("custom");
-              void onApply({
-                label: "Custom",
-                price: parseFloat(customPrice),
-                title: `Custom — ${truncUpgradeStr(origDesc, 80)}`,
-                brand: item.brand,
-                model: "",
-                retailer: "",
-                url: "",
-              }).finally(() => setApplying(null));
-            },
-            <>
-              {tierCol("Custom")}
-              {dotSep}
-              <span className="text-gray-400">$</span>
+          {activeTab === "custom" && (
+            <div className={contentScroll}>
+              <div className="flex items-center gap-1">
+                <span className="text-gray-500">$</span>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={customPrice}
+                  onChange={(e) => setCustomPrice(e.target.value)}
+                  className="h-7 w-full min-w-0 rounded border border-gray-300 bg-white px-1.5 text-xs tabular-nums"
+                  placeholder="Price"
+                />
+              </div>
               <input
-                type="number"
-                min={0}
-                step="any"
-                value={customPrice}
-                onChange={(e) => setCustomPrice(e.target.value)}
-                onClick={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                className="h-7 min-w-[72px] max-w-[120px] flex-1 rounded border border-gray-300 bg-white px-1.5 text-sm tabular-nums"
-                placeholder="Price"
+                type="text"
+                value={customDesc}
+                onChange={(e) => setCustomDesc(e.target.value)}
+                className="mt-1 h-7 w-full rounded border border-gray-300 bg-white px-1.5 text-xs"
+                placeholder="Description (optional)"
               />
-              {applying === "custom" ? <span className="text-gray-400">…</span> : null}
-            </>
+              <button
+                type="button"
+                disabled={applying || !customOk}
+                onClick={applyCustom}
+                className="mt-1.5 w-full rounded-md bg-[#16A34A] py-1 text-[11px] font-bold text-white hover:bg-green-700 disabled:opacity-40"
+              >
+                {applying ? "…" : "Apply Custom"}
+              </button>
+            </div>
           )}
         </>
       )}
@@ -1335,7 +1346,6 @@ export default function RoomReviewPage() {
                           item={item}
                           locked={locked}
                           cacheHas={cacheHas}
-                          onKeepOriginal={() => setToast("Keeping original line")}
                           onRevert={() => void handleRevert(item)}
                           onApply={(opt) =>
                             upgraded && item.pre_upgrade_item

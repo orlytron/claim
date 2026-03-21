@@ -1,4 +1,4 @@
-export type ClaimItemSource = "original" | "bundle" | "upgrade";
+export type ClaimItemSource = "original" | "bundle" | "upgrade" | "art";
 
 export interface ClaimItem {
   room: string;
