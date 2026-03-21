@@ -149,7 +149,7 @@ function BundleCard({
   async function handleSaveNote() {
     if (!note.trim()) return;
     setNoteSaving(true);
-    await supabase.from("bundle_decisions").upsert(
+    const { error: noteErr } = await supabase.from("bundle_decisions").upsert(
       {
         bundle_code: bundle.bundle_code,
         room: bundle.room,
@@ -161,6 +161,7 @@ function BundleCard({
       },
       { onConflict: "bundle_code" }
     );
+    if (noteErr) console.warn("bundle_decisions note save blocked:", noteErr.message);
     setNoteSaving(false);
     setNoteSaved(true);
     setTimeout(() => setNoteSaved(false), 3000);
@@ -190,7 +191,7 @@ function BundleCard({
 
   async function handleUseRevision() {
     if (!revision) return;
-    await supabase.from("bundle_decisions").upsert(
+    const { error: revErr } = await supabase.from("bundle_decisions").upsert(
       {
         bundle_code: bundle.bundle_code,
         room: bundle.room,
@@ -202,6 +203,7 @@ function BundleCard({
       },
       { onConflict: "bundle_code" }
     );
+    if (revErr) console.warn("bundle_decisions revision save blocked:", revErr.message);
     setDisplayItems(revision.items);
     setRevision(null);
     onToast(`Revised bundle saved — ${formatCurrency(revision.total_value)}`);
@@ -569,10 +571,12 @@ export default function BundleBrowserPage() {
       .sort((a, b) => a.total_value - b.total_value);
     setBundles(localBundles);
 
-    const { data: decisions } = await supabase
+    // FIX 2: check error — RLS blocks are { error } not thrown exceptions
+    const { data: decisions, error: bdLoadErr } = await supabase
       .from("bundle_decisions")
       .select("bundle_code, action, note")
       .eq("room", name);
+    if (bdLoadErr) console.warn("bundle_decisions read blocked (RLS?):", bdLoadErr.message);
 
     const accepted = new Set<string>();
     const notes: Record<string, string> = {};
@@ -591,7 +595,7 @@ export default function BundleBrowserPage() {
   }
 
   async function handleAccept(bundle: Bundle, items: BundleItem[]) {
-    await supabase.from("bundle_decisions").upsert(
+    const { error: accErr } = await supabase.from("bundle_decisions").upsert(
       {
         bundle_code: bundle.bundle_code,
         room: bundle.room,
@@ -603,6 +607,7 @@ export default function BundleBrowserPage() {
       },
       { onConflict: "bundle_code" }
     );
+    if (accErr) console.warn("bundle_decisions accept blocked:", accErr.message);
 
     const session = await loadSession();
     const existingItems = session?.claim_items ?? [];
@@ -634,10 +639,11 @@ export default function BundleBrowserPage() {
   }
 
   async function handleUndo(bundle: Bundle) {
-    await supabase
+    const { error: undoErr } = await supabase
       .from("bundle_decisions")
       .update({ action: "rejected" })
       .eq("bundle_code", bundle.bundle_code);
+    if (undoErr) console.warn("bundle_decisions undo blocked:", undoErr.message);
 
     const session = await loadSession();
     const bundleDescriptions = new Set(bundle.items.map((i) => i.description));

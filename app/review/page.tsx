@@ -1042,13 +1042,18 @@ export default function ReviewDashboard() {
     const accepted = new Set<string>(
       Object.entries(local).filter(([, v]) => v === "accepted" || v === "regenerated").map(([k]) => k)
     );
+    // FIX 2: Check { error } from Supabase — RLS errors are NOT thrown exceptions
     try {
-      const { data } = await supabase.from("bundle_decisions").select("bundle_code, action");
-      for (const d of (data ?? []) as { bundle_code: string; action: string }[]) {
-        if (d.action === "accepted" || d.action === "regenerated") { accepted.add(d.bundle_code); local[d.bundle_code] = d.action; }
+      const { data, error: bdErr } = await supabase.from("bundle_decisions").select("bundle_code, action");
+      if (bdErr) {
+        console.warn("bundle_decisions read blocked (RLS?):", bdErr.message, "— using localStorage fallback");
+      } else {
+        for (const d of (data ?? []) as { bundle_code: string; action: string }[]) {
+          if (d.action === "accepted" || d.action === "regenerated") { accepted.add(d.bundle_code); local[d.bundle_code] = d.action; }
+        }
+        localStorage.setItem(LS_DECISIONS, JSON.stringify(local));
       }
-      localStorage.setItem(LS_DECISIONS, JSON.stringify(local));
-    } catch { /* localStorage fallback */ }
+    } catch { /* network error — localStorage fallback already populated */ }
 
     setAcceptedCodes(accepted);
     setIsLoading(false);
@@ -1084,11 +1089,13 @@ export default function ReviewDashboard() {
     try {
       setLocalDecision(bundle.bundle_code, "accepted");
       try {
-        await supabase.from("bundle_decisions").upsert(
+        // FIX 2: check { error } — Supabase RLS blocks are NOT thrown as exceptions
+        const { error: bdErr } = await supabase.from("bundle_decisions").upsert(
           { bundle_code: bundle.bundle_code, room: bundle.room, bundle_name: bundle.name, action: "accepted", items: bundle.items, total_value: bundle.total_value },
           { onConflict: "bundle_code" }
         );
-      } catch { /* localStorage fallback */ }
+        if (bdErr) console.warn("bundle_decisions write blocked (RLS?):", bdErr.message, "— decision saved to localStorage only");
+      } catch (e) { console.warn("bundle_decisions network error:", e); }
 
       const existingKeys = new Set(sessionItems.map((i) => `${i.room}::${i.description}`));
       const newItems: ClaimItem[] = bundle.items
