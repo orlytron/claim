@@ -223,10 +223,12 @@ function ItemCard({
   const isCustomPos = pos === 3;
   const customValid = customDesc.trim().length > 0 && parseFloat(customPrice) > 0;
 
-  // Open the toggle — just show it, don't fire API yet
+  // Open panel, jump to position 1, and fire API immediately
   function handleOpen() {
+    console.log("Upgrade requested for:", item.description, item.unit_cost);
     setOpen(true);
-    setPos(0);
+    setPos(1);
+    fetchUpgrades();
   }
 
   function handleClose() {
@@ -234,9 +236,9 @@ function ItemCard({
     setPos(0);
   }
 
-  // FIX 5: API fires lazily when user selects position 1 or 2
   async function fetchUpgrades() {
     if (upgradeResult || upgradeLoading) return;
+    console.log("Fetching upgrades for:", item.description);
     setUpgradeLoading(true);
     setUpgradeError(false);
     try {
@@ -245,16 +247,17 @@ function ItemCard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           item_description: item.description,
-          brand: item.brand,
+          brand: item.brand || "",
           current_price: item.unit_cost,
-          category: item.category,
+          category: item.category || "",
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { mid: UpgradeProduct; premium: UpgradeProduct };
+      console.log("Upgrade result for:", item.description, data);
       setUpgradeResult(data);
     } catch (err) {
-      console.error("Upgrade search failed:", err);
+      console.error("Upgrade search failed for:", item.description, err);
       setUpgradeError(true);
     } finally {
       setUpgradeLoading(false);
@@ -263,7 +266,7 @@ function ItemCard({
 
   function handlePositionChange(newPos: number) {
     setPos(newPos);
-    // Fire API when user first moves to an upgrade position
+    // Also fire if somehow we arrive at 1/2 without a result yet
     if ((newPos === 1 || newPos === 2) && !upgradeResult && !upgradeLoading) {
       fetchUpgrades();
     }
@@ -305,32 +308,21 @@ function ItemCard({
         };
       }
 
-      if (upgradeError) {
+      if (upgradeError || !upgradeResult) {
         return {
           label,
           canApply: false,
           applyFn: async () => {},
           node: (
             <div className="py-4 text-center">
-              <p className="text-sm text-gray-500 mb-1">No upgrades found for this item.</p>
+              <p className="text-sm font-medium text-gray-600 mb-1">No standard upgrade found</p>
               <p className="text-xs text-gray-400 mb-3">Add a custom item below ↓</p>
-              <button
-                onClick={() => { setUpgradeResult(null); setUpgradeError(false); fetchUpgrades(); }}
-                className="text-xs text-[#2563EB] hover:underline"
-              >Try again</button>
-            </div>
-          ),
-        };
-      }
-
-      if (!upgradeResult) {
-        return {
-          label,
-          canApply: false,
-          applyFn: async () => {},
-          node: (
-            <div className="py-4 text-center text-gray-400 text-sm">
-              ◀ Select this option to load
+              {upgradeError && (
+                <button
+                  onClick={() => { setUpgradeResult(null); setUpgradeError(false); fetchUpgrades(); }}
+                  className="text-xs text-[#2563EB] hover:underline"
+                >Try again</button>
+              )}
             </div>
           ),
         };
@@ -459,7 +451,7 @@ function ItemCard({
         </div>
         <div className="shrink-0 flex items-center gap-2">
           <p className="tabular-nums text-base font-bold text-gray-900 hidden sm:block">{formatCurrency(item.unit_cost * item.qty)}</p>
-          {item.unit_cost >= 100 && (
+          {(item.unit_cost >= 100 || !!item.brand) && (
             <button
               onClick={open ? handleClose : handleOpen}
               className={`min-h-[40px] rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${

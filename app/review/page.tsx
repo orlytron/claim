@@ -1097,23 +1097,49 @@ export default function ReviewDashboard() {
         if (bdErr) console.warn("bundle_decisions write blocked (RLS?):", bdErr.message, "— decision saved to localStorage only");
       } catch (e) { console.warn("bundle_decisions network error:", e); }
 
+      // FIX 2: Update-or-insert — never silently skip bundle items
+      // Items that already exist in this room get their value updated to the bundle version.
+      // Brand-new items (not already in any form) are appended.
+      const bundleItemMap = new Map(
+        bundle.items.map((bi) => [`${bundle.room}::${bi.description}`, bi])
+      );
+
+      // Pass 1: update any existing items that the bundle also contains
+      const updatedExisting = sessionItems.map((ci) => {
+        const bundleVersion = bundleItemMap.get(`${ci.room}::${ci.description}`);
+        if (bundleVersion) {
+          return {
+            ...ci,
+            brand: bundleVersion.brand || ci.brand,
+            unit_cost: bundleVersion.unit_cost,
+            qty: bundleVersion.qty,
+            condition: "New",
+            age_years: 0,
+            age_months: 0,
+          };
+        }
+        return ci;
+      });
+
+      // Pass 2: append items from the bundle that don't exist at all
       const existingKeys = new Set(sessionItems.map((i) => `${i.room}::${i.description}`));
-      const newItems: ClaimItem[] = bundle.items
+      const brandNewItems: ClaimItem[] = bundle.items
         .filter((bi) => !existingKeys.has(`${bundle.room}::${bi.description}`))
         .map((bi) => ({ room: bundle.room, description: bi.description, brand: bi.brand, model: "", qty: bi.qty, age_years: 0, age_months: 0, condition: "New", unit_cost: bi.unit_cost, category: bi.category }));
 
-      if (newItems.length > 0) {
-        const updated = [...sessionItems, ...newItems];
-        await saveSession({ claim_items: updated }, sessionId);
-        setSessionItems(updated);
-      }
+      const merged = [...updatedExisting, ...brandNewItems];
+
+      // Always save the merged array (even if no brand-new items — existing items may have been updated)
+      await saveSession({ claim_items: merged }, sessionId);
+      setSessionItems(merged);
 
       const newAllocs = { ...roomAllocations, [roomName]: bundle.total_value };
       setRoomAllocations(newAllocs);
       await saveSession({ room_budgets: newAllocs }, sessionId);
 
       setAcceptedCodes((prev) => new Set([...prev, bundle.bundle_code]));
-      setAddedByRoom((prev) => ({ ...prev, [roomName]: (prev[roomName] ?? 0) + bundle.total_value }));
+      const addedValue = brandNewItems.reduce((s, i) => s + i.unit_cost * i.qty, 0);
+      setAddedByRoom((prev) => ({ ...prev, [roomName]: (prev[roomName] ?? 0) + addedValue }));
       setToast(`${bundle.name} added — ${formatCurrency(bundle.total_value)}`);
     } finally {
       setSavingRoom(null);

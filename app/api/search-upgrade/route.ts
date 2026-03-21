@@ -188,24 +188,30 @@ export async function POST(req: NextRequest) {
       category: string;
     };
 
+  console.log("Upgrade API called for:", item_description, "price:", current_price);
+
   if (!item_description || !current_price) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   }
 
   // ── Cache check ────────────────────────────────────────────────────────────
+  console.log("Cache lookup for:", item_description);
   try {
-    const { data: cached } = await supabase
+    const { data: cached, error: cacheErr } = await supabase
       .from("upgrades_cache")
       .select("mid, premium")
       .eq("item_description", item_description)
       .maybeSingle();
 
+    if (cacheErr) console.log("Cache read error:", cacheErr.message);
+
     if (cached?.mid) {
       console.log("Cache HIT:", item_description);
       return NextResponse.json({ mid: cached.mid, premium: cached.premium, source: "cache" });
     }
+    console.log("Cache MISS:", item_description);
   } catch (e) {
-    console.log("Cache lookup error (non-fatal):", e);
+    console.log("Cache lookup exception (non-fatal):", e);
   }
 
   const brandPrefix = brand ? `${brand} ` : "";
