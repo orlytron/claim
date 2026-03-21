@@ -37,14 +37,6 @@ const SLUG_TO_ROOM: Record<string, string> = {
 type BundleItem = (typeof BUNDLES_DATA)[number]["items"][number];
 type Bundle = (typeof BUNDLES_DATA)[number];
 
-interface RevisedBundle {
-  name: string;
-  description: string;
-  total_value: number;
-  plausibility: "green" | "yellow" | "red";
-  items: BundleItem[];
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function Spinner({ size = "sm" }: { size?: "sm" | "md" }) {
@@ -76,46 +68,32 @@ function Toast({ message, onDismiss }: { message: string; onDismiss: () => void 
 
 // ── Bundle Card ────────────────────────────────────────────────────────────────
 
+function bundleItemLineLabel(it: BundleItem) {
+  const p = it.brand ? `${it.brand} ` : "";
+  return `${p}${it.description}`.trim();
+}
+
 function BundleCard({
   bundle,
   accepted,
-  initialNote,
-  initialAction,
   onAccept,
   onUndo,
-  onToast,
 }: {
   bundle: Bundle;
   accepted: boolean;
-  initialNote: string;
-  initialAction: string;
   onAccept: (bundle: Bundle, items: BundleItem[]) => Promise<void>;
   onUndo: (bundle: Bundle) => Promise<void>;
-  onToast: (msg: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  // Notes
-  const [note, setNote] = useState(initialNote);
-  const [noteSaving, setNoteSaving] = useState(false);
-  const [noteSaved, setNoteSaved] = useState(false);
-
-  // Regenerate
-  const [isRegenerating, setIsRegenerating] = useState(false);
-  const [revision, setRevision] = useState<RevisedBundle | null>(null);
-
-  // Per-item swap: displayed items (may differ from bundle.items after swaps)
-  const [displayItems, setDisplayItems] = useState<BundleItem[]>(bundle.items);
-  const [swappingIdx, setSwappingIdx] = useState<number | null>(null);
-  const [swapOptions, setSwapOptions] = useState<Record<number, BundleItem[]>>({});
-
-  // ── Accept / Undo ──────────────────────────────────────────────────────────
+  const items = bundle.items;
+  const totalValue = items.reduce((s, i) => s + i.total, 0);
+  const previewItems = items.slice(0, 3);
+  const remaining = Math.max(0, items.length - 3);
 
   async function handleAccept() {
     setLoading(true);
     try {
-      await onAccept(bundle, displayItems);
+      await onAccept(bundle, items);
     } finally {
       setLoading(false);
     }
@@ -130,370 +108,50 @@ function BundleCard({
     }
   }
 
-  // ── Save note ─────────────────────────────────────────────────────────────
-
-  async function handleSaveNote() {
-    if (!note.trim()) return;
-    setNoteSaving(true);
-    const { error: noteErr } = await supabase.from("bundle_decisions").upsert(
-      {
-        bundle_code: bundle.bundle_code,
-        room: bundle.room,
-        bundle_name: bundle.name,
-        action: initialAction || "noted",
-        items: displayItems,
-        total_value: bundle.total_value,
-        note: note.trim(),
-      },
-      { onConflict: "bundle_code" }
-    );
-    if (noteErr) console.warn("bundle_decisions note save blocked:", noteErr.message);
-    setNoteSaving(false);
-    setNoteSaved(true);
-    setTimeout(() => setNoteSaved(false), 3000);
-  }
-
-  // ── Regenerate ────────────────────────────────────────────────────────────
-
-  async function handleRegenerate() {
-    if (!note.trim()) return;
-    setIsRegenerating(true);
-    setRevision(null);
-    try {
-      const res = await fetch("/api/regenerate-bundle", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bundle: { ...bundle, items: displayItems }, note }),
-      });
-      if (!res.ok) throw new Error(`${res.status}`);
-      const revised = (await res.json()) as RevisedBundle;
-      setRevision(revised);
-    } catch {
-      onToast("Regeneration failed. Please try again.");
-    } finally {
-      setIsRegenerating(false);
-    }
-  }
-
-  async function handleUseRevision() {
-    if (!revision) return;
-    const { error: revErr } = await supabase.from("bundle_decisions").upsert(
-      {
-        bundle_code: bundle.bundle_code,
-        room: bundle.room,
-        bundle_name: revision.name,
-        action: "regenerated",
-        items: revision.items,
-        total_value: revision.total_value,
-        note: note.trim(),
-      },
-      { onConflict: "bundle_code" }
-    );
-    if (revErr) console.warn("bundle_decisions revision save blocked:", revErr.message);
-    setDisplayItems(revision.items);
-    setRevision(null);
-    onToast(`Revised bundle saved — ${formatCurrency(revision.total_value)}`);
-  }
-
-  // ── Per-item swap ─────────────────────────────────────────────────────────
-
-  async function handleSwapClick(idx: number) {
-    if (swappingIdx === idx) {
-      setSwappingIdx(null);
-      return;
-    }
-    setSwappingIdx(idx);
-    if (swapOptions[idx]) return; // Already loaded
-
-    try {
-      const res = await fetch("/api/swap-item", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          item: displayItems[idx],
-          room: bundle.room,
-          bundle_total: bundle.total_value,
-        }),
-      });
-      if (!res.ok) throw new Error();
-      const alts = (await res.json()) as BundleItem[];
-      setSwapOptions((prev) => ({ ...prev, [idx]: alts }));
-    } catch {
-      setSwappingIdx(null);
-      onToast("Could not load alternatives. Try again.");
-    }
-  }
-
-  function handleUseSwap(idx: number, alt: BundleItem) {
-    setDisplayItems((prev) => prev.map((item, i) => (i === idx ? alt : item)));
-    setSwappingIdx(null);
-    // Clear cached options for this index so a re-swap fetches fresh
-    setSwapOptions((prev) => {
-      const next = { ...prev };
-      delete next[idx];
-      return next;
-    });
-    onToast(`Swapped to ${alt.brand ? alt.brand + " " : ""}${alt.description}`);
-  }
-
-  // ── Render ────────────────────────────────────────────────────────────────
-
-  const totalValue = displayItems.reduce((s, i) => s + i.total, 0);
-  const previewItems = displayItems.slice(0, 4);
-  const remaining = displayItems.length - 4;
   return (
     <div
-      className={`rounded-xl border bg-white shadow-sm transition-all ${
-        accepted ? "border-green-300 ring-1 ring-green-200" : "border-gray-200"
+      className={`flex max-h-[200px] flex-col overflow-hidden rounded-lg border p-2 shadow-sm ${
+        accepted ? "border-green-300 bg-green-50/50 ring-1 ring-green-200" : "border-gray-200 bg-white"
       }`}
     >
-      <div className="p-5">
-        {/* Header badges */}
-        <div className="flex items-start justify-between gap-3 mb-3">
-          <div className="flex flex-wrap items-center gap-2">
-            {bundle.sweet_spot && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 px-2.5 py-0.5 text-xs font-semibold text-amber-700">
-                ⭐ SWEET SPOT
-              </span>
-            )}
-            {accepted && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-green-50 border border-green-200 px-2.5 py-0.5 text-xs font-semibold text-green-700">
-                ✓ Accepted
-              </span>
-            )}
-          </div>
-          <span className="shrink-0 rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-mono font-medium text-gray-500">
-            Tier {bundle.tier}
-          </span>
-        </div>
-
-        {/* Name + value */}
-        <h2 className="text-lg font-semibold text-gray-900">{bundle.name}</h2>
-        <p className="text-2xl font-bold tabular-nums text-gray-900 mt-0.5">
-          {formatCurrency(totalValue)}
-        </p>
-
-        {bundle.description && (
-          <p className="mt-2 text-sm text-gray-500 italic">&ldquo;{bundle.description}&rdquo;</p>
-        )}
-
-        {/* Preview items */}
-        <div className="mt-4">
-          <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">
-            Key Items
-          </p>
-          <ul className="space-y-1.5">
-            {previewItems.map((item, i) => (
-              <li key={i} className="flex items-center justify-between text-sm">
-                <span className="text-gray-700 truncate mr-2">
-                  {item.brand ? `${item.brand} ` : ""}
-                  {item.description}
-                </span>
-                <span className="shrink-0 tabular-nums text-gray-500 font-medium">
-                  {formatCurrency(item.total)}
-                </span>
-              </li>
-            ))}
-            {remaining > 0 && !expanded && (
-              <li className="text-xs text-gray-400">+ {remaining} more items</li>
-            )}
-          </ul>
-
-          {/* Expanded item list with swap buttons */}
-          {expanded && (
-            <div className="mt-2 space-y-1">
-              {displayItems.map((item, idx) => (
-                <div key={idx}>
-                  {/* Item row */}
-                  <div className="flex items-center gap-2 py-1.5 text-sm rounded hover:bg-gray-50 px-1">
-                    <span className="flex-1 text-gray-700 truncate">
-                      {item.brand ? `${item.brand} ` : ""}
-                      {item.description}
-                      {item.qty > 1 && (
-                        <span className="text-gray-400 ml-1">×{item.qty}</span>
-                      )}
-                    </span>
-                    <span className="shrink-0 tabular-nums text-gray-500 text-xs">
-                      {formatCurrency(item.total)}
-                    </span>
-                    <button
-                      onClick={() => handleSwapClick(idx)}
-                      title="Swap this item"
-                      className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium transition-colors ${
-                        swappingIdx === idx
-                          ? "bg-blue-100 text-blue-700"
-                          : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-                      }`}
-                    >
-                      {swappingIdx === idx && !swapOptions[idx] ? (
-                        <Spinner />
-                      ) : (
-                        "↺"
-                      )}
-                    </button>
-                  </div>
-
-                  {/* Swap alternatives dropdown */}
-                  {swappingIdx === idx && swapOptions[idx] && (
-                    <div className="ml-2 mb-2 rounded-lg bg-gray-50 border border-gray-200 p-3 space-y-2">
-                      <p className="text-xs font-medium text-gray-500 mb-2">Alternatives:</p>
-                      {swapOptions[idx].map((alt, ai) => (
-                        <div
-                          key={ai}
-                          className="flex items-center justify-between gap-2 rounded-md bg-white border border-gray-200 px-3 py-2"
-                        >
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-medium text-gray-900 truncate">
-                              {alt.brand ? `${alt.brand} ` : ""}
-                              {alt.description}
-                            </p>
-                            <p className="text-xs text-gray-400">{formatCurrency(alt.unit_cost)}</p>
-                          </div>
-                          <button
-                            onClick={() => handleUseSwap(idx, alt)}
-                            className="shrink-0 rounded bg-[#2563EB] px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700 transition-colors"
-                          >
-                            Use
-                          </button>
-                        </div>
-                      ))}
-                      <button
-                        onClick={() => setSwappingIdx(null)}
-                        className="text-xs text-gray-400 hover:text-gray-600 pt-1"
-                      >
-                        Keep Original
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Actions row */}
-        <div className="mt-5 flex items-center justify-between gap-3">
+      <p className="min-w-0 truncate text-sm font-semibold leading-tight text-gray-900">
+        <span>{bundle.name}</span>
+        <span className="font-normal text-gray-400"> · </span>
+        <span className="font-bold tabular-nums text-gray-900">{formatCurrency(totalValue)}</span>
+      </p>
+      <ul className="mt-1.5 min-h-0 space-y-0.5 overflow-hidden">
+        {previewItems.map((it, i) => (
+          <li key={i} className="flex justify-between gap-2 text-xs leading-4 text-gray-800">
+            <span className="min-w-0 truncate">{bundleItemLineLabel(it)}</span>
+            <span className="shrink-0 tabular-nums font-medium text-gray-700">{formatCurrency(it.total)}</span>
+          </li>
+        ))}
+        {remaining > 0 ? (
+          <li className="text-xs leading-4 text-gray-500">+ {remaining} more items</li>
+        ) : null}
+      </ul>
+      <div className="mt-auto shrink-0 pt-2">
+        {accepted ? (
           <button
-            onClick={() => setExpanded((v) => !v)}
-            className="text-sm text-[#2563EB] hover:underline"
+            type="button"
+            onClick={handleUndo}
+            disabled={loading}
+            className="text-xs font-medium text-gray-500 hover:text-gray-700 disabled:opacity-50"
           >
-            {expanded ? "Collapse" : `View All ${displayItems.length} Items`}
+            {loading ? "…" : "Undo accept"}
           </button>
-
-          <div className="flex items-center gap-2">
-            {accepted ? (
-              <button
-                onClick={handleUndo}
-                disabled={loading}
-                className="text-sm text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
-              >
-                {loading ? "…" : "Undo"}
-              </button>
-            ) : (
-              <button
-                onClick={handleAccept}
-                disabled={loading}
-                className="rounded-md bg-[#16A34A] px-5 py-2 text-sm font-semibold text-white hover:bg-green-700 transition-colors disabled:opacity-50 flex items-center gap-2"
-              >
-                {loading ? <Spinner /> : "✓"}
-                {loading ? "Saving…" : "Accept Bundle"}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Notes + Regenerate section ──────────────────────────────────────── */}
-      <div className="border-t border-gray-100 px-5 py-4 bg-gray-50 rounded-b-xl">
-        <p className="text-xs font-semibold text-gray-500 mb-2 flex items-center gap-1.5">
-          💬 Notes on this bundle
-        </p>
-        <textarea
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          rows={3}
-          placeholder={`"Too expensive" or "swap the piano for something else" or "I like everything except the rug"…`}
-          className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
-        />
-        <div className="mt-2 flex items-center gap-2 flex-wrap">
+        ) : (
           <button
-            onClick={handleSaveNote}
-            disabled={noteSaving || !note.trim()}
-            className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50 transition-colors"
+            type="button"
+            onClick={handleAccept}
+            disabled={loading}
+            className="flex w-full items-center justify-center gap-1.5 rounded-md bg-[#16A34A] py-1.5 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-50"
           >
-            {noteSaving ? "Saving…" : noteSaved ? "✓ Note saved" : "Save Note"}
+            {loading ? <Spinner /> : null}
+            {loading ? "Saving…" : "Accept Bundle"}
           </button>
-          <button
-            onClick={handleRegenerate}
-            disabled={isRegenerating || !note.trim()}
-            className="rounded-md border border-[#2563EB] bg-white px-3 py-1.5 text-xs font-medium text-[#2563EB] hover:bg-blue-50 disabled:opacity-50 transition-colors flex items-center gap-1.5"
-          >
-            {isRegenerating ? (
-              <>
-                <Spinner /> Regenerating…
-              </>
-            ) : (
-              "↺ Regenerate with these notes"
-            )}
-          </button>
-        </div>
-
-        {/* Regenerating overlay message */}
-        {isRegenerating && (
-          <p className="mt-2 text-xs text-gray-400 italic">
-            Regenerating bundle based on your feedback…
-          </p>
         )}
       </div>
-
-      {/* ── Revised bundle card ─────────────────────────────────────────────── */}
-      {revision && (
-        <div className="border-t border-purple-100 bg-[#F5F3FF] rounded-b-xl px-5 py-4">
-          <div className="flex items-start justify-between gap-3 mb-3">
-            <div>
-              <p className="text-xs font-semibold text-purple-600 mb-1">✨ REVISED BUNDLE · Based on your feedback</p>
-              <h3 className="font-semibold text-gray-900">{revision.name}</h3>
-              <p className="text-xl font-bold tabular-nums text-gray-900 mt-0.5">
-                {formatCurrency(revision.total_value)}
-              </p>
-              {revision.description && (
-                <p className="text-xs text-gray-500 italic mt-1">&ldquo;{revision.description}&rdquo;</p>
-              )}
-            </div>
-          </div>
-
-          {/* Revised items */}
-          <ul className="space-y-1.5 mb-4">
-            {revision.items.map((item, i) => (
-              <li key={i} className="flex items-center justify-between text-sm">
-                <span className="text-gray-700 truncate mr-2">
-                  {item.brand ? `${item.brand} ` : ""}
-                  {item.description}
-                  {item.qty > 1 && <span className="text-gray-400"> ×{item.qty}</span>}
-                </span>
-                <span className="shrink-0 tabular-nums text-gray-500 font-medium">
-                  {formatCurrency(item.total)}
-                </span>
-              </li>
-            ))}
-          </ul>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleUseRevision}
-              className="rounded-md bg-[#16A34A] px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 transition-colors"
-            >
-              ✓ Use This Version
-            </button>
-            <button
-              onClick={() => setRevision(null)}
-              className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
-            >
-              Keep Original
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -509,7 +167,6 @@ export default function BundleBrowserPage() {
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [acceptedCodes, setAcceptedCodes] = useState<Set<string>>(new Set());
   const [decisionNotes, setDecisionNotes] = useState<Record<string, string>>({});
-  const [decisionActions, setDecisionActions] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [currentRoomTotal, setCurrentRoomTotal] = useState(0);
   const [roomBudget, setRoomBudget] = useState(0);
@@ -551,17 +208,14 @@ export default function BundleBrowserPage() {
 
     const accepted = new Set<string>();
     const notes: Record<string, string> = {};
-    const actions: Record<string, string> = {};
 
     for (const d of (decisions ?? []) as { bundle_code: string; action: string; note: string | null }[]) {
-      actions[d.bundle_code] = d.action;
       if (d.note) notes[d.bundle_code] = d.note;
       if (d.action === "accepted" || d.action === "regenerated") accepted.add(d.bundle_code);
     }
 
     setAcceptedCodes(accepted);
     setDecisionNotes(notes);
-    setDecisionActions(actions);
     setIsLoading(false);
   }
 
@@ -680,17 +334,19 @@ export default function BundleBrowserPage() {
 
       <main className="flex-1 px-6 py-6">
         {isLoading ? (
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
             {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="animate-pulse rounded-xl border border-gray-200 bg-white p-5">
-                <div className="h-4 w-24 rounded-full bg-gray-100 mb-3" />
-                <div className="h-6 w-40 rounded bg-gray-200 mb-2" />
-                <div className="h-8 w-28 rounded bg-gray-100 mb-4" />
-                <div className="space-y-2">
+              <div
+                key={i}
+                className="animate-pulse max-h-[200px] rounded-lg border border-gray-200 bg-white p-2.5"
+              >
+                <div className="h-4 w-3/4 rounded bg-gray-200" />
+                <div className="mt-2 space-y-1">
                   {[1, 2, 3].map((j) => (
-                    <div key={j} className="h-4 w-full rounded bg-gray-100" />
+                    <div key={j} className="h-3 w-full rounded bg-gray-100" />
                   ))}
                 </div>
+                <div className="mt-2 h-7 w-full rounded-md bg-gray-100" />
               </div>
             ))}
           </div>
@@ -710,17 +366,14 @@ export default function BundleBrowserPage() {
             </Link>
           </div>
         ) : (
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
             {bundles.map((bundle) => (
               <BundleCard
                 key={bundle.bundle_code}
                 bundle={bundle}
                 accepted={acceptedCodes.has(bundle.bundle_code)}
-                initialNote={decisionNotes[bundle.bundle_code] ?? ""}
-                initialAction={decisionActions[bundle.bundle_code] ?? ""}
                 onAccept={handleAccept}
                 onUndo={handleUndo}
-                onToast={showToast}
               />
             ))}
           </div>

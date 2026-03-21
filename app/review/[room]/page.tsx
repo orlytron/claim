@@ -227,33 +227,39 @@ function LockButton({ locked, onToggle }: { locked: boolean; onToggle: () => voi
 
 const ENTRY_TITLE_PREFIX = "Entry upgrade —";
 
+function truncUpgradeStr(s: string, max: number): string {
+  const t = s.replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  if (t.length <= max) return t;
+  return t.slice(0, Math.max(1, max - 1)) + "\u2026";
+}
+
 function ExistingUpgradePanel({
   item,
   locked,
   cacheHas,
   onApply,
   onKeepOriginal,
+  onRevert,
 }: {
   item: ClaimItem;
   locked: boolean;
   cacheHas: boolean;
   onApply: (option: UpgradeOption) => Promise<void>;
   onKeepOriginal?: () => void;
+  onRevert?: () => void | Promise<void>;
 }) {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<{ mid: UpgradeProduct; premium: UpgradeProduct | null } | null>(null);
-  const [customDesc, setCustomDesc] = useState("");
   const [customPrice, setCustomPrice] = useState("");
-  const [applying, setApplying] = useState<"entry" | "mid" | "premium" | "custom" | null>(null);
+  const [applying, setApplying] = useState<"entry" | "mid" | "premium" | "custom" | "keep" | null>(null);
 
   const baseUnit =
     item.source === "upgrade" && item.pre_upgrade_item ? item.pre_upgrade_item.unit_cost : item.unit_cost;
   const lineOriginal = baseUnit * item.qty;
   const isUpgradedLine = item.source === "upgrade" && !!item.pre_upgrade_item;
-
-  useEffect(() => {
-    setCustomDesc(item.description);
-  }, [item.description]);
+  const origDesc = item.pre_upgrade_item?.description ?? item.description;
+  const origBrand = item.pre_upgrade_item ? item.pre_upgrade_item.brand || item.brand : item.brand;
 
   useEffect(() => {
     if (!cacheHas || locked) return;
@@ -305,7 +311,7 @@ function ExistingUpgradePanel({
     item.pre_upgrade_item?.unit_cost,
   ]);
 
-  const customOk = customDesc.trim().length > 0 && parseFloat(customPrice) > 0;
+  const customOk = parseFloat(customPrice) > 0;
 
   const entryUnitPrice = data?.mid ? Math.round(data.mid.price * 0.7) : 0;
   const showEntry = !!data?.mid && entryUnitPrice > baseUnit * 1.15;
@@ -327,25 +333,62 @@ function ExistingUpgradePanel({
   const customSelected = isUpgradedLine && !entrySelected && !midSelected && !premSelected;
   const keepSelected = !isUpgradedLine;
 
-  function tierShell(selected: boolean, children: ReactNode) {
+  function rowShell(
+    selected: boolean,
+    onRowClick: () => void,
+    inner: ReactNode,
+    opts?: { linkUrl?: string }
+  ) {
     return (
       <div
-        className={`rounded-xl border-2 p-4 transition-colors duration-300 ${
-          selected ? "border-blue-500 bg-blue-50/80" : "border-gray-200 bg-white/90"
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onRowClick();
+          }
+        }}
+        onClick={onRowClick}
+        className={`flex h-12 max-h-12 min-h-[48px] cursor-pointer items-center gap-1 overflow-hidden whitespace-nowrap border-b border-gray-200/80 px-0.5 text-sm last:border-b-0 ${
+          selected ? "bg-blue-50/90" : "hover:bg-white/60"
         }`}
       >
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0 flex-1 space-y-1 overflow-visible">{children}</div>
-          {selected && <span className="shrink-0 text-lg font-bold text-blue-600" aria-hidden>✓</span>}
-        </div>
+        <span
+          className={`h-3 w-3 shrink-0 rounded-full border-2 ${
+            selected ? "border-[#2563EB] bg-[#2563EB]" : "border-gray-400 bg-white"
+          }`}
+          aria-hidden
+        />
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">{inner}</div>
+        {opts?.linkUrl ? (
+          <a
+            href={opts.linkUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 px-1 text-base font-semibold text-[#2563EB] hover:underline"
+            title="Open product"
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            ↗
+          </a>
+        ) : null}
       </div>
     );
   }
 
+  const tierCol = (label: string) => (
+    <span className="w-10 shrink-0 overflow-hidden text-left text-[13px] text-ellipsis whitespace-nowrap text-gray-500">
+      {label}
+    </span>
+  );
+  const dotSep = <span className="shrink-0 text-gray-400">·</span>;
+
   if (locked) {
     return (
-      <div className="rounded-xl border border-blue-100 bg-[#EFF6FF] p-4 text-base text-gray-600">
-        Locked — unlock to change upgrade options.
+      <div className="max-h-[240px] rounded-lg border border-blue-100 bg-[#EFF6FF] px-2 py-1 text-xs text-gray-600">
+        Locked — unlock to change upgrades.
       </div>
     );
   }
@@ -353,233 +396,202 @@ function ExistingUpgradePanel({
   if (!cacheHas) return null;
 
   return (
-    <div className="min-h-[120px] space-y-4 rounded-xl border border-gray-200 bg-[#F0F7FF] p-4 text-base">
+    <div className="max-h-[240px] overflow-y-auto overflow-x-hidden rounded-lg border border-gray-200 bg-[#F0F7FF] px-1 text-sm">
       {loading ? (
-        <div className="flex items-center gap-2 py-6 text-gray-500">
-          <SmallSpinner /> Loading suggestions…
+        <div className="flex h-12 max-h-12 items-center gap-2 px-1 text-gray-500">
+          <SmallSpinner /> Loading…
         </div>
       ) : (
         <>
-          {isUpgradedLine && (
-            <p className="text-sm text-gray-600">
-              Pick another option below, or <span className="font-medium">revert</span> on the left.
-            </p>
-          )}
-
-          {!isUpgradedLine &&
-            tierShell(keepSelected, (
-              <>
-                <p className="text-sm font-bold text-gray-800">Keep original</p>
-                <p className="break-words text-base font-medium whitespace-normal text-gray-900">
-                  {item.pre_upgrade_item?.description ?? item.description}
-                </p>
-                <p className="break-words text-sm text-gray-500 whitespace-normal">
-                  {item.brand ? `${item.brand} · ` : ""}Original line
-                </p>
-                <p className="text-xl font-bold tabular-nums text-[#2563EB]">{formatCurrency(lineOriginal)}</p>
-                <p className="text-sm font-semibold text-gray-500">—</p>
-                <button
-                  type="button"
-                  disabled={applying !== null}
-                  onClick={() => onKeepOriginal?.()}
-                  className="mt-2 rounded-lg bg-gray-200 px-4 py-2 text-sm font-bold text-gray-800 hover:bg-gray-300 disabled:opacity-40"
-                >
-                  Keep
-                </button>
-              </>
-            ))}
-
-          {!isUpgradedLine && <div className="border-t border-gray-300" />}
-
-          {data?.mid && (
+          {rowShell(
+            keepSelected,
+            () => {
+              if (applying !== null) return;
+              if (isUpgradedLine) {
+                setApplying("keep");
+                void Promise.resolve(onRevert?.()).finally(() => setApplying(null));
+              } else {
+                onKeepOriginal?.();
+              }
+            },
             <>
-              {showEntry &&
-                tierShell(entrySelected, (
-                  <>
-                    <p className="text-sm font-bold text-gray-800">Entry upgrade</p>
-                    <p className="break-words text-base font-medium whitespace-normal text-gray-900">
-                      Entry upgrade (derived from mid tier)
-                    </p>
-                    <p className="break-words text-sm text-gray-500 whitespace-normal">
-                      {(data.mid.brand || item.brand || "").trim()}
-                      {(data.mid.brand || item.brand) && " · "}
-                      Estimated value
-                    </p>
-                    <p className="text-xl font-bold tabular-nums text-[#2563EB]">
-                      {formatCurrency(entryUnitPrice * item.qty)}
-                    </p>
-                    <p className="text-base font-bold text-green-600 tabular-nums">
-                      +{formatCurrency((entryUnitPrice - baseUnit) * item.qty)}
-                    </p>
-                    <button
-                      type="button"
-                      disabled={applying !== null}
-                      onClick={() => {
-                        setApplying("entry");
-                        const shortDesc =
-                          item.pre_upgrade_item?.description ?? item.description;
-                        void onApply({
-                          label: "Entry",
-                          price: entryUnitPrice,
-                          title: `${ENTRY_TITLE_PREFIX} ${shortDesc}`.slice(0, 240),
-                          brand: data.mid.brand || item.brand,
-                          model: "",
-                          retailer: "",
-                          url: "",
-                        }).finally(() => setApplying(null));
-                      }}
-                      className="mt-2 rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-                    >
-                      {applying === "entry" ? "…" : "Select"}
-                    </button>
-                  </>
-                ))}
-
-              {tierShell(midSelected, (
+              {tierCol("Keep")}
+              {dotSep}
+              <span className="min-w-0 shrink truncate text-gray-900">
+                {truncUpgradeStr(origDesc, 20)}
+              </span>
+              {origBrand ? (
                 <>
-                  <p className="text-sm font-bold text-gray-800">Mid upgrade</p>
-                  <p className="break-words text-base font-medium whitespace-normal text-gray-900">{data.mid.title}</p>
-                  <p className="break-words text-sm text-gray-500 whitespace-normal">
-                    {data.mid.brand}
-                    {data.mid.brand && data.mid.retailer ? " · " : ""}
-                    {data.mid.retailer || ""}
-                  </p>
-                  <p className="text-xl font-bold tabular-nums text-[#2563EB]">
-                    {formatCurrency(data.mid.price * item.qty)}
-                  </p>
-                  <p className="text-base font-bold text-green-600 tabular-nums">
-                    +{formatCurrency((data.mid.price - baseUnit) * item.qty)}
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      disabled={applying !== null}
-                      onClick={() => {
-                        setApplying("mid");
-                        void onApply({
-                          label: "Mid",
-                          price: data.mid.price,
-                          title: data.mid.title,
-                          brand: data.mid.brand,
-                          model: data.mid.model,
-                          retailer: data.mid.retailer,
-                          url: data.mid.url,
-                        }).finally(() => setApplying(null));
-                      }}
-                      className="rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-                    >
-                      {applying === "mid" ? "…" : "Select"}
-                    </button>
-                    <a
-                      href={data.mid.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center rounded-lg border border-blue-200 bg-white px-4 py-2 text-sm font-bold text-blue-600 hover:bg-blue-50"
-                    >
-                      View ↗
-                    </a>
-                  </div>
+                  {dotSep}
+                  <span className="shrink-0 text-gray-500">({truncUpgradeStr(origBrand, 15)})</span>
                 </>
-              ))}
-
-              {showPremium &&
-                data.premium &&
-                tierShell(premSelected, (
-                  <>
-                    <p className="text-sm font-bold text-gray-800">Premium upgrade</p>
-                    <p className="break-words text-base font-medium whitespace-normal text-gray-900">
-                      {data.premium.title}
-                    </p>
-                    <p className="break-words text-sm text-gray-500 whitespace-normal">
-                      {data.premium.brand}
-                      {data.premium.brand && data.premium.retailer ? " · " : ""}
-                      {data.premium.retailer || ""}
-                    </p>
-                    <p className="text-xl font-bold tabular-nums text-[#2563EB]">
-                      {formatCurrency(data.premium.price * item.qty)}
-                    </p>
-                    <p className="text-base font-bold text-green-600 tabular-nums">
-                      +{formatCurrency((data.premium.price - baseUnit) * item.qty)}
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        disabled={applying !== null}
-                        onClick={() => {
-                          setApplying("premium");
-                          void onApply({
-                            label: "Premium",
-                            price: data.premium!.price,
-                            title: data.premium!.title,
-                            brand: data.premium!.brand,
-                            model: data.premium!.model,
-                            retailer: data.premium!.retailer,
-                            url: data.premium!.url,
-                          }).finally(() => setApplying(null));
-                        }}
-                        className="rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-                      >
-                        {applying === "premium" ? "…" : "Select"}
-                      </button>
-                      <a
-                        href={data.premium.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center rounded-lg border border-blue-200 bg-white px-4 py-2 text-sm font-bold text-blue-600 hover:bg-blue-50"
-                      >
-                        View ↗
-                      </a>
-                    </div>
-                  </>
-                ))}
+              ) : null}
+              {dotSep}
+              <span className="shrink-0 font-bold tabular-nums text-[#2563EB]">{formatCurrency(lineOriginal)}</span>
             </>
           )}
 
-          <div className="border-t border-gray-300" />
-
-          {tierShell(customSelected, (
-            <>
-              <p className="text-sm font-bold text-gray-800">Custom</p>
-              <input
-                type="text"
-                value={customDesc}
-                onChange={(e) => setCustomDesc(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-base break-words"
-                placeholder="Description"
-              />
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span className="text-gray-400">$</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  value={customPrice}
-                  onChange={(e) => setCustomPrice(e.target.value)}
-                  className="min-w-[100px] flex-1 rounded-lg border border-gray-200 px-3 py-2 text-base tabular-nums"
-                  placeholder="Price"
-                />
-              </div>
-              <button
-                type="button"
-                disabled={applying !== null || !customOk}
-                onClick={() => {
-                  setApplying("custom");
+          {data?.mid && showEntry
+            ? rowShell(
+                entrySelected,
+                () => {
+                  if (applying !== null) return;
+                  setApplying("entry");
                   void onApply({
-                    label: "Custom",
-                    price: parseFloat(customPrice),
-                    title: customDesc.trim(),
-                    brand: item.brand,
+                    label: "Entry",
+                    price: entryUnitPrice,
+                    title: `${ENTRY_TITLE_PREFIX} ${origDesc}`.slice(0, 240),
+                    brand: data.mid.brand || item.brand,
                     model: "",
                     retailer: "",
                     url: "",
                   }).finally(() => setApplying(null));
-                }}
-                className="mt-2 rounded-lg bg-[#16A34A] px-4 py-2 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-40"
-              >
-                {applying === "custom" ? "…" : "Apply"}
-              </button>
+                },
+                <>
+                  {tierCol("Entry")}
+                  {dotSep}
+                  <span className="min-w-0 shrink truncate text-gray-900">
+                    {truncUpgradeStr(data.mid.title || origDesc, 20)}
+                  </span>
+                  {data.mid.retailer ? (
+                    <>
+                      {dotSep}
+                      <span className="shrink-0 text-gray-500">
+                        ({truncUpgradeStr(data.mid.retailer, 15)})
+                      </span>
+                    </>
+                  ) : null}
+                  {dotSep}
+                  <span className="shrink-0 font-bold tabular-nums text-[#2563EB]">
+                    {formatCurrency(entryUnitPrice * item.qty)}
+                  </span>
+                  {dotSep}
+                  <span className="shrink-0 font-bold tabular-nums text-green-600">
+                    +{formatCurrency((entryUnitPrice - baseUnit) * item.qty)}
+                  </span>
+                </>
+              )
+            : null}
+
+          {data?.mid
+            ? rowShell(
+                midSelected,
+                () => {
+                  if (applying !== null) return;
+                  setApplying("mid");
+                  void onApply({
+                    label: "Mid",
+                    price: data.mid.price,
+                    title: data.mid.title,
+                    brand: data.mid.brand,
+                    model: data.mid.model,
+                    retailer: data.mid.retailer,
+                    url: data.mid.url,
+                  }).finally(() => setApplying(null));
+                },
+                <>
+                  {tierCol("Mid")}
+                  {dotSep}
+                  <span className="min-w-0 shrink truncate text-gray-900">
+                    {truncUpgradeStr(data.mid.title, 20)}
+                  </span>
+                  {data.mid.retailer ? (
+                    <>
+                      {dotSep}
+                      <span className="shrink-0 text-gray-500">
+                        ({truncUpgradeStr(data.mid.retailer, 15)})
+                      </span>
+                    </>
+                  ) : null}
+                  {dotSep}
+                  <span className="shrink-0 font-bold tabular-nums text-[#2563EB]">
+                    {formatCurrency(data.mid.price * item.qty)}
+                  </span>
+                  {dotSep}
+                  <span className="shrink-0 font-bold tabular-nums text-green-600">
+                    +{formatCurrency((data.mid.price - baseUnit) * item.qty)}
+                  </span>
+                </>,
+                { linkUrl: data.mid.url }
+              )
+            : null}
+
+          {data?.mid && showPremium && data.premium
+            ? rowShell(
+                premSelected,
+                () => {
+                  if (applying !== null) return;
+                  setApplying("premium");
+                  void onApply({
+                    label: "Premium",
+                    price: data.premium!.price,
+                    title: data.premium!.title,
+                    brand: data.premium!.brand,
+                    model: data.premium!.model,
+                    retailer: data.premium!.retailer,
+                    url: data.premium!.url,
+                  }).finally(() => setApplying(null));
+                },
+                <>
+                  {tierCol("Premium")}
+                  {dotSep}
+                  <span className="min-w-0 shrink truncate text-gray-900">
+                    {truncUpgradeStr(data.premium.title, 20)}
+                  </span>
+                  {data.premium.retailer ? (
+                    <>
+                      {dotSep}
+                      <span className="shrink-0 text-gray-500">
+                        ({truncUpgradeStr(data.premium.retailer, 15)})
+                      </span>
+                    </>
+                  ) : null}
+                  {dotSep}
+                  <span className="shrink-0 font-bold tabular-nums text-[#2563EB]">
+                    {formatCurrency(data.premium.price * item.qty)}
+                  </span>
+                  {dotSep}
+                  <span className="shrink-0 font-bold tabular-nums text-green-600">
+                    +{formatCurrency((data.premium.price - baseUnit) * item.qty)}
+                  </span>
+                </>,
+                { linkUrl: data.premium.url }
+              )
+            : null}
+
+          {rowShell(
+            customSelected,
+            () => {
+              if (applying !== null || !customOk) return;
+              setApplying("custom");
+              void onApply({
+                label: "Custom",
+                price: parseFloat(customPrice),
+                title: `Custom — ${truncUpgradeStr(origDesc, 80)}`,
+                brand: item.brand,
+                model: "",
+                retailer: "",
+                url: "",
+              }).finally(() => setApplying(null));
+            },
+            <>
+              {tierCol("Custom")}
+              {dotSep}
+              <span className="text-gray-400">$</span>
+              <input
+                type="number"
+                min={0}
+                step="any"
+                value={customPrice}
+                onChange={(e) => setCustomPrice(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                className="h-7 min-w-[72px] max-w-[120px] flex-1 rounded border border-gray-300 bg-white px-1.5 text-sm tabular-nums"
+                placeholder="Price"
+              />
+              {applying === "custom" ? <span className="text-gray-400">…</span> : null}
             </>
-          ))}
+          )}
         </>
       )}
     </div>
@@ -1315,7 +1327,7 @@ export default function RoomReviewPage() {
                         <LockButton locked={locked} onToggle={() => toggleLock(lk)} />
                       </div>
                     </div>
-                    <div id={`upgrade-panel-${idx}`} className="p-4 py-5 bg-[#F0F7FF] text-base">
+                    <div id={`upgrade-panel-${idx}`} className="p-2 bg-[#F0F7FF] text-sm">
                       <p className="md:hidden font-bold uppercase tracking-wide text-gray-600 text-sm mb-3">Suggested upgrade →</p>
                       {cacheHas ? (
                         <ExistingUpgradePanel
@@ -1324,6 +1336,7 @@ export default function RoomReviewPage() {
                           locked={locked}
                           cacheHas={cacheHas}
                           onKeepOriginal={() => setToast("Keeping original line")}
+                          onRevert={() => void handleRevert(item)}
                           onApply={(opt) =>
                             upgraded && item.pre_upgrade_item
                               ? handleChangeUpgrade(item, opt)
