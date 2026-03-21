@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { BUNDLES_DATA, Bundle, BundleItem } from "../lib/bundles-data";
@@ -959,9 +959,10 @@ function ArtRow({ artAdded, onAdd }: { artAdded: boolean; onAdd: () => void }) {
 
 export default function ReviewDashboard() {
   const router = useRouter();
-  const { mode, setMode, sessionId } = useClaimMode();
+  const { mode, setMode, sessionId, hydrated } = useClaimMode();
 
   const [isLoading, setIsLoading] = useState(true);
+  const [modeSwitching, setModeSwitching] = useState(false);
   const [sessionItems, setSessionItems] = useState<ClaimItem[]>([]);
   const [roomAllocations, setRoomAllocations] = useState<Record<string, number>>({});
   const [acceptedCodes, setAcceptedCodes] = useState<Set<string>>(new Set());
@@ -970,9 +971,14 @@ export default function ReviewDashboard() {
   const [toast, setToast] = useState<string | null>(null);
   const [artAdded, setArtAdded] = useState(false);
 
-  useEffect(() => { loadData(); }, [sessionId]);
+  // Only load once `hydrated` is true — this ensures we always use the real sessionId
+  // from localStorage, never the default "trial" before the effect has read the stored mode.
+  useEffect(() => {
+    if (hydrated) loadData(sessionId, mode);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, sessionId]);
 
-  // FIX 1: debug log whenever items change
+  // Debug log whenever items change
   useEffect(() => {
     if (sessionItems.length > 0) {
       const total = sessionItems.reduce((s, i) => s + i.unit_cost * i.qty, 0);
@@ -981,12 +987,56 @@ export default function ReviewDashboard() {
     }
   }, [sessionItems]);
 
-  async function loadData() {
-    const session = await loadSession(sessionId);
-    if (!session?.claim_items?.length) { router.replace("/"); return; }
+  // Mode toggle handler — shows overlay, auto-seeds test if empty, never navigates
+  const handleSetMode = useCallback(async (newMode: typeof mode) => {
+    if (newMode === mode) return;
+    setModeSwitching(true);
+    const newSessionId = newMode === "test" ? "test" : "trial";
+    setMode(newMode);
+    // loadData will fire via the useEffect above when sessionId changes;
+    // but we keep modeSwitching on until loadData clears it
+    await loadData(newSessionId, newMode, true);
+    setModeSwitching(false);
+  }, [mode, setMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    setSessionItems(session.claim_items);
-    setRoomAllocations(session.room_budgets ?? {});
+  async function loadData(sid = sessionId, currentMode = mode, fromSwitch = false) {
+    if (!fromSwitch) setIsLoading(true);
+    let session = await loadSession(sid);
+
+    if (!session?.claim_items?.length) {
+      if (currentMode === "test") {
+        // Test session is empty — auto-seed it from live
+        console.log("Test session empty — copying live session to test");
+        const liveSession = await loadSession("trial");
+        if (liveSession?.claim_items?.length) {
+          try {
+            await saveSession({
+              claim_items: liveSession.claim_items,
+              room_summary: liveSession.room_summary,
+              room_budgets: null, // start test with clean allocations
+            }, "test");
+            session = { ...liveSession, room_budgets: null };
+          } catch (e) {
+            console.error("Could not copy live → test:", e);
+          }
+        }
+        // If still empty after copy attempt, show empty state — don't redirect
+        if (!session?.claim_items?.length) {
+          setSessionItems([]);
+          setRoomAllocations({});
+          setAcceptedCodes(new Set());
+          setIsLoading(false);
+          return;
+        }
+      } else {
+        // Live mode with no data → go to upload
+        router.replace("/");
+        return;
+      }
+    }
+
+    setSessionItems(session!.claim_items!);
+    setRoomAllocations(session!.room_budgets ?? {});
 
     const local = getLocalDecisions();
     const accepted = new Set<string>(
@@ -1096,14 +1146,38 @@ export default function ReviewDashboard() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  // Show overlay while hydrating or switching modes — prevents flash and loop
+  if (!hydrated || isLoading) {
+    return (
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="text-center">
+          <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-[#2563EB] border-t-transparent" />
+          <p className="text-base font-medium text-gray-500">
+            {modeSwitching ? `Switching to ${mode} mode…` : "Loading…"}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
+    <>
+      {/* Full-screen overlay while switching modes */}
+      {modeSwitching && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/80 backdrop-blur-sm">
+          <div className="text-center">
+            <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-[#2563EB] border-t-transparent" />
+            <p className="text-base font-semibold text-gray-700">Switching to {mode === "test" ? "test" : "live"} mode…</p>
+          </div>
+        </div>
+      )}
     <div className="min-h-screen bg-white">
       <div className="mx-auto max-w-[720px] px-4 pb-36 pt-8">
-        {/* FIX 7: Test mode banner */}
+        {/* Test mode banner */}
         {mode === "test" && (
           <div className="mb-4 rounded-xl bg-orange-100 border border-orange-300 px-4 py-3 flex items-center justify-between gap-4">
-            <p className="text-sm font-bold text-orange-700">🧪 TEST MODE — safe to experiment. Changes go to test session only.</p>
-            <button onClick={() => setMode("live")} className="text-xs font-bold text-orange-700 border border-orange-400 rounded px-2 py-1 hover:bg-orange-200">
+            <p className="text-sm font-bold text-orange-700">🧪 TEST MODE — safe to experiment. Changes save to test session only.</p>
+            <button onClick={() => handleSetMode("live")} className="text-xs font-bold text-orange-700 border border-orange-400 rounded px-2 py-1 hover:bg-orange-200">
               Switch to Live
             </button>
           </div>
@@ -1112,13 +1186,14 @@ export default function ReviewDashboard() {
         <header className="mb-8">
           <div className="flex items-center justify-between mb-1">
             <p className="text-sm font-semibold uppercase tracking-widest text-gray-400">ClaimBuilder</p>
-            {/* FIX 7: Mode toggle */}
+            {/* Mode toggle */}
             <div className="flex items-center gap-1 rounded-full bg-gray-100 p-1">
               {(["live", "test"] as const).map((m) => (
                 <button
                   key={m}
-                  onClick={() => setMode(m)}
-                  className={`rounded-full px-3 py-1 text-xs font-bold transition-colors capitalize ${mode === m ? (m === "test" ? "bg-orange-500 text-white" : "bg-[#2563EB] text-white") : "text-gray-400 hover:text-gray-600"}`}
+                  onClick={() => handleSetMode(m)}
+                  disabled={modeSwitching}
+                  className={`rounded-full px-3 py-1 text-xs font-bold transition-colors capitalize ${mode === m ? (m === "test" ? "bg-orange-500 text-white" : "bg-[#2563EB] text-white") : "text-gray-400 hover:text-gray-600"} disabled:opacity-50`}
                 >
                   {m}
                 </button>
@@ -1211,5 +1286,6 @@ export default function ReviewDashboard() {
 
       {toast && <Toast message={toast} onDismiss={() => setToast(null)} />}
     </div>
+    </>
   );
 }
