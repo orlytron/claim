@@ -21,11 +21,11 @@ export interface SessionData {
   strategy: "upgrades_only" | "upgrades_additions" | null;
 }
 
-export async function saveSession(data: Partial<SessionData>): Promise<void> {
+export async function saveSession(data: Partial<SessionData>, sessionId = "trial"): Promise<void> {
   const { error } = await supabase
     .from("claim_session")
     .upsert(
-      { id: "trial", ...data, updated_at: new Date().toISOString() },
+      { id: sessionId, ...data, updated_at: new Date().toISOString() },
       { onConflict: "id" }
     );
 
@@ -35,11 +35,11 @@ export async function saveSession(data: Partial<SessionData>): Promise<void> {
   }
 }
 
-export async function loadSession(): Promise<SessionData | null> {
+export async function loadSession(sessionId = "trial"): Promise<SessionData | null> {
   const { data, error } = await supabase
     .from("claim_session")
     .select("*")
-    .eq("id", "trial")
+    .eq("id", sessionId)
     .single();
 
   if (error || !data) return null;

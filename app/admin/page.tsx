@@ -156,6 +156,11 @@ export default function AdminPage() {
   const [feedbackFilter, setFeedbackFilter] = useState<"all" | "bundle_note" | "suggestion">("all");
   const [copied, setCopied] = useState<string | null>(null);
 
+  // FIX 6: Reset state
+  const [resetConfirm, setResetConfirm] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetMsg, setResetMsg] = useState<string | null>(null);
+
   useEffect(() => {
     fetchAll();
   }, []);
@@ -248,6 +253,36 @@ export default function AdminPage() {
     setTimeout(() => setCopied(null), 2000);
   }
 
+  // FIX 6: Reset handler
+  async function handleReset() {
+    setResetLoading(true);
+    setResetMsg(null);
+    try {
+      const res = await fetch("/api/admin/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: "trial" }) });
+      const data = await res.json();
+      if (data.success) {
+        setResetMsg(`✓ ${data.message}`);
+        setResetConfirm(false);
+        fetchAll();
+      } else {
+        setResetMsg(`Error: ${data.error}`);
+      }
+    } catch (e) {
+      setResetMsg("Network error — reset failed");
+    } finally {
+      setResetLoading(false);
+    }
+  }
+
+  // FIX 7: Copy live to test
+  async function handleCopyToTest() {
+    const { data: live } = await supabase.from("claim_session").select("*").eq("id", "trial").single();
+    if (!live) { alert("Could not load live session"); return; }
+    const { error } = await supabase.from("claim_session").upsert({ ...live, id: "test", updated_at: new Date().toISOString() }, { onConflict: "id" });
+    if (error) { alert("Failed: " + error.message); return; }
+    alert("Live session copied to test session successfully.");
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   const pct = targetValue > 0 ? Math.min(100, (claimTotal / targetValue) * 100) : 0;
@@ -267,17 +302,34 @@ export default function AdminPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top bar */}
-      <header className="border-b border-gray-200 bg-white px-6 py-4 flex items-center justify-between">
+      <header className="border-b border-gray-200 bg-white px-6 py-4 flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-lg font-semibold text-gray-900">Admin View — Israel Claim</h1>
           <p className="text-xs text-gray-400">Claim #7579B726D · Internal use only</p>
         </div>
-        <a
-          href="/review"
-          className="rounded-md border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-        >
-          ← Back to Review
-        </a>
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* FIX 7: Copy live to test */}
+          <button onClick={handleCopyToTest} className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100">
+            Copy Live → Test
+          </button>
+          {/* FIX 6: Reset button */}
+          {!resetConfirm ? (
+            <button onClick={() => setResetConfirm(true)} className="rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100">
+              Reset Claim
+            </button>
+          ) : (
+            <div className="flex items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2">
+              <span className="text-xs text-red-700 font-medium">Remove all bundles & restore 209 original items?</span>
+              <button onClick={handleReset} disabled={resetLoading} className="rounded bg-red-700 px-3 py-1 text-xs font-bold text-white hover:bg-red-800 disabled:opacity-50">
+                {resetLoading ? "Resetting…" : "Yes, Reset"}
+              </button>
+              <button onClick={() => setResetConfirm(false)} className="text-xs text-red-500 px-1">Cancel</button>
+            </div>
+          )}
+          {resetMsg && <span className={`text-xs font-medium ${resetMsg.startsWith("✓") ? "text-green-700" : "text-red-600"}`}>{resetMsg}</span>}
+          <a href="/review/debug" className="rounded-md border border-gray-200 px-3 py-1.5 text-sm font-medium text-gray-500 hover:bg-gray-50">Debug</a>
+          <a href="/review" className="rounded-md border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">← Back to Review</a>
+        </div>
       </header>
 
       <main className="mx-auto max-w-5xl px-6 py-8 space-y-10">

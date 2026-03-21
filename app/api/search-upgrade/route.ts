@@ -10,6 +10,7 @@ export interface UpgradeProduct {
   price: number;
   retailer: string;
   url: string;
+  available_since: string;
   age_years: 0;
   age_months: 0;
   condition: "New";
@@ -22,29 +23,30 @@ function parsePrice(raw: string | number | undefined): number {
 }
 
 function extractBrand(title: string, fallback: string): string {
-  // Take the first 1-2 words of the title as brand if no fallback
   if (fallback && fallback.length > 0) return fallback;
   return title.split(" ").slice(0, 2).join(" ");
 }
 
 async function serpSearch(
   query: string,
-  minPrice: number,
-  maxPrice: number
+  resultIndex = 0   // which result to pick (0=first, 1=second)
 ): Promise<UpgradeProduct | null> {
-  if (!SERP_KEY) return null;
+  if (!SERP_KEY) {
+    console.log("SerpAPI: no API key — skipping");
+    return null;
+  }
   try {
-    const params = new URLSearchParams({
-      engine: "google_shopping",
-      q: query,
-      api_key: SERP_KEY,
-      num: "5",
-      tbs: `mr:1,price:1,ppr_min:${Math.round(minPrice)},ppr_max:${Math.round(maxPrice)}`,
-    });
-    const res = await fetch(`https://serpapi.com/search.json?${params}`, {
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return null;
+    const url = new URL("https://serpapi.com/search");
+    url.searchParams.set("engine", "google_shopping");
+    url.searchParams.set("q", query);
+    url.searchParams.set("api_key", SERP_KEY);
+    url.searchParams.set("num", "5");
+
+    console.log("SerpAPI searching:", query);
+    const res = await fetch(url.toString(), { signal: AbortSignal.timeout(10000) });
+    console.log("SerpAPI response status:", res.status);
+    if (!res.ok) { console.log("SerpAPI error body:", await res.text()); return null; }
+
     const data = await res.json();
     const results: Array<{
       title?: string;
@@ -53,8 +55,12 @@ async function serpSearch(
       link?: string;
       product_link?: string;
     }> = data.shopping_results ?? [];
+
+    console.log("SerpAPI results count:", results.length);
+    if (results.length > 0) console.log("SerpAPI first result:", JSON.stringify(results[0]).slice(0, 200));
+
     if (!results.length) return null;
-    const top = results[0];
+    const top = results[Math.min(resultIndex, results.length - 1)];
     const price = parsePrice(top.price);
     if (!price) return null;
     return {
@@ -64,11 +70,13 @@ async function serpSearch(
       price,
       retailer: top.source ?? "",
       url: top.link ?? top.product_link ?? "",
+      available_since: "2024 or earlier",
       age_years: 0,
       age_months: 0,
       condition: "New",
     };
-  } catch {
+  } catch (err) {
+    console.log("SerpAPI exception:", err);
     return null;
   }
 }
@@ -109,6 +117,7 @@ async function claudeFallback(
       price: parsed.price ?? approxPrice,
       retailer: parsed.retailer ?? "",
       url: parsed.url ?? "",
+      available_since: "2024 or earlier",
       age_years: 0,
       age_months: 0,
       condition: "New",
@@ -121,6 +130,7 @@ async function claudeFallback(
       price: approxPrice,
       retailer: "",
       url: "",
+      available_since: "2024 or earlier",
       age_years: 0,
       age_months: 0,
       condition: "New",
@@ -141,20 +151,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   }
 
-  const brandStr = brand ? `${brand} ` : "";
-  const midQuery = `${brandStr}${item_description} upgrade ${category ?? ""}`.trim();
-  const premQuery = `${brandStr}${item_description} premium ${category ?? ""}`.trim();
+  const brandPrefix = brand ? `${brand} ` : "";
+  const catSuffix = category ? ` ${category}` : "";
 
-  const midMin = current_price * 1.5;
-  const midMax = current_price * 2.5;
-  const premMin = current_price * 2.5;
-  const premMax = current_price * 4;
+  // Build query with 2024 date qualifier — no price range filters (they cause 0 results)
+  const baseQuery = `${brandPrefix}${item_description} 2024${catSuffix}`.trim();
+  const noBrandQuery = `${item_description} 2024${catSuffix}`.trim();
 
-  // Run both SerpAPI searches in parallel
-  const [serpMid, serpPremium] = await Promise.all([
-    serpSearch(midQuery, midMin, midMax),
-    serpSearch(premQuery, premMin, premMax),
-  ]);
+  // One search call — take result[0] as mid, result[1] as premium
+  let serpMid = await serpSearch(baseQuery, 0);
+  let serpPremium = await serpSearch(baseQuery, 1);
+
+  // Retry without brand if no results
+  if (!serpMid && brand) {
+    serpMid = await serpSearch(noBrandQuery, 0);
+    serpPremium = await serpSearch(noBrandQuery, 1);
+  }
 
   // Fall back to Claude where SerpAPI returned nothing
   const [mid, premium] = await Promise.all([

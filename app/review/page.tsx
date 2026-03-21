@@ -8,6 +8,7 @@ import { loadSession, saveSession } from "../lib/session";
 import { ClaimItem } from "../lib/types";
 import { supabase } from "../lib/supabase";
 import { formatCurrency } from "../lib/utils";
+import { useClaimMode } from "../lib/useClaimMode";
 
 // Part 5 — verify local bundle data is loaded
 console.log("Bundles loaded:", BUNDLES_DATA.length);
@@ -163,13 +164,7 @@ function Toast({ message, onDismiss }: { message: string; onDismiss: () => void 
   );
 }
 
-// ── Part 2 — Accordion Item Picker with singleton detection ───────────────────
-
-interface ConflictInfo {
-  newDesc: string;
-  existingDesc: string;
-  keyLabel: string;
-}
+// ── Part 2 + FIX 4 — Accordion Item Picker with inline singleton detection ─────
 
 function ItemPicker({
   room,
@@ -185,7 +180,8 @@ function ItemPicker({
   const sweetCode = bundles.find((b) => b.sweet_spot)?.bundle_code ?? bundles[0]?.bundle_code ?? null;
   const [openCode, setOpenCode] = useState<string | null>(sweetCode);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [conflict, setConflict] = useState<ConflictInfo | null>(null);
+  // Map from item description → conflicting item description (inline, per-row)
+  const [inlineConflicts, setInlineConflicts] = useState<Map<string, string>>(new Map());
 
   const allItemsFlat = useMemo(() => {
     const seen = new Set<string>();
@@ -204,38 +200,41 @@ function ItemPicker({
 
   function toggle(item: BundleItem) {
     const desc = item.description;
-    // Removing — always allowed
     if (selected.has(desc)) {
       setSelected((prev) => { const n = new Set(prev); n.delete(desc); return n; });
+      setInlineConflicts((prev) => { const n = new Map(prev); n.delete(desc); return n; });
       return;
     }
-    // Adding — check singleton conflict
     const sKey = getSingletonKey(desc);
     if (sKey) {
       const conflicting = allItemsFlat.find(
         (other) => other.description !== desc && selected.has(other.description) && getSingletonKey(other.description) === sKey
       );
       if (conflicting) {
-        setConflict({ newDesc: desc, existingDesc: conflicting.description, keyLabel: sKey.replace(/_/g, " ") });
+        // Show inline conflict on this row — don't add yet
+        setInlineConflicts((prev) => new Map(prev).set(desc, conflicting.description));
         return;
       }
     }
     setSelected((prev) => { const n = new Set(prev); n.add(desc); return n; });
   }
 
-  function selectAll(bundle: Bundle) {
-    setSelected((prev) => { const n = new Set(prev); bundle.items.forEach((i) => n.add(i.description)); return n; });
-  }
-
-  function resolveConflict(replace: boolean) {
-    if (!conflict) return;
+  function resolveInlineConflict(newDesc: string, existingDesc: string, replace: boolean) {
     setSelected((prev) => {
       const n = new Set(prev);
-      if (replace) n.delete(conflict.existingDesc);
-      n.add(conflict.newDesc);
+      if (replace) n.delete(existingDesc);
+      n.add(newDesc);
       return n;
     });
-    setConflict(null);
+    setInlineConflicts((prev) => { const n = new Map(prev); n.delete(newDesc); return n; });
+  }
+
+  function dismissConflict(desc: string) {
+    setInlineConflicts((prev) => { const n = new Map(prev); n.delete(desc); return n; });
+  }
+
+  function selectAll(bundle: Bundle) {
+    setSelected((prev) => { const n = new Set(prev); bundle.items.forEach((i) => n.add(i.description)); return n; });
   }
 
   return (
@@ -246,29 +245,7 @@ function ItemPicker({
       </div>
       <p className="text-sm text-gray-400 mb-4">Tap a package to expand it. Check the items you want.</p>
 
-      {/* Conflict dialog */}
-      {conflict && (
-        <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
-          <p className="text-base font-semibold text-amber-800 mb-2">
-            ⚠️ You already have a <strong>{conflict.keyLabel}</strong> selected. Replace it?
-          </p>
-          <p className="text-sm text-amber-700 mb-0.5">Currently: <em>{conflict.existingDesc}</em></p>
-          <p className="text-sm text-amber-700 mb-4">New: <em>{conflict.newDesc}</em></p>
-          <div className="flex flex-wrap gap-2">
-            <button onClick={() => resolveConflict(true)} className="min-h-[40px] rounded-lg bg-amber-700 px-4 py-2 text-sm font-bold text-white hover:bg-amber-800">
-              Replace
-            </button>
-            <button onClick={() => resolveConflict(false)} className="min-h-[40px] rounded-lg border border-amber-300 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100">
-              Keep Both
-            </button>
-            <button onClick={() => setConflict(null)} className="min-h-[40px] px-3 text-sm text-amber-600 hover:text-amber-800">
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+      <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
         {bundles.map((bundle) => {
           const isOpen = openCode === bundle.bundle_code;
           const selectedCount = bundle.items.filter((i) => selected.has(i.description)).length;
@@ -296,32 +273,54 @@ function ItemPicker({
                     {bundle.items.map((item, i) => {
                       const p = itemPlaus(item.unit_cost);
                       const isSel = selected.has(item.description);
+                      const hasConflict = inlineConflicts.has(item.description);
+                      const conflictingDesc = inlineConflicts.get(item.description);
                       const sKey = getSingletonKey(item.description);
-                      const hasConflict = !isSel && sKey !== null && allItemsFlat.some(
+                      const silentConflict = !isSel && !hasConflict && sKey !== null && allItemsFlat.some(
                         (other) => other.description !== item.description && selected.has(other.description) && getSingletonKey(other.description) === sKey
                       );
                       return (
-                        <label
-                          key={i}
-                          className={`flex items-center gap-3 rounded-lg border-2 p-3 cursor-pointer transition-colors ${isSel ? "border-[#2563EB] bg-blue-50" : "border-transparent bg-white hover:border-gray-200"}`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isSel}
-                            onChange={() => toggle(item)}
-                            className="h-5 w-5 accent-[#2563EB] shrink-0"
-                          />
-                          <span className="flex-1 text-base text-gray-900 leading-snug">
-                            {item.brand ? `${item.brand} ` : ""}{item.description}
-                          </span>
-                          {hasConflict && (
-                            <span className="text-xs text-gray-400 bg-gray-100 rounded px-1.5 py-0.5 shrink-0">
-                              Already have one
+                        <div key={i}>
+                          <label className={`flex items-center gap-3 rounded-lg border-2 p-3 cursor-pointer transition-colors ${isSel ? "border-[#2563EB] bg-blue-50" : hasConflict ? "border-amber-300 bg-amber-50" : "border-transparent bg-white hover:border-gray-200"}`}>
+                            <input
+                              type="checkbox"
+                              checked={isSel}
+                              onChange={() => toggle(item)}
+                              className="h-5 w-5 accent-[#2563EB] shrink-0"
+                            />
+                            <span className="flex-1 text-base text-gray-900 leading-snug">
+                              {item.brand ? `${item.brand} ` : ""}{item.description}
                             </span>
+                            {silentConflict && !hasConflict && (
+                              <span className="text-xs text-gray-400 bg-gray-100 rounded px-1.5 py-0.5 shrink-0">Already have one</span>
+                            )}
+                            <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${p.dot}`} title={p.label} />
+                            <span className="shrink-0 text-base font-bold tabular-nums text-gray-900">{formatCurrency(item.unit_cost)}</span>
+                          </label>
+                          {/* FIX 4: Inline singleton conflict — no modal */}
+                          {hasConflict && conflictingDesc && (
+                            <div className="mx-3 mb-1 rounded-b-lg border-x border-b border-amber-300 bg-amber-50 px-3 py-2.5">
+                              <p className="text-sm font-semibold text-amber-800 mb-1">
+                                You already have a <strong>{sKey?.replace(/_/g, " ")}</strong> selected — checking this will replace it
+                              </p>
+                              <p className="text-xs text-amber-700 mb-2 truncate">Replacing: {conflictingDesc}</p>
+                              <div className="flex gap-2">
+                                <button onClick={() => resolveInlineConflict(item.description, conflictingDesc, true)}
+                                  className="rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-amber-800">
+                                  ✓ Replace
+                                </button>
+                                <button onClick={() => resolveInlineConflict(item.description, conflictingDesc, false)}
+                                  className="rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100">
+                                  Keep Both
+                                </button>
+                                <button onClick={() => dismissConflict(item.description)}
+                                  className="px-2 text-xs text-gray-400 hover:text-gray-600">
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
                           )}
-                          <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${p.dot}`} title={p.label} />
-                          <span className="shrink-0 text-base font-bold tabular-nums text-gray-900">{formatCurrency(item.unit_cost)}</span>
-                        </label>
+                        </div>
                       );
                     })}
                   </div>
@@ -455,6 +454,7 @@ function BundlesTab({
   saving,
   onAccept,
   isPoolFull,
+  onCheckedItemsAdd,
 }: {
   room: { name: string; slug: string; display?: string };
   bundles: Bundle[];
@@ -464,16 +464,48 @@ function BundlesTab({
   saving: boolean;
   onAccept: (bundle: Bundle) => void;
   isPoolFull: boolean;
+  onCheckedItemsAdd: (items: BundleItem[]) => void;
 }) {
   const [showPicker, setShowPicker] = useState(false);
   const [plausOpen, setPlausOpen] = useState(false);
+
+  // FIX 3: locked item state — maps conceptKey → BlendedItem version that was checked
+  const [lockedVersions, setLockedVersions] = useState<Map<string, BlendedItem>>(new Map());
+  const [checkedKeys, setCheckedKeys] = useState<Set<string>>(new Set());
+  // FIX 4: per-concept inline conflict state — maps conceptKey → conflicting item description
+  const [inlineConflicts, setInlineConflicts] = useState<Map<string, string>>(new Map());
 
   const maxVal = Math.min(MAX_ROOM_ALLOC, bundles.length ? bundles[bundles.length - 1].total_value + 20_000 : MAX_ROOM_ALLOC);
   const closest = getClosestBundle(bundles, allocation);
   const isAccepted = closest ? acceptedCodes.has(closest.bundle_code) : false;
 
-  // Part 1: blended items (highest-tier version per concept within budget)
-  const blendedItems = useMemo(() => computeBlendedItems(bundles, allocation), [bundles, allocation]);
+  // FIX 3: slider-driven blended items with fallback
+  const sliderItems = useMemo(() => {
+    const result = computeBlendedItems(bundles, allocation);
+    // Fallback: if blendedItems empty (concept-key match failure), show closest bundle directly
+    if (result.length === 0 && allocation > 0 && bundles.length > 0) {
+      const fallback = getClosestBundle(bundles, allocation);
+      if (fallback) {
+        console.log("Blended items empty — using fallback bundle:", fallback.name, "items:", fallback.items.length);
+        return fallback.items.map((item) => ({
+          conceptKey: getConceptKey(item.description),
+          item,
+          bundleValue: fallback.total_value,
+          category: item.category,
+        }));
+      }
+    }
+    console.log("Blended items for allocation", allocation, ":", result.length);
+    return result;
+  }, [bundles, allocation]);
+
+  // Merge locked versions — checked items stay at their locked version regardless of slider
+  const blendedItems = useMemo(() => {
+    return sliderItems.map((bi) => {
+      const locked = lockedVersions.get(bi.conceptKey);
+      return (locked && checkedKeys.has(bi.conceptKey)) ? locked : bi;
+    });
+  }, [sliderItems, lockedVersions, checkedKeys]);
 
   // Part 4: zone info
   const zone = calcZone(bundles, allocation, maxVal);
@@ -488,6 +520,53 @@ function BundlesTab({
     }
     return Array.from(groups.entries());
   }, [blendedItems]);
+
+  // FIX 3: running total of checked items
+  const checkedItems = blendedItems.filter((bi) => checkedKeys.has(bi.conceptKey));
+  const checkedTotal = checkedItems.reduce((s, bi) => s + bi.item.total, 0);
+
+  // FIX 3 + FIX 4: checkbox toggle with inline singleton conflict
+  function toggleCheck(bi: BlendedItem) {
+    const key = bi.conceptKey;
+    if (checkedKeys.has(key)) {
+      // Uncheck
+      setCheckedKeys((prev) => { const n = new Set(prev); n.delete(key); return n; });
+      setLockedVersions((prev) => { const n = new Map(prev); n.delete(key); return n; });
+      setInlineConflicts((prev) => { const n = new Map(prev); n.delete(key); return n; });
+      return;
+    }
+    // FIX 4: singleton check
+    const sKey = getSingletonKey(bi.item.description);
+    if (sKey) {
+      const conflicting = blendedItems.find(
+        (other) => other.conceptKey !== key && checkedKeys.has(other.conceptKey) && getSingletonKey(other.item.description) === sKey
+      );
+      if (conflicting) {
+        setInlineConflicts((prev) => new Map(prev).set(key, conflicting.item.description));
+        return;
+      }
+    }
+    setCheckedKeys((prev) => new Set([...prev, key]));
+    setLockedVersions((prev) => new Map(prev).set(key, bi));
+  }
+
+  function resolveCheckConflict(biKey: string, conflictingDesc: string, replace: boolean) {
+    if (replace) {
+      // Find and uncheck the conflicting item
+      const conflictingBi = blendedItems.find((b) => b.item.description === conflictingDesc);
+      if (conflictingBi) {
+        setCheckedKeys((prev) => { const n = new Set(prev); n.delete(conflictingBi.conceptKey); return n; });
+        setLockedVersions((prev) => { const n = new Map(prev); n.delete(conflictingBi.conceptKey); return n; });
+      }
+    }
+    // Find the item being checked and lock it
+    const bi = blendedItems.find((b) => b.conceptKey === biKey);
+    if (bi) {
+      setCheckedKeys((prev) => new Set([...prev, biKey]));
+      setLockedVersions((prev) => new Map(prev).set(biKey, bi));
+    }
+    setInlineConflicts((prev) => { const n = new Map(prev); n.delete(biKey); return n; });
+  }
 
   const plausMsg = !closest ? null
     : closest.plausibility === "green" ? null
@@ -582,27 +661,88 @@ function BundlesTab({
             </div>
           )}
 
-          {/* Part 1: Category-grouped blended items with fade animation */}
-          <div className="mb-5 space-y-4">
-            {groupedItems.map(([cat, items]) => (
+          {/* FIX 3: Category-grouped blended items with checkboxes + lock state */}
+          <div className="mb-4 space-y-4">
+            {groupedItems.map(([cat, catItems]) => (
               <div key={cat}>
                 <p className="text-xs font-bold uppercase tracking-wider text-gray-300 mb-2">{cat}</p>
-                <ul className="space-y-2">
-                  {items.map((bi) => (
-                    <li
-                      key={`${bi.conceptKey}::${bi.bundleValue}`}
-                      className="item-fade-in flex items-center justify-between gap-3 text-base"
-                    >
-                      <span className="text-gray-700 leading-snug">
-                        {bi.item.brand ? `${bi.item.brand} ` : ""}{bi.item.description}
-                      </span>
-                      <span className="shrink-0 tabular-nums font-semibold text-gray-900">{formatCurrency(bi.item.total)}</span>
-                    </li>
-                  ))}
+                <ul className="space-y-1.5">
+                  {catItems.map((bi) => {
+                    const isChecked = checkedKeys.has(bi.conceptKey);
+                    const hasConflict = inlineConflicts.has(bi.conceptKey);
+                    const conflictingDesc = inlineConflicts.get(bi.conceptKey);
+                    const p = itemPlaus(bi.item.unit_cost);
+                    const sKey = getSingletonKey(bi.item.description);
+                    return (
+                      <li key={`${bi.conceptKey}::${bi.bundleValue}`}>
+                        <label className={`item-fade-in flex items-center gap-3 rounded-lg border-2 px-3 py-2.5 cursor-pointer transition-colors ${
+                          isChecked ? "border-[#2563EB] bg-blue-50" : hasConflict ? "border-amber-300 bg-amber-50" : "border-transparent bg-white hover:border-gray-200"
+                        }`}>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleCheck(bi)}
+                            className="h-5 w-5 accent-[#2563EB] shrink-0"
+                          />
+                          <span className="flex-1 text-base text-gray-800 leading-snug">
+                            {bi.item.brand ? <span className="font-medium">{bi.item.brand} </span> : null}
+                            {bi.item.description}
+                          </span>
+                          {isChecked && <span className="text-sm shrink-0" title="Locked in — stays fixed while slider moves">🔒</span>}
+                          <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${p.dot}`} title={p.label} />
+                          <span className="shrink-0 tabular-nums font-semibold text-gray-900">{formatCurrency(bi.item.total)}</span>
+                        </label>
+                        {/* FIX 4: Inline singleton conflict — on the row */}
+                        {hasConflict && conflictingDesc && (
+                          <div className="mx-1 mb-1 rounded-b-lg border-x border-b border-amber-300 bg-amber-50 px-3 py-2.5">
+                            <p className="text-sm font-semibold text-amber-800 mb-1">
+                              You already have a <strong>{sKey?.replace(/_/g, " ")}</strong> selected — checking this will replace it
+                            </p>
+                            <p className="text-xs text-amber-700 mb-2 truncate">Replacing: {conflictingDesc}</p>
+                            <div className="flex gap-2">
+                              <button onClick={() => resolveCheckConflict(bi.conceptKey, conflictingDesc, true)}
+                                className="rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-amber-800">
+                                ✓ Replace
+                              </button>
+                              <button onClick={() => resolveCheckConflict(bi.conceptKey, conflictingDesc, false)}
+                                className="rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100">
+                                Keep Both
+                              </button>
+                              <button onClick={() => setInlineConflicts((prev) => { const n = new Map(prev); n.delete(bi.conceptKey); return n; })}
+                                className="px-2 text-xs text-gray-400 hover:text-gray-600">
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ))}
           </div>
+
+          {/* FIX 3: Running total for checked items */}
+          {checkedKeys.size > 0 && (
+            <div className="mb-5 flex items-center justify-between gap-4 rounded-xl bg-blue-50 border border-blue-200 px-4 py-3">
+              <div>
+                <p className="text-sm text-blue-700">Selected: {checkedKeys.size} item{checkedKeys.size !== 1 ? "s" : ""}</p>
+                <p className="text-xl font-bold tabular-nums text-blue-900">{formatCurrency(checkedTotal)}</p>
+              </div>
+              <button
+                onClick={() => {
+                  onCheckedItemsAdd(checkedItems.map((bi) => bi.item));
+                  setCheckedKeys(new Set());
+                  setLockedVersions(new Map());
+                  setInlineConflicts(new Map());
+                }}
+                className="min-h-[44px] rounded-xl bg-[#2563EB] px-5 py-2 text-sm font-bold text-white hover:bg-blue-700 shrink-0"
+              >
+                Add Checked Items →
+              </button>
+            </div>
+          )}
 
           {/* Plausibility disclosure */}
           {plausMsg && (
@@ -682,6 +822,7 @@ function RoomRow({
   onAccept,
   onItemUpdate,
   onAllocationChange,
+  onCheckedItemsAdd,
 }: {
   room: { name: string; slug: string; display?: string };
   roomTotal: number;
@@ -694,6 +835,7 @@ function RoomRow({
   onAccept: (bundle: Bundle) => void;
   onItemUpdate: (item: ClaimItem, newPrice: number) => void;
   onAllocationChange: (roomName: string, v: number) => void;
+  onCheckedItemsAdd: (roomName: string, items: BundleItem[]) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"bundles" | "items">("bundles");
@@ -771,6 +913,7 @@ function RoomRow({
               saving={saving}
               onAccept={onAccept}
               isPoolFull={isPoolFull}
+              onCheckedItemsAdd={(items) => onCheckedItemsAdd(room.name, items)}
             />
           ) : (
             <ItemsTab items={roomItems} onUpdate={onItemUpdate} />
@@ -816,6 +959,7 @@ function ArtRow({ artAdded, onAdd }: { artAdded: boolean; onAdd: () => void }) {
 
 export default function ReviewDashboard() {
   const router = useRouter();
+  const { mode, setMode, sessionId } = useClaimMode();
 
   const [isLoading, setIsLoading] = useState(true);
   const [sessionItems, setSessionItems] = useState<ClaimItem[]>([]);
@@ -826,10 +970,19 @@ export default function ReviewDashboard() {
   const [toast, setToast] = useState<string | null>(null);
   const [artAdded, setArtAdded] = useState(false);
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => { loadData(); }, [sessionId]);
+
+  // FIX 1: debug log whenever items change
+  useEffect(() => {
+    if (sessionItems.length > 0) {
+      const total = sessionItems.reduce((s, i) => s + i.unit_cost * i.qty, 0);
+      console.log("Total from items:", total);
+      console.log("Item count:", sessionItems.length);
+    }
+  }, [sessionItems]);
 
   async function loadData() {
-    const session = await loadSession();
+    const session = await loadSession(sessionId);
     if (!session?.claim_items?.length) { router.replace("/"); return; }
 
     setSessionItems(session.claim_items);
@@ -864,12 +1017,15 @@ export default function ReviewDashboard() {
     [roomTotals, artAdded]
   );
 
-  const toDistribute = Math.max(0, TARGET - baseTotal);
+  // FIX 1: grandTotal is ONLY from claim_items — never add bundle allocations on top
+  // (bundle items are already IN claim_items when accepted, so distributed would double-count)
+  const grandTotal = baseTotal;
+
+  const toDistribute = Math.max(0, TARGET - grandTotal);
   const distributed = Object.values(roomAllocations).reduce((s, v) => s + v, 0);
   const stillToPlace = Math.max(0, toDistribute - distributed);
   const isPoolFull = stillToPlace <= 0 && distributed > 0;
   const poolPct = toDistribute > 0 ? Math.min(100, (distributed / toDistribute) * 100) : 0;
-  const grandTotal = baseTotal + distributed;
 
   // ── Handlers ─────────────────────────────────────────────────────────────
 
@@ -891,13 +1047,13 @@ export default function ReviewDashboard() {
 
       if (newItems.length > 0) {
         const updated = [...sessionItems, ...newItems];
-        await saveSession({ claim_items: updated });
+        await saveSession({ claim_items: updated }, sessionId);
         setSessionItems(updated);
       }
 
       const newAllocs = { ...roomAllocations, [roomName]: bundle.total_value };
       setRoomAllocations(newAllocs);
-      await saveSession({ room_budgets: newAllocs });
+      await saveSession({ room_budgets: newAllocs }, sessionId);
 
       setAcceptedCodes((prev) => new Set([...prev, bundle.bundle_code]));
       setAddedByRoom((prev) => ({ ...prev, [roomName]: (prev[roomName] ?? 0) + bundle.total_value }));
@@ -913,7 +1069,7 @@ export default function ReviewDashboard() {
         ? { ...ci, unit_cost: newPrice }
         : ci
     );
-    await saveSession({ claim_items: updated });
+    await saveSession({ claim_items: updated }, sessionId);
     setSessionItems(updated);
     setToast("Value updated");
   }
@@ -922,13 +1078,53 @@ export default function ReviewDashboard() {
     setRoomAllocations((prev) => ({ ...prev, [roomName]: value }));
   }
 
+  async function handleCheckedItemsAdd(roomName: string, items: BundleItem[]) {
+    const existingKeys = new Set(sessionItems.map((i) => `${i.room}::${i.description}`));
+    const newItems: ClaimItem[] = items
+      .filter((bi) => !existingKeys.has(`${roomName}::${bi.description}`))
+      .map((bi) => ({
+        room: roomName, description: bi.description, brand: bi.brand,
+        model: "", qty: bi.qty, age_years: 0, age_months: 0,
+        condition: "New", unit_cost: bi.unit_cost, category: bi.category,
+      }));
+    if (!newItems.length) { setToast("All selected items already in claim"); return; }
+    const updated = [...sessionItems, ...newItems];
+    await saveSession({ claim_items: updated }, sessionId);
+    setSessionItems(updated);
+    setToast(`${newItems.length} item${newItems.length !== 1 ? "s" : ""} added — ${formatCurrency(newItems.reduce((s, i) => s + i.unit_cost * i.qty, 0))}`);
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-white">
       <div className="mx-auto max-w-[720px] px-4 pb-36 pt-8">
+        {/* FIX 7: Test mode banner */}
+        {mode === "test" && (
+          <div className="mb-4 rounded-xl bg-orange-100 border border-orange-300 px-4 py-3 flex items-center justify-between gap-4">
+            <p className="text-sm font-bold text-orange-700">🧪 TEST MODE — safe to experiment. Changes go to test session only.</p>
+            <button onClick={() => setMode("live")} className="text-xs font-bold text-orange-700 border border-orange-400 rounded px-2 py-1 hover:bg-orange-200">
+              Switch to Live
+            </button>
+          </div>
+        )}
+
         <header className="mb-8">
-          <p className="text-sm font-semibold uppercase tracking-widest text-gray-400 mb-1">ClaimBuilder</p>
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-sm font-semibold uppercase tracking-widest text-gray-400">ClaimBuilder</p>
+            {/* FIX 7: Mode toggle */}
+            <div className="flex items-center gap-1 rounded-full bg-gray-100 p-1">
+              {(["live", "test"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  className={`rounded-full px-3 py-1 text-xs font-bold transition-colors capitalize ${mode === m ? (m === "test" ? "bg-orange-500 text-white" : "bg-[#2563EB] text-white") : "text-gray-400 hover:text-gray-600"}`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
           <h1 className="text-2xl font-bold text-gray-900">Israel Claim · #7579B726D</h1>
 
           {/* Budget Pool */}
@@ -986,6 +1182,7 @@ export default function ReviewDashboard() {
                 onAccept={(bundle) => handleAccept(room.name, bundle)}
                 onItemUpdate={handleItemUpdate}
                 onAllocationChange={handleAllocationChange}
+                onCheckedItemsAdd={handleCheckedItemsAdd}
               />
             ))}
             <ArtRow artAdded={artAdded} onAdd={() => { setArtAdded(true); setToast("Art collection placeholder added — $300,000"); }} />
@@ -1004,17 +1201,11 @@ export default function ReviewDashboard() {
             </div>
             <a
               href="/api/export-xact"
-              className={`min-h-[48px] flex items-center rounded-xl px-5 py-2.5 text-base font-bold transition-colors ${
-                grandTotal >= TARGET * 0.9 ? "bg-[#16A34A] text-white hover:bg-green-700" : "bg-gray-100 text-gray-400 pointer-events-none"
-              }`}
-              onClick={(e) => { if (grandTotal < TARGET * 0.9) e.preventDefault(); }}
+              className="min-h-[48px] flex items-center rounded-xl px-5 py-2.5 text-base font-bold bg-[#16A34A] text-white hover:bg-green-700 transition-colors"
             >
               Download Claim
             </a>
           </div>
-          {grandTotal < TARGET * 0.9 && (
-            <p className="mt-1 text-xs text-gray-400 text-right">Unlocks at {formatCurrency(TARGET * 0.9)}</p>
-          )}
         </div>
       </div>
 

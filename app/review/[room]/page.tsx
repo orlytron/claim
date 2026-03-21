@@ -222,10 +222,19 @@ function ItemCard({
   const isCustomPos = pos === 3;
   const customValid = customDesc.trim().length > 0 && parseFloat(customPrice) > 0;
 
-  // When opened, kick off the API call immediately
-  async function handleOpen() {
+  // Open the toggle — just show it, don't fire API yet
+  function handleOpen() {
     setOpen(true);
     setPos(0);
+  }
+
+  function handleClose() {
+    setOpen(false);
+    setPos(0);
+  }
+
+  // FIX 5: API fires lazily when user selects position 1 or 2
+  async function fetchUpgrades() {
     if (upgradeResult || upgradeLoading) return;
     setUpgradeLoading(true);
     setUpgradeError(false);
@@ -240,19 +249,23 @@ function ItemCard({
           category: item.category,
         }),
       });
-      if (!res.ok) throw new Error();
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { mid: UpgradeProduct; premium: UpgradeProduct };
       setUpgradeResult(data);
-    } catch {
+    } catch (err) {
+      console.error("Upgrade search failed:", err);
       setUpgradeError(true);
     } finally {
       setUpgradeLoading(false);
     }
   }
 
-  function handleClose() {
-    setOpen(false);
-    setPos(0);
+  function handlePositionChange(newPos: number) {
+    setPos(newPos);
+    // Fire API when user first moves to an upgrade position
+    if ((newPos === 1 || newPos === 2) && !upgradeResult && !upgradeLoading) {
+      fetchUpgrades();
+    }
   }
 
   // Build the 4-option list (mid/premium slots may be loading placeholders)
@@ -301,7 +314,7 @@ function ItemCard({
             <div className="py-4 text-center">
               <p className="text-sm text-red-500 mb-2">Could not load upgrade suggestions</p>
               <button
-                onClick={() => { setUpgradeResult(null); setUpgradeError(false); setUpgradeLoading(false); handleOpen(); }}
+                onClick={() => { setUpgradeResult(null); setUpgradeError(false); fetchUpgrades(); }}
                 className="text-sm text-[#2563EB] hover:underline"
               >Retry</button>
             </div>
@@ -336,11 +349,12 @@ function ItemCard({
             {prod.model && <p className="text-sm text-gray-400 mb-1">{prod.model}</p>}
             <p className="text-2xl font-bold tabular-nums text-gray-900 my-2">{formatCurrency(prod.price)}</p>
             {item.qty > 1 && <p className="text-sm text-gray-400 mb-2">× {item.qty} = {formatCurrency(prod.price * item.qty)}</p>}
-            {prod.retailer && <p className="text-sm text-gray-500">@ {prod.retailer}</p>}
+            {prod.retailer && <p className="text-sm text-gray-500 mb-0.5">@ {prod.retailer}</p>}
+            <p className="text-xs text-gray-400 mb-1">Available as of 2024</p>
             {prod.url && (
               <a href={prod.url} target="_blank" rel="noopener noreferrer"
-                className="mt-1 inline-block text-sm text-[#2563EB] underline hover:text-blue-800">
-                View ↗
+                className="mt-1 inline-block text-sm font-medium text-blue-600 underline hover:text-blue-800">
+                View at {prod.retailer || "retailer"} ↗
               </a>
             )}
           </div>
@@ -433,7 +447,7 @@ function ItemCard({
           {/* Position nav */}
           <div className="flex items-stretch gap-2 mb-4">
             <button
-              onClick={() => setPos((p) => Math.max(0, p - 1))}
+              onClick={() => handlePositionChange(Math.max(0, pos - 1))}
               disabled={pos === 0}
               className="text-2xl text-gray-300 disabled:opacity-20 hover:text-gray-600 px-1 self-center"
             >◀</button>
@@ -446,7 +460,7 @@ function ItemCard({
             </div>
 
             <button
-              onClick={() => setPos((p) => Math.min(TOTAL_POSITIONS - 1, p + 1))}
+              onClick={() => handlePositionChange(Math.min(TOTAL_POSITIONS - 1, pos + 1))}
               disabled={pos === TOTAL_POSITIONS - 1}
               className="text-2xl text-gray-300 disabled:opacity-20 hover:text-gray-600 px-1 self-center"
             >▶</button>
@@ -457,7 +471,7 @@ function ItemCard({
             {(["Original", "Mid", "Premium", "+"] as const).map((lbl, i) => (
               <button
                 key={i}
-                onClick={() => setPos(i)}
+                onClick={() => handlePositionChange(i)}
                 className="flex flex-col items-center gap-1"
               >
                 <span className={`h-2.5 w-2.5 rounded-full transition-colors ${i === pos ? "bg-[#2563EB]" : "bg-gray-200"}`} />
