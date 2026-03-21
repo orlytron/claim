@@ -1,316 +1,502 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { BUNDLES_DATA } from "../../lib/bundles-data";
 import { loadSession, saveSession, SessionData } from "../../lib/session";
 import { supabase } from "../../lib/supabase";
 import { ClaimItem } from "../../lib/types";
 import { useClaimMode } from "../../lib/useClaimMode";
 import { generateItemId, slugify, formatCurrency } from "../../lib/utils";
-import { RoomUpgradeRow, type UpgradeOption } from "./upgrade-row";
+import {
+  SUGGESTED_ADDITIONS,
+  suggestionAlreadyInClaim,
+  type SuggestedAdditionRow,
+} from "./suggested-additions";
 
-// ── Slug → room name ──────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const SLUG_TO_ROOM: Record<string, string> = {
   "living-room": "Living Room",
-  "kitchen": "Kitchen",
+  kitchen: "Kitchen",
   "bedroom-rafe": "Bedroom Rafe",
   "bedroom-orly": "Bedroom Orly",
-  "patio": "Patio",
-  "garage": "Garage",
+  patio: "Patio",
+  garage: "Garage",
   "bathroom-white": "Bathroom White",
   "bathroom-master": "Bathroom Master",
   "david-office-guest-room": "David Office / Guest Room",
-  "art": "Art",
+  art: "Art",
 };
 
-// ── Category bundles (hard-coded) ─────────────────────────────────────────────
+const DEFAULT_ROOM_TARGETS: Record<string, number> = {
+  "Living Room": 350_000,
+  Kitchen: 200_000,
+  "David Office / Guest Room": 220_000,
+  "Bedroom Orly": 120_000,
+  "Bedroom Rafe": 110_000,
+  Patio: 80_000,
+  Garage: 120_000,
+  "Bathroom Master": 60_000,
+  "Bathroom White": 40_000,
+  Art: 300_000,
+};
 
-interface CategoryBundle {
-  name: string;
-  description: string;
-  items_affected: string[];
-  upgrade_value: number;
-  original_value: number;
-  brand: string;
-  note: string;
+/** Persisted array of stable row keys — see lockKeyForItem / lockKeyForSuggestion */
+const LS_LOCKED = "lockedItems";
+const LS_ROOM_GOALS = "claimbuilder_room_targets_v1";
+
+function norm(s: string): string {
+  return s.trim().toLowerCase();
 }
 
-const CATEGORY_UPGRADES: Record<string, CategoryBundle[]> = {
-  "Living Room": [
-    {
-      name: "Tea & Ceramic Collection",
-      description: "Upgrade all ceramic and decorative items as a set",
-      items_affected: ["Bowl with food", "Matcha tea container", "Ceramic tea pot", "Tea bowls", "Black Vase", "Heath Ceramics Vase", "Beige Vase", "Rose Quartz", "Decorative Bowl with spheres", "Vase"],
-      upgrade_value: 4200, original_value: 1307,
-      brand: "Heath Ceramics + Dinosaur Designs + Jicon",
-      note: "Coherent upgrade of all ceramic and decorative objects as a curated collection",
-    },
-    {
-      name: "Seating Upgrade",
-      description: "Upgrade sofa and armchair as a set",
-      items_affected: ["8ft RH Maxwell Sofa", "George Smith Scroll Armchair"],
-      upgrade_value: 33500, original_value: 13100,
-      brand: "B&B Italia + George Smith",
-      note: "Complete seating upgrade to Italian/British luxury tier",
-    },
-    {
-      name: "Dining Room Set",
-      description: "Upgrade table and chairs together",
-      items_affected: ["Wooden Dining Table", "Dining Chairs", "Pearl inlaid wood side table"],
-      upgrade_value: 47800, original_value: 8300,
-      brand: "Minotti + de la Espada",
-      note: "Complete dining room upgrade",
-    },
-    {
-      name: "Art Books Collection",
-      description: "Upgrade to Assouline luxury editions",
-      items_affected: ["Art books"],
-      upgrade_value: 15000, original_value: 9000,
-      brand: "Assouline",
-      note: "Upgrade to premium art book publisher",
-    },
-    {
-      name: "Piano Upgrade",
-      description: "Standup to quality upright",
-      items_affected: ["Standup piano"],
-      upgrade_value: 9500, original_value: 3000,
-      brand: "Yamaha",
-      note: "Like-kind upgrade to professional grade",
-    },
-  ],
-  "Kitchen": [
-    {
-      name: "Matcha Ritual Set",
-      description: "Complete matcha preparation upgrade",
-      items_affected: ["Matcha tea container", "matcha whisk", "ceramic teapot", "Ceramic Teapot"],
-      upgrade_value: 2800, original_value: 685,
-      brand: "Jicon + Ippodo",
-      note: "Coherent upgrade of matcha ritual items",
-    },
-    {
-      name: "Kitchen Essentials",
-      description: "Cookware, knives, and small appliances",
-      items_affected: ["Air Fryer", "Nugget Ice Machine"],
-      upgrade_value: 12500, original_value: 500,
-      brand: "All-Clad + Breville + Vitamix",
-      note: "Complete kitchen cooking essentials",
-    },
-    {
-      name: "Table Setting Collection",
-      description: "Dinnerware, placemats, and serving pieces",
-      items_affected: ["East Fork salad bowls", "Chilewich placemats", "Ceramic Bowl"],
-      upgrade_value: 4800, original_value: 879,
-      brand: "Mud Australia + Chilewich",
-      note: "Coherent table setting upgrade",
-    },
-  ],
-  "Bedroom Orly": [
-    {
-      name: "Sony Camera System",
-      description: "Complete Sony lens and accessory kit",
-      items_affected: ["Sony a6100 camera", "Sony a6600 camera", "Sony a6000 camera", "Sony A7sii batteries"],
-      upgrade_value: 18500, original_value: 2660,
-      brand: "Sony",
-      note: "Complete Sony ecosystem upgrade with lenses and accessories",
-    },
-    {
-      name: "Audio Production Kit",
-      description: "Upgrade microphones and audio gear",
-      items_affected: ["Sennheiser shotgun mic", "Sennheiser directional mic"],
-      upgrade_value: 3800, original_value: 1400,
-      brand: "Sennheiser + Rode",
-      note: "Professional audio production upgrade",
-    },
-  ],
-  "Bedroom Rafe": [
-    {
-      name: "Sports Memorabilia Display",
-      description: "Museum-quality display for all memorabilia",
-      items_affected: ["Carmelo Anthony Signed Game-Worn Nuggets Jersey", "Autographed Sports Memorabilia", "Jerseys"],
-      upgrade_value: 12000, original_value: 7675,
-      brand: "Custom museum framing",
-      note: "Professional display upgrade for entire memorabilia collection",
-    },
-    {
-      name: "Baseball Card Collection",
-      description: "1994 complete DeBasel print run",
-      items_affected: [],
-      upgrade_value: 14000, original_value: 0,
-      brand: "DeBasel",
-      note: "Addition — 1994 MLB complete print run all major sets",
-    },
-  ],
-  "Garage": [
-    {
-      name: "Surf Kit Upgrade",
-      description: "Boards, wetsuits, and storage",
-      items_affected: ["Surf boards", "Surf board wax", "wet suits", "flippers", "Snorkel"],
-      upgrade_value: 8500, original_value: 1357,
-      brand: "Channel Islands + O'Neill",
-      note: "Complete surf kit upgrade",
-    },
-    {
-      name: "Tennis Collection",
-      description: "Racquets, bag, and accessories",
-      items_affected: ["Tennis racquets", "tennis racquet strings", "tennis balls", "Wilson tennis racquet bag"],
-      upgrade_value: 2800, original_value: 807,
-      brand: "Wilson",
-      note: "Complete tennis kit upgrade",
-    },
-    {
-      name: "Cycling Kit",
-      description: "E-bikes, helmets, locks, and bags",
-      items_affected: ["Electric bicycle", "Bike helmet", "bicycle bag", "Litelok bike lock"],
-      upgrade_value: 16000, original_value: 7791,
-      brand: "Specialized + Litelok",
-      note: "Complete cycling kit upgrade",
-    },
-  ],
+function readLocked(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(LS_LOCKED);
+    const p = raw ? JSON.parse(raw) : [];
+    return Array.isArray(p) ? p.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocked(keys: string[]) {
+  localStorage.setItem(LS_LOCKED, JSON.stringify(keys));
+}
+
+function readRoomGoals(): Record<string, Record<string, number>> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(LS_ROOM_GOALS);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeRoomGoal(sessionId: string, room: string, value: number) {
+  const all = readRoomGoals();
+  all[sessionId] = { ...all[sessionId], [room]: value };
+  localStorage.setItem(LS_ROOM_GOALS, JSON.stringify(all));
+}
+
+function readRoomGoal(sessionId: string, room: string): number | null {
+  const v = readRoomGoals()[sessionId]?.[room];
+  return typeof v === "number" && v > 0 ? v : null;
+}
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export type UpgradeOption = {
+  label: string;
+  price: number;
+  title: string;
+  brand: string;
+  model: string;
+  retailer: string;
+  url: string;
 };
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+type UpgradeProduct = {
+  title: string;
+  brand: string;
+  model: string;
+  price: number;
+  retailer: string;
+  url: string;
+};
+
+// ── UI bits ───────────────────────────────────────────────────────────────────
 
 function SmallSpinner() {
   return (
-    <svg className="h-4 w-4 animate-spin text-[#2563EB]" fill="none" viewBox="0 0 24 24">
+    <svg className="h-5 w-5 animate-spin text-[#2563EB]" fill="none" viewBox="0 0 24 24">
       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
     </svg>
   );
 }
 
-// ── Category Upgrades section ─────────────────────────────────────────────────
+function LockButton({ locked, onToggle }: { locked: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="shrink-0 rounded-lg border border-gray-200 p-2 text-lg leading-none hover:bg-gray-50"
+      title={locked ? "Unlock row" : "Lock row"}
+      aria-pressed={locked}
+    >
+      {locked ? "🔒" : "🔓"}
+    </button>
+  );
+}
 
-function CategoryUpgradesSection({
-  roomName,
-  items,
-  appliedBundles,
+// ── Right column: existing item + cache ────────────────────────────────────────
+
+function ExistingUpgradePanel({
+  item,
+  locked,
+  cacheHas,
   onApply,
 }: {
-  roomName: string;
-  items: ClaimItem[];
-  appliedBundles: Set<string>;
-  onApply: (bundle: CategoryBundle) => void;
+  item: ClaimItem;
+  locked: boolean;
+  cacheHas: boolean;
+  onApply: (option: UpgradeOption) => Promise<void>;
 }) {
-  const bundles = CATEGORY_UPGRADES[roomName];
-  const [openBundle, setOpenBundle] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState<{ mid: UpgradeProduct; premium: UpgradeProduct } | null>(null);
+  const [choice, setChoice] = useState<"keep" | "mid" | "premium" | "custom">("keep");
+  const [customDesc, setCustomDesc] = useState("");
+  const [customPrice, setCustomPrice] = useState("");
+  const [applying, setApplying] = useState(false);
 
-  if (!bundles?.length) return null;
+  useEffect(() => {
+    if (item.source === "upgrade" && item.pre_upgrade_item) setChoice("mid");
+    else setChoice("keep");
+    setCustomDesc(item.description);
+  }, [item.source, item.pre_upgrade_item, item.description, item.unit_cost]);
+
+  useEffect(() => {
+    if (!cacheHas || locked) return;
+    let cancelled = false;
+    const descForApi =
+      item.source === "upgrade" ? item.description : item.pre_upgrade_item?.description ?? item.description;
+    const priceForApi =
+      item.source === "upgrade" ? item.unit_cost : item.pre_upgrade_item?.unit_cost ?? item.unit_cost;
+    (async () => {
+      setLoading(true);
+      try {
+        const res = await fetch("/api/search-upgrade", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            item_description: descForApi,
+            brand: item.brand || "",
+            current_price: priceForApi,
+            category: item.category || "",
+          }),
+        });
+        if (!res.ok) throw new Error("fetch");
+        const j = (await res.json()) as { mid: UpgradeProduct; premium: UpgradeProduct };
+        if (!cancelled) setData(j);
+      } catch {
+        if (!cancelled) setData(null);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    cacheHas,
+    locked,
+    item.brand,
+    item.category,
+    item.description,
+    item.unit_cost,
+    item.source,
+    item.pre_upgrade_item?.description,
+    item.pre_upgrade_item?.unit_cost,
+  ]);
+
+  const customOk = customDesc.trim().length > 0 && parseFloat(customPrice) > 0;
+
+  async function apply() {
+    if (choice === "keep") return;
+    if (choice === "custom") {
+      if (!customOk) return;
+      await onApply({
+        label: "Custom",
+        price: parseFloat(customPrice),
+        title: customDesc.trim(),
+        brand: item.brand,
+        model: "",
+        retailer: "",
+        url: "",
+      });
+      return;
+    }
+    if (!data) return;
+    const p = choice === "mid" ? data.mid : data.premium;
+    await onApply({
+      label: choice === "mid" ? "Mid" : "Premium",
+      price: p.price,
+      title: p.title,
+      brand: p.brand,
+      model: p.model,
+      retailer: p.retailer,
+      url: p.url,
+    });
+  }
+
+  if (locked) {
+    return (
+      <div className="rounded-xl border border-blue-100 bg-[#EFF6FF] p-4 text-base text-gray-600">
+        Locked — unlock to change upgrade options.
+      </div>
+    );
+  }
+
+  if (!cacheHas) return null;
 
   return (
-    <div className="mb-6 rounded-2xl border border-gray-200 bg-gray-50 p-4">
-      <p className="mb-3 text-sm font-bold uppercase tracking-wider text-gray-400">
-        Category Upgrades
-      </p>
-      <div className="flex flex-wrap gap-2 mb-3">
-        {bundles.map((b) => {
-          const uplift = b.upgrade_value - b.original_value;
-          const applied = appliedBundles.has(b.name);
-          const active = openBundle === b.name;
-          return (
-            <button
-              key={b.name}
-              onClick={() => setOpenBundle(active ? null : b.name)}
-              className={`rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
-                applied
-                  ? "border-green-300 bg-green-50 text-green-700"
-                  : active
-                  ? "border-[#2563EB] bg-blue-50 text-[#2563EB]"
-                  : "border-gray-200 bg-white text-gray-600 hover:border-gray-300"
-              }`}
-            >
-              {applied ? "✓ " : ""}{b.name}{" "}
-              <span className={applied ? "text-green-500" : "text-gray-400"}>
-                +{formatCurrency(uplift)}
+    <div className="rounded-xl border border-gray-200 bg-[#F0F7FF] p-4 space-y-4 text-base min-h-[120px]">
+      {loading ? (
+        <div className="flex items-center gap-2 text-gray-500 py-6">
+          <SmallSpinner /> Loading suggestions…
+        </div>
+      ) : (
+        <>
+          {!(item.source === "upgrade" && item.pre_upgrade_item) && (
+            <label className="flex gap-3 cursor-pointer items-start">
+              <input type="radio" className="mt-1.5" checked={choice === "keep"} onChange={() => setChoice("keep")} />
+              <span>
+                <span className="font-semibold text-gray-900">Keep original</span>
+                <span className="block tabular-nums text-gray-700">{formatCurrency(item.unit_cost)}</span>
               </span>
-            </button>
-          );
-        })}
-      </div>
+            </label>
+          )}
+          {item.source === "upgrade" && item.pre_upgrade_item && (
+            <p className="text-sm text-gray-600 pb-2 border-b border-gray-200">
+              Choose a different upgrade below, or use <span className="font-medium">revert</span> on the left.
+            </p>
+          )}
 
-      {openBundle && (() => {
-        const bundle = bundles.find((b) => b.name === openBundle)!;
-        const uplift = bundle.upgrade_value - bundle.original_value;
-        const applied = appliedBundles.has(bundle.name);
-        const affectedItems = items.filter((item) =>
-          bundle.items_affected.some(
-            (a) => item.description.toLowerCase().includes(a.toLowerCase()) || a.toLowerCase().includes(item.description.toLowerCase())
-          )
-        );
-        return (
-          <div className="rounded-xl border border-blue-100 bg-white p-4">
-            <div className="flex items-start justify-between gap-3 mb-3">
-              <div>
-                <h3 className="text-base font-bold text-gray-900">{bundle.name}</h3>
-                <p className="text-sm text-gray-500 mt-0.5">{bundle.description}</p>
+          {data && (
+            <>
+              <label className="flex gap-3 cursor-pointer items-start">
+                <input type="radio" className="mt-1.5" checked={choice === "mid"} onChange={() => setChoice("mid")} />
+                <span className="min-w-0">
+                  <span className="font-semibold text-gray-900">Mid upgrade</span>
+                  <p className="text-gray-800 mt-1 leading-snug">{data.mid.title}</p>
+                  <p className="text-sm text-gray-500 mt-0.5">{data.mid.brand}{data.mid.retailer ? ` · ${data.mid.retailer}` : ""}</p>
+                  <p className="font-bold tabular-nums mt-1">{formatCurrency(data.mid.price)}</p>
+                  <a href={data.mid.url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 underline">
+                    View ↗
+                  </a>
+                </span>
+              </label>
+              <label className="flex gap-3 cursor-pointer items-start">
+                <input type="radio" className="mt-1.5" checked={choice === "premium"} onChange={() => setChoice("premium")} />
+                <span className="min-w-0">
+                  <span className="font-semibold text-gray-900">Premium upgrade</span>
+                  <p className="text-gray-800 mt-1 leading-snug">{data.premium.title}</p>
+                  <p className="text-sm text-gray-500 mt-0.5">{data.premium.brand}{data.premium.retailer ? ` · ${data.premium.retailer}` : ""}</p>
+                  <p className="font-bold tabular-nums mt-1">{formatCurrency(data.premium.price)}</p>
+                  <a href={data.premium.url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 underline">
+                    View ↗
+                  </a>
+                </span>
+              </label>
+            </>
+          )}
+
+          <label className="flex gap-3 cursor-pointer items-start">
+            <input type="radio" className="mt-1.5" checked={choice === "custom"} onChange={() => setChoice("custom")} />
+            <span className="flex-1 space-y-2">
+              <span className="font-semibold text-gray-900">Custom</span>
+              <input
+                type="text"
+                value={customDesc}
+                onChange={(e) => setCustomDesc(e.target.value)}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2"
+                placeholder="Description"
+              />
+              <div className="flex items-center gap-2">
+                <span className="text-gray-400">$</span>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={customPrice}
+                  onChange={(e) => setCustomPrice(e.target.value)}
+                  className="flex-1 rounded-lg border border-gray-200 px-3 py-2"
+                  placeholder="Price"
+                />
               </div>
-              <div className="shrink-0 text-right">
-                <p className="text-xl font-bold tabular-nums text-gray-900">+{formatCurrency(uplift)}</p>
-                <p className="text-xs text-gray-400">{formatCurrency(bundle.original_value)} → {formatCurrency(bundle.upgrade_value)}</p>
-              </div>
-            </div>
-            {bundle.brand && (
-              <p className="text-sm text-gray-500 mb-3"><span className="font-medium">Brand: </span>{bundle.brand}</p>
-            )}
-            {affectedItems.length > 0 && (
-              <div className="mb-3">
-                <p className="text-xs font-medium text-gray-400 mb-1.5">Items affected:</p>
-                <ul className="space-y-1">
-                  {affectedItems.map((item, i) => (
-                    <li key={i} className="flex items-center justify-between text-sm text-gray-600">
-                      <span className="truncate mr-2">{item.description}</span>
-                      <span className="shrink-0 tabular-nums text-gray-400">{formatCurrency(item.unit_cost * item.qty)}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {bundle.items_affected.length === 0 && (
-              <p className="mb-3 text-sm text-gray-500 italic">This is a new addition — no existing items affected.</p>
-            )}
-            <p className="mb-4 text-sm italic text-gray-500">&ldquo;{bundle.note}&rdquo;</p>
-            <div className="flex items-center gap-3">
-              {applied ? (
-                <span className="text-sm font-medium text-green-600">✓ Applied</span>
-              ) : (
-                <button
-                  onClick={() => { onApply(bundle); setOpenBundle(null); }}
-                  className="min-h-[44px] rounded-xl bg-[#16A34A] px-5 py-2.5 text-sm font-bold text-white transition-colors hover:bg-green-700"
-                >
-                  ✓ Apply Category Upgrade
-                </button>
-              )}
-              <button onClick={() => setOpenBundle(null)} className="text-sm text-gray-400 hover:text-gray-600">
-                ✗ Cancel
-              </button>
-            </div>
-          </div>
-        );
-      })()}
+            </span>
+          </label>
+
+          <button
+            type="button"
+            disabled={
+              applying ||
+              (item.source !== "upgrade" && choice === "keep") ||
+              (choice === "custom" && !customOk) ||
+              (choice !== "custom" && choice !== "keep" && !data)
+            }
+            onClick={() => {
+              setApplying(true);
+              void apply().finally(() => setApplying(false));
+            }}
+            className="w-full min-h-[48px] rounded-xl bg-[#16A34A] font-bold text-white hover:bg-green-700 disabled:opacity-40"
+          >
+            {applying ? "Saving…" : "✓ Apply"}
+          </button>
+        </>
+      )}
     </div>
   );
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
+function NoCacheUpgradePanel({
+  locked,
+  item,
+  onAddCustom,
+}: {
+  locked: boolean;
+  item: ClaimItem;
+  onAddCustom: (price: number, title: string, brand: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [price, setPrice] = useState("");
+  const [title, setTitle] = useState(item.description);
+  const [brand, setBrand] = useState(item.brand || "");
+  const [saving, setSaving] = useState(false);
+
+  if (locked) {
+    return (
+      <div className="rounded-xl border border-blue-100 bg-[#EFF6FF] p-4 text-base text-gray-600">
+        Locked — unlock to add a custom replacement.
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-dashed border-gray-300 bg-[#F0F7FF] p-4 text-base text-gray-600">
+      <p className="mb-3">(no upgrade available)</p>
+      {!open ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="text-[#2563EB] font-semibold underline"
+        >
+          + Add custom replacement
+        </button>
+      ) : (
+        <div className="space-y-2">
+          <input className="w-full rounded-lg border px-3 py-2" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Description" />
+          <input className="w-full rounded-lg border px-3 py-2" value={brand} onChange={(e) => setBrand(e.target.value)} placeholder="Brand (optional)" />
+          <div className="flex gap-2 items-center">
+            <span>$</span>
+            <input type="number" className="flex-1 rounded-lg border px-3 py-2" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Price" />
+          </div>
+          <button
+            type="button"
+            disabled={saving || !title.trim() || parseFloat(price) <= 0}
+            onClick={() => {
+              setSaving(true);
+              void onAddCustom(parseFloat(price), title.trim(), brand.trim()).finally(() => setSaving(false));
+            }}
+            className="rounded-lg bg-[#16A34A] px-4 py-2 font-bold text-white disabled:opacity-40"
+          >
+            Save replacement
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SuggestedAdditionPanel({
+  row,
+  locked,
+  onAdd,
+  onSkip,
+}: {
+  row: SuggestedAdditionRow;
+  locked: boolean;
+  onAdd: (option: "mid" | "premium") => Promise<void>;
+  onSkip: () => void;
+}) {
+  const [choice, setChoice] = useState<"mid" | "premium" | "none">("none");
+
+  if (locked) {
+    return (
+      <div className="rounded-xl border border-blue-100 bg-[#EFF6FF] p-4 text-base text-gray-600">Locked</div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-[#F0F7FF] p-4 space-y-3 text-base">
+      <label className="flex gap-3 cursor-pointer items-start">
+        <input type="radio" className="mt-1.5" checked={choice === "mid"} onChange={() => setChoice("mid")} />
+        <span>
+          <span className="font-semibold text-gray-900">{row.label}</span>
+          <p className="text-gray-800 mt-1">{row.mid.title}</p>
+          <p className="font-bold tabular-nums mt-1">{formatCurrency(row.mid.price)}</p>
+          <a href={row.mid.url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 underline">
+            View ↗
+          </a>
+        </span>
+      </label>
+      <label className="flex gap-3 cursor-pointer items-start">
+        <input type="radio" className="mt-1.5" checked={choice === "premium"} onChange={() => setChoice("premium")} />
+        <span>
+          <span className="font-semibold text-gray-900">{row.label} (premium)</span>
+          <p className="text-gray-800 mt-1">{row.premium.title}</p>
+          <p className="font-bold tabular-nums mt-1">{formatCurrency(row.premium.price)}</p>
+          <a href={row.premium.url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 underline">
+            View ↗
+          </a>
+        </span>
+      </label>
+      <label className="flex gap-3 cursor-pointer items-start">
+        <input type="radio" className="mt-1.5" checked={choice === "none"} onChange={() => setChoice("none")} />
+        <span className="font-semibold text-gray-900">Don&apos;t add</span>
+      </label>
+      <button
+        type="button"
+        disabled={choice === "none"}
+        onClick={() => {
+          if (choice === "mid" || choice === "premium") void onAdd(choice);
+        }}
+        className="w-full min-h-[48px] rounded-xl bg-[#16A34A] font-bold text-white disabled:opacity-40"
+      >
+        ✓ Apply
+      </button>
+      <button type="button" onClick={onSkip} className="text-sm text-gray-500 underline">
+        Skip this row
+      </button>
+    </div>
+  );
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function RoomReviewPage() {
   const params = useParams<{ room: string }>();
   const roomSlug = params.room;
+  const { sessionId, hydrated } = useClaimMode();
 
   const [session, setSession] = useState<SessionData | null>(null);
   const [roomName, setRoomName] = useState("");
   const [items, setItems] = useState<ClaimItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [allRooms, setAllRooms] = useState<string[]>([]);
-  const [appliedBundles, setAppliedBundles] = useState<Set<string>>(new Set());
   const [isSaving, setIsSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [cacheKeySet, setCacheKeySet] = useState<Set<string>>(new Set());
-  const [addSectionOpen, setAddSectionOpen] = useState(false);
+  const [cachedDescs, setCachedDescs] = useState<Set<string>>(new Set());
+  const [lockedKeys, setLockedKeys] = useState<string[]>([]);
+  const [roomTarget, setRoomTarget] = useState(0);
+  const [editTarget, setEditTarget] = useState(false);
+  const [targetInput, setTargetInput] = useState("");
+  const [skippedSuggestions, setSkippedSuggestions] = useState<Set<string>>(new Set());
+  const [sliderSnapIndex, setSliderSnapIndex] = useState(0);
 
-  const { sessionId, hydrated } = useClaimMode();
+  const bundleSnapValues = useMemo(() => {
+    const vals = BUNDLES_DATA.filter((b) => b.room === roomName).map((b) => b.total_value);
+    const u = Array.from(new Set(vals)).sort((a, b) => a - b);
+    return [0, ...u];
+  }, [roomName]);
+
+  useEffect(() => {
+    setLockedKeys(readLocked());
+  }, []);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -320,47 +506,131 @@ export default function RoomReviewPage() {
   async function bootstrap() {
     setIsLoading(true);
     setItems([]);
-    setAppliedBundles(new Set());
-
     const sess = await loadSession(sessionId);
     setSession(sess);
-    if (!sess?.claim_items?.length) {
+    const claimItems = sess?.claim_items ?? [];
+    if (!sess) {
+      const fallbackName = SLUG_TO_ROOM[roomSlug] ?? "";
+      setRoomName(fallbackName);
+      setItems([]);
+      if (fallbackName) {
+        const def = DEFAULT_ROOM_TARGETS[fallbackName] ?? 0;
+        setRoomTarget(readRoomGoal(sessionId, fallbackName) ?? def);
+      }
       setIsLoading(false);
       return;
     }
-
-    const rooms = sess.room_summary?.map((r) => r.room) ?? [...new Set(sess.claim_items.map((i) => i.room))];
+    const rooms = sess.room_summary?.map((r) => r.room) ?? [...new Set(claimItems.map((i) => i.room))];
     setAllRooms(rooms);
-
     const name = SLUG_TO_ROOM[roomSlug] ?? rooms.find((r) => slugify(r) === roomSlug) ?? "";
     setRoomName(name);
     if (!name) {
       setIsLoading(false);
       return;
     }
+    const roomItems = claimItems.filter((i) => i.room === name);
+    setItems(roomItems);
 
-    setItems(sess.claim_items.filter((i) => i.room === name));
+    const storedGoal = readRoomGoal(sessionId, name);
+    const def = DEFAULT_ROOM_TARGETS[name] ?? 0;
+    setRoomTarget(storedGoal ?? def);
 
+    const descriptions = roomItems.map((i) => i.pre_upgrade_item?.description ?? i.description);
+    const params = new URLSearchParams();
+    params.set("room", name);
+    descriptions.forEach((d) => params.append("desc", d));
     try {
-      const r = await fetch("/api/upgrade-cache-status");
-      const j = (await r.json()) as { keys?: string[] };
-      setCacheKeySet(new Set(j.keys ?? []));
+      const r = await fetch(`/api/upgrade-cache-status?${params.toString()}`);
+      const j = (await r.json()) as { cached?: string[] };
+      setCachedDescs(new Set((j.cached ?? []).map(norm)));
     } catch {
-      setCacheKeySet(new Set());
+      setCachedDescs(new Set());
     }
-
     setIsLoading(false);
   }
 
-  // ── Upgrade: replace item with selected option ────────────────────────────
+  const sortedItems = useMemo(
+    () => [...items].sort((a, b) => b.unit_cost - a.unit_cost),
+    [items]
+  );
 
-  async function handleUpgrade(item: ClaimItem, option: UpgradeOption) {
+  const missingSuggestions = useMemo(() => {
+    const list = SUGGESTED_ADDITIONS[roomName] ?? [];
+    return list.filter(
+      (s) => !suggestionAlreadyInClaim(items, s.label) && !skippedSuggestions.has(s.id)
+    );
+  }, [roomName, items, skippedSuggestions]);
+
+  const roomTotal = useMemo(() => items.reduce((s, i) => s + i.qty * i.unit_cost, 0), [items]);
+  const originalSub = useMemo(
+    () =>
+      items
+        .filter((i) => !i.source || i.source === "original")
+        .reduce((s, i) => s + i.qty * i.unit_cost, 0),
+    [items]
+  );
+  const upgradedSub = useMemo(
+    () => items.filter((i) => i.source === "upgrade").reduce((s, i) => s + i.qty * i.unit_cost, 0),
+    [items]
+  );
+  const addedSub = useMemo(
+    () => items.filter((i) => i.source === "bundle").reduce((s, i) => s + i.qty * i.unit_cost, 0),
+    [items]
+  );
+
+  const progressPct = roomTarget > 0 ? Math.min(100, Math.round((roomTotal / roomTarget) * 100)) : 0;
+  const gapRemaining = Math.max(0, roomTarget - roomTotal);
+  const stillNeeded = Math.max(0, roomTarget - roomTotal);
+
+  const roomIdx = allRooms.indexOf(roomName);
+  const prevRoom = roomIdx > 0 ? allRooms[roomIdx - 1] : null;
+  const nextRoom = roomIdx < allRooms.length - 1 ? allRooms[roomIdx + 1] : null;
+
+  const lockKeyForItem = useCallback(
+    (item: ClaimItem) =>
+      item.pre_upgrade_item
+        ? `${roomName}|${item.pre_upgrade_item.description}|${item.pre_upgrade_item.unit_cost}`
+        : `${roomName}|${item.description}|${item.unit_cost}`,
+    [roomName]
+  );
+  const lockKeyForSuggestion = useCallback((id: string) => `${roomName}|suggested|${id}`, [roomName]);
+
+  function toggleLock(key: string) {
+    const next = lockedKeys.includes(key) ? lockedKeys.filter((k) => k !== key) : [...lockedKeys, key];
+    setLockedKeys(next);
+    writeLocked(next);
+  }
+
+  function isItemLocked(item: ClaimItem) {
+    return lockedKeys.includes(lockKeyForItem(item));
+  }
+  function isSuggestionLocked(id: string) {
+    return lockedKeys.includes(lockKeyForSuggestion(id));
+  }
+
+  /** Replace room items in session — full room list */
+  async function saveRoomItems(newRoomItems: ClaimItem[]) {
     if (!session?.claim_items) return;
+    const rest = session.claim_items.filter((i) => i.room !== roomName);
+    const nextClaim = [...rest, ...newRoomItems];
+    await saveSession({ claim_items: nextClaim }, sessionId);
+    setSession((prev) => (prev ? { ...prev, claim_items: nextClaim } : prev));
+    setItems(newRoomItems);
+  }
+
+  async function handleApplyUpgrade(item: ClaimItem, option: UpgradeOption) {
+    if (!session?.claim_items || isItemLocked(item)) return;
     setIsSaving(true);
-
     const stableCode = `upgrade:${roomName}:${item.description}:${item.unit_cost}`.slice(0, 180);
-
-    const updated = session.claim_items.map((ci) => {
+    const snap: ClaimItem["pre_upgrade_item"] = {
+      description: item.description,
+      brand: item.brand,
+      model: item.model,
+      unit_cost: item.unit_cost,
+      category: item.category,
+      source: item.source ?? "original",
+    };
+    const nextItems = items.map((ci) => {
       if (ci.room === item.room && ci.description === item.description && ci.unit_cost === item.unit_cost) {
         return {
           ...ci,
@@ -369,6 +639,7 @@ export default function RoomReviewPage() {
           model: option.model,
           unit_cost: option.price,
           previous_unit_cost: item.unit_cost,
+          pre_upgrade_item: snap,
           source: "upgrade" as const,
           age_years: 0,
           age_months: 0,
@@ -379,11 +650,9 @@ export default function RoomReviewPage() {
       }
       return ci;
     });
-
-    await saveSession({ claim_items: updated }, sessionId);
-
+    await saveRoomItems(nextItems);
     try {
-      const { error: bdErr } = await supabase.from("bundle_decisions").upsert(
+      await supabase.from("bundle_decisions").upsert(
         {
           bundle_code: stableCode,
           room: roomName,
@@ -407,251 +676,398 @@ export default function RoomReviewPage() {
         },
         { onConflict: "bundle_code" }
       );
-      if (bdErr) console.warn("bundle_decisions upgrade_applied:", bdErr.message);
     } catch (e) {
-      console.warn("bundle_decisions upgrade network:", e);
+      console.warn(e);
     }
-
-    setSession((prev) => (prev ? { ...prev, claim_items: updated } : prev));
-    setItems(updated.filter((i) => i.room === roomName));
     setIsSaving(false);
-    setToast(`Upgraded to ${option.title} — ${formatCurrency(option.price)}`);
+    setToast(`Upgraded — ${option.title}`);
   }
 
-  // ── Category upgrade ──────────────────────────────────────────────────────
-
-  async function handleApplyCategoryBundle(bundle: CategoryBundle) {
-    if (!session?.claim_items) return;
+  async function handleChangeUpgrade(item: ClaimItem, option: UpgradeOption) {
+    if (!item.pre_upgrade_item || isItemLocked(item)) return;
     setIsSaving(true);
-
-    const affectedLower = bundle.items_affected.map((a) => a.toLowerCase());
-    const filtered = session.claim_items.filter((ci) => {
-      if (ci.room !== roomName) return true;
-      const dl = ci.description.toLowerCase();
-      return !affectedLower.some((a) => dl.includes(a) || a.includes(dl));
+    const orig = item.pre_upgrade_item;
+    const nextItems = items.map((ci) => {
+      if (ci.room === item.room && ci.description === item.description && ci.unit_cost === item.unit_cost) {
+        return {
+          ...ci,
+          description: option.title,
+          brand: option.brand,
+          model: option.model,
+          unit_cost: option.price,
+          previous_unit_cost: orig.unit_cost,
+          pre_upgrade_item: orig,
+          source: "upgrade" as const,
+          age_years: 0,
+          age_months: 0,
+          condition: "New" as const,
+          vendor_url: option.url || undefined,
+          vendor_name: option.retailer || undefined,
+        };
+      }
+      return ci;
     });
+    await saveRoomItems(nextItems);
+    setIsSaving(false);
+    setToast(`Changed upgrade — ${option.title}`);
+  }
 
-    const bundleItem: ClaimItem = {
+  async function handleRevert(item: ClaimItem) {
+    if (!item.pre_upgrade_item || isItemLocked(item)) return;
+    setIsSaving(true);
+    const prev = item.pre_upgrade_item;
+    const nextItems = items.map((ci) => {
+      if (ci.room === item.room && ci.description === item.description && ci.unit_cost === item.unit_cost) {
+        return {
+          ...ci,
+          description: prev.description,
+          brand: prev.brand,
+          model: item.model,
+          unit_cost: prev.unit_cost,
+          category: prev.category,
+          source: item.pre_upgrade_item?.source ?? "original",
+          previous_unit_cost: undefined,
+          pre_upgrade_item: undefined,
+          vendor_url: undefined,
+          vendor_name: undefined,
+        };
+      }
+      return ci;
+    });
+    await saveRoomItems(nextItems);
+    setIsSaving(false);
+    setToast("Reverted to original line");
+  }
+
+  async function handleAddSuggestion(row: SuggestedAdditionRow, tier: "mid" | "premium") {
+    const opt = tier === "mid" ? row.mid : row.premium;
+    const line: ClaimItem = {
       room: roomName,
-      description: bundle.name,
-      brand: bundle.brand,
+      description: opt.title,
+      brand: opt.brand ?? "",
       model: "",
       qty: 1,
       age_years: 0,
       age_months: 0,
       condition: "New",
-      unit_cost: bundle.upgrade_value,
-      category: "Category Upgrade",
+      unit_cost: opt.price,
+      category: row.category,
       source: "bundle",
+      vendor_url: opt.url,
     };
-
-    const updated = [...filtered, bundleItem];
-    await saveSession({ claim_items: updated }, sessionId);
-    setSession((prev) => prev ? { ...prev, claim_items: updated } : prev);
-    setItems(updated.filter((i) => i.room === roomName));
-    setAppliedBundles((prev) => new Set([...prev, bundle.name]));
-    setIsSaving(false);
-    setToast(`${bundle.name} applied`);
+    await saveRoomItems([...items, line]);
+    setToast(`Added ${row.label}`);
   }
 
-  // ── Derived ───────────────────────────────────────────────────────────────
+  function saveTargetFromEdit() {
+    const v = parseInt(targetInput.replace(/\D/g, ""), 10);
+    if (!v || v < 0) return;
+    setRoomTarget(v);
+    writeRoomGoal(sessionId, roomName, v);
+    setEditTarget(false);
+  }
 
-  const roomBudget = session?.room_budgets?.[roomName] ?? 0;
-  const roomTotal = items.reduce((s, i) => s + i.unit_cost * i.qty, 0);
-  const budgetPct = roomBudget > 0 ? Math.min(100, (roomTotal / roomBudget) * 100) : 0;
-  const roomIdx = allRooms.indexOf(roomName);
-  const prevRoom = roomIdx > 0 ? allRooms[roomIdx - 1] : null;
-  const nextRoom = roomIdx < allRooms.length - 1 ? allRooms[roomIdx + 1] : null;
-
-  const sortedItems = useMemo(
-    () => [...items].sort((a, b) => b.unit_cost - a.unit_cost),
-    [items]
-  );
-
-  const originalSub = useMemo(
-    () =>
-      items
-        .filter((i) => !i.source || i.source === "original")
-        .reduce((s, i) => s + i.qty * i.unit_cost, 0),
-    [items]
-  );
-  const upgradedSub = useMemo(
-    () => items.filter((i) => i.source === "upgrade").reduce((s, i) => s + i.qty * i.unit_cost, 0),
-    [items]
-  );
-  const addedSub = useMemo(
-    () => items.filter((i) => i.source === "bundle").reduce((s, i) => s + i.qty * i.unit_cost, 0),
-    [items]
-  );
-
-  // ── Render ────────────────────────────────────────────────────────────────
+  const maxSnap = bundleSnapValues[bundleSnapValues.length - 1] ?? 0;
+  const sliderValue = bundleSnapValues[Math.min(sliderSnapIndex, bundleSnapValues.length - 1)] ?? 0;
+  const closestBundle = useMemo(() => {
+    if (!roomName || !sliderValue) return null;
+    return BUNDLES_DATA.filter((b) => b.room === roomName && b.total_value === sliderValue)[0] ?? null;
+  }, [roomName, sliderValue]);
 
   if (!hydrated) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-3 text-gray-500">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 text-gray-500 text-base">
         <SmallSpinner />
-        <span>Loading…</span>
+        Loading…
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-screen flex-col pb-44">
-      <header className="sticky top-0 z-10 border-b border-gray-100 bg-white px-6 py-4">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <Link href="/review" className="mb-1 block text-sm text-gray-400 hover:text-gray-600">
-              ← All Rooms
-            </Link>
-            <div className="flex items-center gap-3">
-              <h1 className="text-xl font-bold text-gray-900">{roomName}</h1>
-              <span className="tabular-nums text-base text-gray-500">
-                {formatCurrency(roomTotal)}
-                {roomBudget > 0 && <span className="text-gray-400"> / {formatCurrency(roomBudget)}</span>}
-              </span>
-            </div>
+    <div className="min-h-screen flex flex-col bg-white pb-56">
+      <header className="border-b border-gray-200 bg-white px-4 sm:px-6 py-4">
+        <Link href="/review" className="text-base text-[#2563EB] font-medium hover:underline">
+          ← All Rooms
+        </Link>
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <h1 className="text-2xl font-bold text-gray-900">{roomName || "Room"}</h1>
+          {isSaving && <SmallSpinner />}
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-base text-gray-700">
+          <span>
+            Target: <span className="font-bold tabular-nums">{formatCurrency(roomTarget)}</span>
+          </span>
+          <span className="text-gray-300">·</span>
+          <span>
+            Current: <span className="font-bold tabular-nums">{formatCurrency(roomTotal)}</span>
+          </span>
+          <button
+            type="button"
+            className="ml-1 text-xl leading-none"
+            onClick={() => {
+              setTargetInput(String(roomTarget));
+              setEditTarget(true);
+            }}
+            aria-label="Edit target"
+          >
+            ✏️
+          </button>
+        </div>
+        {editTarget && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <input
+              className="rounded-lg border border-gray-300 px-3 py-2 text-base min-w-[140px]"
+              value={targetInput}
+              onChange={(e) => setTargetInput(e.target.value)}
+              placeholder="350000"
+            />
+            <button type="button" onClick={saveTargetFromEdit} className="rounded-lg bg-[#2563EB] px-4 py-2 text-base font-bold text-white">
+              Save
+            </button>
+            <button type="button" onClick={() => setEditTarget(false)} className="text-base text-gray-500">
+              Cancel
+            </button>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {isSaving && <SmallSpinner />}
-            <Link
-              href={`/review/bundles/${roomSlug}`}
-              className="min-h-[44px] flex items-center rounded-xl bg-[#2563EB] px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-blue-700"
-            >
-              Browse Packages →
-            </Link>
+        )}
+        <div className="mt-4">
+          <p className="text-base text-gray-600 mb-1">Progress: {progressPct}%</p>
+          <div className="h-3 w-full max-w-xl rounded-full bg-gray-200 overflow-hidden">
+            <div className="h-full bg-[#2563EB] transition-all" style={{ width: `${progressPct}%` }} />
           </div>
         </div>
-        {roomBudget > 0 && (
-          <div className="mt-3">
-            <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
-              <div
-                className={`h-full rounded-full transition-all ${budgetPct >= 100 ? "bg-green-500" : budgetPct >= 80 ? "bg-amber-500" : "bg-[#2563EB]"}`}
-                style={{ width: `${budgetPct}%` }}
-              />
-            </div>
-            <p className="mt-0.5 text-sm text-gray-400">{budgetPct.toFixed(0)}% of budget</p>
-          </div>
-        )}
       </header>
 
-      <main className="flex-1 px-6 py-6 max-w-3xl mx-auto w-full">
-        {isLoading ? (
-          <div className="space-y-3">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="animate-pulse rounded-xl border border-gray-200 bg-white p-4">
-                <div className="h-5 w-48 rounded bg-gray-200 mb-2" />
-                <div className="h-4 w-32 rounded bg-gray-100" />
+      {isLoading ? (
+        <div className="flex-1 flex items-center justify-center p-12">
+          <SmallSpinner />
+        </div>
+      ) : !roomName || !items.length && !missingSuggestions.length ? (
+        <div className="flex-1 p-8 text-center text-base text-gray-500">
+          No items for this room.
+          <Link href="/review" className="block mt-4 text-[#2563EB]">
+            ← All rooms
+          </Link>
+        </div>
+      ) : (
+        <>
+          <div className="flex-1 px-4 sm:px-6 py-6 w-full max-w-[1400px] mx-auto">
+            <div className="hidden md:grid md:grid-cols-2 border-b-2 border-gray-300 bg-gray-50">
+              <div className="text-base font-bold uppercase tracking-wide py-4 px-4 border-r border-gray-200">
+                What you have
               </div>
-            ))}
-          </div>
-        ) : items.length === 0 ? (
-          <div className="flex flex-col items-center py-16 text-center">
-            <p className="text-lg text-gray-500">No items found for this room.</p>
-            <Link href="/review" className="mt-3 text-base text-[#2563EB] hover:underline">← Back to all rooms</Link>
-          </div>
-        ) : (
-          <>
-            <section className="mb-8">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">
-                Upgrade existing items
-              </h2>
-              <div className="space-y-3">
-                {sortedItems.map((item, idx) => (
-                  <RoomUpgradeRow
+              <div className="text-base font-bold uppercase tracking-wide py-4 px-4 bg-[#F0F7FF]">
+                Suggested upgrade →
+              </div>
+            </div>
+
+            <div className="divide-y divide-gray-200 border-x border-b border-gray-200 rounded-b-lg overflow-hidden">
+              {sortedItems.map((item, idx) => {
+                const lk = lockKeyForItem(item);
+                const locked = lockedKeys.includes(lk);
+                const cacheHas =
+                  cachedDescs.has(norm(item.description)) ||
+                  cachedDescs.has(norm(item.pre_upgrade_item?.description ?? ""));
+                const upgraded = item.source === "upgrade" && item.previous_unit_cost != null;
+                const rowBg = locked ? "bg-[#EFF6FF]" : upgraded ? "bg-green-50/90" : "bg-white";
+
+                return (
+                  <div
                     key={`${generateItemId(item)}-${idx}`}
-                    item={item}
-                    cacheHas={cacheKeySet.has(item.description.trim().toLowerCase())}
-                    onUpgrade={handleUpgrade}
-                  />
-                ))}
-              </div>
-            </section>
-
-            <section className="mb-8">
-              <button
-                type="button"
-                onClick={() => setAddSectionOpen((v) => !v)}
-                className="flex w-full items-center justify-between rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-left text-sm font-bold text-gray-700 hover:bg-gray-100"
-              >
-                <span>+ ADD NEW ITEMS TO {roomName.toUpperCase()}</span>
-                <span className="text-gray-400">{addSectionOpen ? "▼" : "▶"}</span>
-              </button>
-              {addSectionOpen && (
-                <div className="mt-4 space-y-4">
-                  <CategoryUpgradesSection
-                    roomName={roomName}
-                    items={items}
-                    appliedBundles={appliedBundles}
-                    onApply={handleApplyCategoryBundle}
-                  />
-                  <Link
-                    href={`/review/bundles/${roomSlug}`}
-                    className="inline-flex min-h-[44px] items-center rounded-xl bg-[#2563EB] px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-700"
+                    className={`flex flex-col md:grid md:grid-cols-2 ${rowBg}`}
                   >
-                    Open bundle browser →
-                  </Link>
-                </div>
-              )}
-            </section>
-          </>
-        )}
-      </main>
+                    <div className="border-b md:border-b-0 md:border-r border-gray-200 p-4 py-5 text-base min-h-[100px] md:bg-white/80">
+                      <p className="md:hidden font-bold uppercase tracking-wide text-gray-500 text-sm mb-3">What you have</p>
+                      <div className="flex justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          {upgraded && item.pre_upgrade_item ? (
+                            <>
+                              <p className="line-through text-gray-400">
+                                {item.pre_upgrade_item.description}{" "}
+                                <span className="tabular-nums">{formatCurrency(item.previous_unit_cost!)}</span>
+                              </p>
+                              <p className="text-gray-500 my-1">↓</p>
+                              <p className="font-bold text-gray-900">{item.description}</p>
+                              <p className="text-blue-600 font-bold tabular-nums mt-1">
+                                {formatCurrency(item.unit_cost)} ✓
+                              </p>
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  disabled={locked || isSaving}
+                                  onClick={() =>
+                                    document.getElementById(`upgrade-panel-${idx}`)?.scrollIntoView({ behavior: "smooth", block: "nearest" })
+                                  }
+                                  className="text-sm text-[#2563EB] underline disabled:opacity-40"
+                                >
+                                  change
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={locked || isSaving}
+                                  onClick={() => void handleRevert(item)}
+                                  className="text-sm text-gray-600 underline disabled:opacity-40"
+                                >
+                                  revert
+                                </button>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <p className="font-bold text-gray-900 text-lg leading-snug">{item.description}</p>
+                              <p className="text-gray-600 mt-1">
+                                {item.brand ? <>{item.brand} · </> : null}Qty: {item.qty}
+                              </p>
+                              <p className="font-semibold tabular-nums mt-2">{formatCurrency(item.unit_cost)}</p>
+                            </>
+                          )}
+                        </div>
+                        <LockButton locked={locked} onToggle={() => toggleLock(lk)} />
+                      </div>
+                    </div>
+                    <div id={`upgrade-panel-${idx}`} className="p-4 py-5 bg-[#F0F7FF] text-base">
+                      <p className="md:hidden font-bold uppercase tracking-wide text-gray-600 text-sm mb-3">Suggested upgrade →</p>
+                      {cacheHas ? (
+                        <ExistingUpgradePanel
+                          key={`${item.description}-${item.unit_cost}-${idx}`}
+                          item={item}
+                          locked={locked}
+                          cacheHas={cacheHas}
+                          onApply={(opt) =>
+                            upgraded && item.pre_upgrade_item
+                              ? handleChangeUpgrade(item, opt)
+                              : handleApplyUpgrade(item, opt)
+                          }
+                        />
+                      ) : (
+                        <NoCacheUpgradePanel
+                          locked={locked}
+                          item={item}
+                          onAddCustom={async (price, title, brand) => {
+                            const opt: UpgradeOption = {
+                              label: "Custom",
+                              price,
+                              title,
+                              brand,
+                              model: "",
+                              retailer: "",
+                              url: "",
+                            };
+                            if (upgraded && item.pre_upgrade_item) await handleChangeUpgrade(item, opt);
+                            else await handleApplyUpgrade(item, opt);
+                          }}
+                        />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
 
-      <footer className="fixed inset-x-0 bottom-0 z-20 border-t-2 border-gray-200 bg-white shadow-[0_-4px_24px_rgba(0,0,0,0.08)]">
-        <div className="max-w-3xl mx-auto px-4 py-3">
-          <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">Room: {roomName}</p>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm tabular-nums mb-2">
-            <span className="text-gray-600">Original</span>
-            <span className="text-right font-semibold text-gray-900">{formatCurrency(originalSub)}</span>
-            <span className="text-gray-600">Upgraded</span>
-            <span className="text-right font-semibold text-green-700">+{formatCurrency(upgradedSub)}</span>
-            <span className="text-gray-600">Added</span>
-            <span className="text-right font-semibold text-blue-700">+{formatCurrency(addedSub)}</span>
-          </div>
-          <div className="flex items-center justify-between border-t border-gray-100 pt-2 text-sm">
-            <span className="font-bold text-gray-900 tabular-nums">
-              Total: {formatCurrency(roomTotal)}
-              {roomBudget > 0 && (
-                <span className="text-gray-400 font-normal"> / {formatCurrency(roomBudget)} goal</span>
+              {missingSuggestions.map((row) => {
+                const lk = lockKeyForSuggestion(row.id);
+                const locked = lockedKeys.includes(lk);
+                return (
+                  <div key={row.id} className={`flex flex-col md:grid md:grid-cols-2 ${locked ? "bg-[#EFF6FF]" : "bg-white"}`}>
+                    <div className="border-b md:border-b-0 md:border-r border-gray-200 p-4 py-5 text-base bg-gray-50/50">
+                      <p className="md:hidden font-bold uppercase tracking-wide text-gray-500 text-sm mb-3">What you have</p>
+                      <div className="flex justify-between gap-3">
+                        <div>
+                          <p className="text-gray-500 italic">(not in original claim)</p>
+                          <p className="font-bold text-gray-900 mt-1 text-lg">Suggested addition</p>
+                          <p className="text-gray-700 mt-1">{row.label}</p>
+                        </div>
+                        <LockButton locked={locked} onToggle={() => toggleLock(lk)} />
+                      </div>
+                    </div>
+                    <div className="p-4 py-5 bg-[#F0F7FF]">
+                      <p className="md:hidden font-bold uppercase tracking-wide text-gray-600 text-sm mb-3">Suggested upgrade →</p>
+                      <SuggestedAdditionPanel
+                        row={row}
+                        locked={locked}
+                        onAdd={(tier) => handleAddSuggestion(row, tier)}
+                        onSkip={() => setSkippedSuggestions((s) => new Set([...s, row.id]))}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Bundle slider */}
+            <section className="mt-10 rounded-2xl border border-gray-200 bg-gray-50 p-5">
+              <p className="text-base font-semibold text-gray-900">
+                Gap remaining for this room: <span className="tabular-nums">{formatCurrency(gapRemaining)}</span>
+              </p>
+              <p className="text-base text-gray-600 mt-2 mb-4">Add more via bundles:</p>
+              <div className="flex items-center gap-3 text-base tabular-nums text-gray-700 mb-2">
+                <span>{formatCurrency(0)}</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(0, bundleSnapValues.length - 1)}
+                  step={1}
+                  value={Math.min(sliderSnapIndex, bundleSnapValues.length - 1)}
+                  onChange={(e) => setSliderSnapIndex(Number(e.target.value))}
+                  className="flex-1 accent-[#2563EB] h-3"
+                />
+                <span>{formatCurrency(maxSnap)}</span>
+              </div>
+              {closestBundle && (
+                <p className="text-base text-gray-700 mb-2">
+                  Closest bundle: <span className="font-semibold">{closestBundle.name}</span> ·{" "}
+                  {formatCurrency(closestBundle.total_value)}
+                </p>
               )}
+              <Link
+                href={`/review/bundles/${roomSlug}`}
+                className="inline-flex mt-2 text-base font-bold text-[#2563EB] hover:underline"
+              >
+                Browse all bundles for this room →
+              </Link>
+            </section>
+          </div>
+        </>
+      )}
+
+      <footer className="fixed bottom-0 inset-x-0 z-30 border-t-2 border-gray-200 bg-white shadow-lg">
+        <div className="max-w-[1400px] mx-auto px-4 py-3 text-base">
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums sm:grid-cols-4">
+            <span className="text-gray-600">Original items</span>
+            <span className="text-right font-medium">{formatCurrency(originalSub)}</span>
+            <span className="text-gray-600">Upgrades</span>
+            <span className="text-right font-medium text-green-700">+{formatCurrency(upgradedSub)}</span>
+            <span className="text-gray-600">Additions</span>
+            <span className="text-right font-medium text-blue-700">+{formatCurrency(addedSub)}</span>
+            <span className="text-gray-600 col-span-2 sm:col-span-1">Room total</span>
+            <span className="text-right font-bold col-span-2 sm:col-span-1">
+              {formatCurrency(roomTotal)} / {formatCurrency(roomTarget)}
             </span>
           </div>
-          {roomBudget > 0 && (
-            <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-gray-100">
-              <div
-                className={`h-full rounded-full transition-all ${budgetPct >= 100 ? "bg-green-500" : budgetPct >= 80 ? "bg-amber-500" : "bg-[#2563EB]"}`}
-                style={{ width: `${budgetPct}%` }}
-              />
-            </div>
-          )}
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <p className="mt-2 text-base text-gray-600">
+            Still needed: <span className="font-bold tabular-nums text-gray-900">{formatCurrency(stillNeeded)}</span>
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2 justify-between">
             {prevRoom ? (
               <Link
                 href={`/review/${slugify(prevRoom)}`}
-                className="min-h-[44px] flex items-center rounded-xl border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                className="min-h-[44px] flex items-center rounded-xl border border-gray-200 px-4 py-2 font-medium text-gray-800"
               >
-                ← Back to Rooms
+                ← Previous room
               </Link>
             ) : (
-              <Link
-                href="/review"
-                className="min-h-[44px] flex items-center rounded-xl border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              >
-                ← Back to Rooms
-              </Link>
+              <span />
             )}
+            <Link href="/review" className="min-h-[44px] flex items-center rounded-xl bg-gray-100 px-4 py-2 font-semibold text-gray-800">
+              All rooms
+            </Link>
             {nextRoom ? (
               <Link
                 href={`/review/${slugify(nextRoom)}`}
-                className="min-h-[44px] flex items-center rounded-xl bg-[#2563EB] px-4 py-2 text-sm font-bold text-white hover:bg-blue-700"
+                className="min-h-[44px] flex items-center rounded-xl bg-[#2563EB] px-4 py-2 font-bold text-white"
               >
-                Next Room →
+                Next room →
               </Link>
             ) : (
-              <Link
-                href="/review"
-                className="min-h-[44px] flex items-center rounded-xl bg-gray-100 px-4 py-2 text-sm font-medium text-gray-600"
-              >
+              <Link href="/review" className="min-h-[44px] flex items-center rounded-xl bg-gray-200 px-4 py-2 font-medium text-gray-700">
                 Done
               </Link>
             )}
@@ -660,8 +1076,11 @@ export default function RoomReviewPage() {
       </footer>
 
       {toast && (
-        <div className="fixed bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-2xl bg-gray-900 px-6 py-4 text-base text-white shadow-2xl">
-          <span className="text-green-400 mr-2">✓</span>{toast}
+        <div className="fixed bottom-52 left-1/2 z-40 -translate-x-1/2 rounded-xl bg-gray-900 px-5 py-3 text-base text-white shadow-xl">
+          {toast}
+          <button type="button" className="ml-3 text-green-400" onClick={() => setToast(null)}>
+            ✓
+          </button>
         </div>
       )}
     </div>

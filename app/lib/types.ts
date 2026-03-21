@@ -17,6 +17,15 @@ export interface ClaimItem {
   source?: ClaimItemSource;
   /** Set when user applies an upgrade (for strikethrough original price in UI) */
   previous_unit_cost?: number;
+  /** Snapshot before upgrade — used for revert */
+  pre_upgrade_item?: {
+    description: string;
+    brand: string;
+    model: string;
+    unit_cost: number;
+    category: string;
+    source?: ClaimItemSource;
+  };
 }
 
 export type TierKey = "keep" | "entry" | "mid" | "premium" | "ultra";
