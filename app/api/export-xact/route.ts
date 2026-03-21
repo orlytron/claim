@@ -15,6 +15,7 @@ const ROOM_ORDER = [
   "Bathroom Master",
   "Bathroom White",
   "Art",
+  "Art Collection",
 ];
 
 function vendorFromUrl(url: string | undefined): string {

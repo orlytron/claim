@@ -1,9 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
+import AniGuide from "../../components/AniGuide";
+import SpeechBubble from "../../components/SpeechBubble";
+import { dispatchUpgradeReward } from "../../components/UpgradeRewardToast";
 import { BUNDLES_DATA } from "../../lib/bundles-data";
+import { CLAIM_GOAL_DEFAULT, DEFAULT_ROOM_TARGETS } from "../../lib/room-targets";
+import { readRoomGoal, writeRoomGoal } from "../../lib/room-goals";
 import { loadSession, saveSession, SessionData } from "../../lib/session";
 import { supabase } from "../../lib/supabase";
 import { ClaimItem } from "../../lib/types";
@@ -30,22 +35,8 @@ const SLUG_TO_ROOM: Record<string, string> = {
   art: "Art",
 };
 
-const DEFAULT_ROOM_TARGETS: Record<string, number> = {
-  "Living Room": 350_000,
-  Kitchen: 200_000,
-  "David Office / Guest Room": 220_000,
-  "Bedroom Orly": 120_000,
-  "Bedroom Rafe": 110_000,
-  Patio: 80_000,
-  Garage: 120_000,
-  "Bathroom Master": 60_000,
-  "Bathroom White": 40_000,
-  Art: 300_000,
-};
-
 /** Persisted array of stable row keys — see lockKeyForItem / lockKeyForSuggestion */
 const LS_LOCKED = "lockedItems";
-const LS_ROOM_GOALS = "claimbuilder_room_targets_v1";
 
 function norm(s: string): string {
   return s.trim().toLowerCase();
@@ -64,27 +55,6 @@ function readLocked(): string[] {
 
 function writeLocked(keys: string[]) {
   localStorage.setItem(LS_LOCKED, JSON.stringify(keys));
-}
-
-function readRoomGoals(): Record<string, Record<string, number>> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = localStorage.getItem(LS_ROOM_GOALS);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeRoomGoal(sessionId: string, room: string, value: number) {
-  const all = readRoomGoals();
-  all[sessionId] = { ...all[sessionId], [room]: value };
-  localStorage.setItem(LS_ROOM_GOALS, JSON.stringify(all));
-}
-
-function readRoomGoal(sessionId: string, room: string): number | null {
-  const v = readRoomGoals()[sessionId]?.[room];
-  return typeof v === "number" && v > 0 ? v : null;
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -148,16 +118,16 @@ function ExistingUpgradePanel({
 }) {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<{ mid: UpgradeProduct; premium: UpgradeProduct } | null>(null);
-  const [choice, setChoice] = useState<"keep" | "mid" | "premium" | "custom">("keep");
   const [customDesc, setCustomDesc] = useState("");
   const [customPrice, setCustomPrice] = useState("");
-  const [applying, setApplying] = useState(false);
+  const [applying, setApplying] = useState<"mid" | "premium" | "custom" | null>(null);
+
+  const baseUnit =
+    item.source === "upgrade" && item.pre_upgrade_item ? item.pre_upgrade_item.unit_cost : item.unit_cost;
 
   useEffect(() => {
-    if (item.source === "upgrade" && item.pre_upgrade_item) setChoice("mid");
-    else setChoice("keep");
     setCustomDesc(item.description);
-  }, [item.source, item.pre_upgrade_item, item.description, item.unit_cost]);
+  }, [item.description]);
 
   useEffect(() => {
     if (!cacheHas || locked) return;
@@ -205,33 +175,16 @@ function ExistingUpgradePanel({
 
   const customOk = customDesc.trim().length > 0 && parseFloat(customPrice) > 0;
 
-  async function apply() {
-    if (choice === "keep") return;
-    if (choice === "custom") {
-      if (!customOk) return;
-      await onApply({
-        label: "Custom",
-        price: parseFloat(customPrice),
-        title: customDesc.trim(),
-        brand: item.brand,
-        model: "",
-        retailer: "",
-        url: "",
-      });
-      return;
-    }
-    if (!data) return;
-    const p = choice === "mid" ? data.mid : data.premium;
-    await onApply({
-      label: choice === "mid" ? "Mid" : "Premium",
-      price: p.price,
-      title: p.title,
-      brand: p.brand,
-      model: p.model,
-      retailer: p.retailer,
-      url: p.url,
-    });
+  function rowClass(active: boolean) {
+    return `flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2.5 text-base transition-colors duration-300 ${
+      active ? "border-blue-400 bg-blue-50" : "border-gray-200 bg-white/80"
+    }`;
   }
+
+  const midSelected =
+    item.source === "upgrade" && data && Math.abs(item.unit_cost - data.mid.price) < 0.01;
+  const premSelected =
+    item.source === "upgrade" && data && Math.abs(item.unit_cost - data.premium.price) < 0.01;
 
   if (locked) {
     return (
@@ -244,99 +197,139 @@ function ExistingUpgradePanel({
   if (!cacheHas) return null;
 
   return (
-    <div className="rounded-xl border border-gray-200 bg-[#F0F7FF] p-4 space-y-4 text-base min-h-[120px]">
+    <div className="min-h-[120px] space-y-3 rounded-xl border border-gray-200 bg-[#F0F7FF] p-4 text-base">
       {loading ? (
-        <div className="flex items-center gap-2 text-gray-500 py-6">
+        <div className="flex items-center gap-2 py-6 text-gray-500">
           <SmallSpinner /> Loading suggestions…
         </div>
       ) : (
         <>
-          {!(item.source === "upgrade" && item.pre_upgrade_item) && (
-            <label className="flex gap-3 cursor-pointer items-start">
-              <input type="radio" className="mt-1.5" checked={choice === "keep"} onChange={() => setChoice("keep")} />
-              <span>
-                <span className="font-semibold text-gray-900">Keep original</span>
-                <span className="block tabular-nums text-gray-700">{formatCurrency(item.unit_cost)}</span>
-              </span>
-            </label>
-          )}
           {item.source === "upgrade" && item.pre_upgrade_item && (
-            <p className="text-sm text-gray-600 pb-2 border-b border-gray-200">
-              Choose a different upgrade below, or use <span className="font-medium">revert</span> on the left.
+            <p className="border-b border-gray-200 pb-2 text-sm text-gray-600">
+              Pick another option below, or <span className="font-medium">revert</span> on the left.
             </p>
           )}
 
           {data && (
             <>
-              <label className="flex gap-3 cursor-pointer items-start">
-                <input type="radio" className="mt-1.5" checked={choice === "mid"} onChange={() => setChoice("mid")} />
-                <span className="min-w-0">
-                  <span className="font-semibold text-gray-900">Mid upgrade</span>
-                  <p className="text-gray-800 mt-1 leading-snug">{data.mid.title}</p>
-                  <p className="text-sm text-gray-500 mt-0.5">{data.mid.brand}{data.mid.retailer ? ` · ${data.mid.retailer}` : ""}</p>
-                  <p className="font-bold tabular-nums mt-1">{formatCurrency(data.mid.price)}</p>
-                  <a href={data.mid.url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 underline">
-                    View ↗
-                  </a>
+              <div className={rowClass(!!midSelected)}>
+                <span className="shrink-0 font-bold text-gray-700">Mid:</span>
+                <span className="min-w-0 flex-1 truncate font-medium text-gray-900" title={data.mid.title}>
+                  {data.mid.title}
                 </span>
-              </label>
-              <label className="flex gap-3 cursor-pointer items-start">
-                <input type="radio" className="mt-1.5" checked={choice === "premium"} onChange={() => setChoice("premium")} />
-                <span className="min-w-0">
-                  <span className="font-semibold text-gray-900">Premium upgrade</span>
-                  <p className="text-gray-800 mt-1 leading-snug">{data.premium.title}</p>
-                  <p className="text-sm text-gray-500 mt-0.5">{data.premium.brand}{data.premium.retailer ? ` · ${data.premium.retailer}` : ""}</p>
-                  <p className="font-bold tabular-nums mt-1">{formatCurrency(data.premium.price)}</p>
-                  <a href={data.premium.url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 underline">
-                    View ↗
-                  </a>
+                <span className="shrink-0 font-bold tabular-nums">{formatCurrency(data.mid.price)}</span>
+                <span className="shrink-0 font-bold text-green-600 tabular-nums">
+                  +{formatCurrency((data.mid.price - baseUnit) * item.qty)}
                 </span>
-              </label>
+                <a
+                  href={data.mid.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="shrink-0 text-sm font-semibold text-blue-600 underline"
+                >
+                  View ↗
+                </a>
+                <button
+                  type="button"
+                  disabled={applying !== null}
+                  onClick={() => {
+                    setApplying("mid");
+                    void onApply({
+                      label: "Mid",
+                      price: data.mid.price,
+                      title: data.mid.title,
+                      brand: data.mid.brand,
+                      model: data.mid.model,
+                      retailer: data.mid.retailer,
+                      url: data.mid.url,
+                    }).finally(() => setApplying(null));
+                  }}
+                  className="shrink-0 rounded-lg bg-[#2563EB] px-3 py-1.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                >
+                  {applying === "mid" ? "…" : "Select ↗"}
+                </button>
+              </div>
+              <div className={rowClass(!!premSelected)}>
+                <span className="shrink-0 font-bold text-gray-700">Premium:</span>
+                <span className="min-w-0 flex-1 truncate font-medium text-gray-900" title={data.premium.title}>
+                  {data.premium.title}
+                </span>
+                <span className="shrink-0 font-bold tabular-nums">{formatCurrency(data.premium.price)}</span>
+                <span className="shrink-0 font-bold text-green-600 tabular-nums">
+                  +{formatCurrency((data.premium.price - baseUnit) * item.qty)}
+                </span>
+                <a
+                  href={data.premium.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="shrink-0 text-sm font-semibold text-blue-600 underline"
+                >
+                  View ↗
+                </a>
+                <button
+                  type="button"
+                  disabled={applying !== null}
+                  onClick={() => {
+                    setApplying("premium");
+                    void onApply({
+                      label: "Premium",
+                      price: data.premium.price,
+                      title: data.premium.title,
+                      brand: data.premium.brand,
+                      model: data.premium.model,
+                      retailer: data.premium.retailer,
+                      url: data.premium.url,
+                    }).finally(() => setApplying(null));
+                  }}
+                  className="shrink-0 rounded-lg bg-[#2563EB] px-3 py-1.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                >
+                  {applying === "premium" ? "…" : "Select ↗"}
+                </button>
+              </div>
             </>
           )}
 
-          <label className="flex gap-3 cursor-pointer items-start">
-            <input type="radio" className="mt-1.5" checked={choice === "custom"} onChange={() => setChoice("custom")} />
-            <span className="flex-1 space-y-2">
-              <span className="font-semibold text-gray-900">Custom</span>
+          <div className={rowClass(false)}>
+            <span className="shrink-0 font-bold text-gray-700">Custom:</span>
+            <input
+              type="text"
+              value={customDesc}
+              onChange={(e) => setCustomDesc(e.target.value)}
+              className="min-w-[120px] flex-1 rounded-lg border border-gray-200 px-2 py-1.5 text-sm"
+              placeholder="Description"
+            />
+            <div className="flex shrink-0 items-center gap-1">
+              <span className="text-gray-400">$</span>
               <input
-                type="text"
-                value={customDesc}
-                onChange={(e) => setCustomDesc(e.target.value)}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2"
-                placeholder="Description"
+                type="number"
+                min={0}
+                step="any"
+                value={customPrice}
+                onChange={(e) => setCustomPrice(e.target.value)}
+                className="w-24 rounded-lg border border-gray-200 px-2 py-1.5 text-sm tabular-nums"
+                placeholder="Price"
               />
-              <div className="flex items-center gap-2">
-                <span className="text-gray-400">$</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  value={customPrice}
-                  onChange={(e) => setCustomPrice(e.target.value)}
-                  className="flex-1 rounded-lg border border-gray-200 px-3 py-2"
-                  placeholder="Price"
-                />
-              </div>
-            </span>
-          </label>
-
-          <button
-            type="button"
-            disabled={
-              applying ||
-              (item.source !== "upgrade" && choice === "keep") ||
-              (choice === "custom" && !customOk) ||
-              (choice !== "custom" && choice !== "keep" && !data)
-            }
-            onClick={() => {
-              setApplying(true);
-              void apply().finally(() => setApplying(false));
-            }}
-            className="w-full min-h-[48px] rounded-xl bg-[#16A34A] font-bold text-white hover:bg-green-700 disabled:opacity-40"
-          >
-            {applying ? "Saving…" : "✓ Apply"}
-          </button>
+            </div>
+            <button
+              type="button"
+              disabled={applying !== null || !customOk}
+              onClick={() => {
+                setApplying("custom");
+                void onApply({
+                  label: "Custom",
+                  price: parseFloat(customPrice),
+                  title: customDesc.trim(),
+                  brand: item.brand,
+                  model: "",
+                  retailer: "",
+                  url: "",
+                }).finally(() => setApplying(null));
+              }}
+              className="shrink-0 rounded-lg bg-[#16A34A] px-3 py-1.5 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-40"
+            >
+              {applying === "custom" ? "…" : "Apply"}
+            </button>
+          </div>
         </>
       )}
     </div>
@@ -413,7 +406,7 @@ function SuggestedAdditionPanel({
   onAdd: (option: "mid" | "premium") => Promise<void>;
   onSkip: () => void;
 }) {
-  const [choice, setChoice] = useState<"mid" | "premium" | "none">("none");
+  const [busy, setBusy] = useState<"mid" | "premium" | null>(null);
 
   if (locked) {
     return (
@@ -421,44 +414,56 @@ function SuggestedAdditionPanel({
     );
   }
 
+  function rowCls() {
+    return "flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white/80 px-3 py-2.5 text-base";
+  }
+
   return (
-    <div className="rounded-xl border border-gray-200 bg-[#F0F7FF] p-4 space-y-3 text-base">
-      <label className="flex gap-3 cursor-pointer items-start">
-        <input type="radio" className="mt-1.5" checked={choice === "mid"} onChange={() => setChoice("mid")} />
-        <span>
-          <span className="font-semibold text-gray-900">{row.label}</span>
-          <p className="text-gray-800 mt-1">{row.mid.title}</p>
-          <p className="font-bold tabular-nums mt-1">{formatCurrency(row.mid.price)}</p>
-          <a href={row.mid.url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 underline">
-            View ↗
-          </a>
+    <div className="space-y-3 rounded-xl border border-gray-200 bg-[#F0F7FF] p-4 text-base">
+      <div className={rowCls()}>
+        <span className="shrink-0 font-bold text-gray-700">Mid:</span>
+        <span className="min-w-0 flex-1 truncate font-medium" title={row.mid.title}>
+          {row.mid.title}
         </span>
-      </label>
-      <label className="flex gap-3 cursor-pointer items-start">
-        <input type="radio" className="mt-1.5" checked={choice === "premium"} onChange={() => setChoice("premium")} />
-        <span>
-          <span className="font-semibold text-gray-900">{row.label} (premium)</span>
-          <p className="text-gray-800 mt-1">{row.premium.title}</p>
-          <p className="font-bold tabular-nums mt-1">{formatCurrency(row.premium.price)}</p>
-          <a href={row.premium.url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 underline">
-            View ↗
-          </a>
+        <span className="shrink-0 font-bold tabular-nums">{formatCurrency(row.mid.price)}</span>
+        <span className="shrink-0 font-bold text-green-600 tabular-nums">+{formatCurrency(row.mid.price)}</span>
+        <a href={row.mid.url} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold text-blue-600 underline">
+          View ↗
+        </a>
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => {
+            setBusy("mid");
+            void onAdd("mid").finally(() => setBusy(null));
+          }}
+          className="rounded-lg bg-[#2563EB] px-3 py-1.5 text-sm font-bold text-white disabled:opacity-40"
+        >
+          {busy === "mid" ? "…" : "Select ↗"}
+        </button>
+      </div>
+      <div className={rowCls()}>
+        <span className="shrink-0 font-bold text-gray-700">Premium:</span>
+        <span className="min-w-0 flex-1 truncate font-medium" title={row.premium.title}>
+          {row.premium.title}
         </span>
-      </label>
-      <label className="flex gap-3 cursor-pointer items-start">
-        <input type="radio" className="mt-1.5" checked={choice === "none"} onChange={() => setChoice("none")} />
-        <span className="font-semibold text-gray-900">Don&apos;t add</span>
-      </label>
-      <button
-        type="button"
-        disabled={choice === "none"}
-        onClick={() => {
-          if (choice === "mid" || choice === "premium") void onAdd(choice);
-        }}
-        className="w-full min-h-[48px] rounded-xl bg-[#16A34A] font-bold text-white disabled:opacity-40"
-      >
-        ✓ Apply
-      </button>
+        <span className="shrink-0 font-bold tabular-nums">{formatCurrency(row.premium.price)}</span>
+        <span className="shrink-0 font-bold text-green-600 tabular-nums">+{formatCurrency(row.premium.price)}</span>
+        <a href={row.premium.url} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold text-blue-600 underline">
+          View ↗
+        </a>
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => {
+            setBusy("premium");
+            void onAdd("premium").finally(() => setBusy(null));
+          }}
+          className="rounded-lg bg-[#2563EB] px-3 py-1.5 text-sm font-bold text-white disabled:opacity-40"
+        >
+          {busy === "premium" ? "…" : "Select ↗"}
+        </button>
+      </div>
       <button type="button" onClick={onSkip} className="text-sm text-gray-500 underline">
         Skip this row
       </button>
@@ -468,9 +473,28 @@ function SuggestedAdditionPanel({
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
+function CountUpMoney({ value, className = "" }: { value: number; className?: string }) {
+  const [v, setV] = useState(0);
+  useEffect(() => {
+    const start = performance.now();
+    const dur = 900;
+    function tick(now: number) {
+      const t = Math.min(1, (now - start) / dur);
+      const ease = 1 - (1 - t) ** 2;
+      setV(Math.round(value * ease));
+      if (t < 1) requestAnimationFrame(tick);
+    }
+    const id = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(id);
+  }, [value]);
+  return <span className={className}>{formatCurrency(v)}</span>;
+}
+
 export default function RoomReviewPage() {
   const params = useParams<{ room: string }>();
   const roomSlug = params.room;
+  const searchParams = useSearchParams();
+  const guided = searchParams.get("guided") === "true";
   const { sessionId, hydrated } = useClaimMode();
 
   const [session, setSession] = useState<SessionData | null>(null);
@@ -483,10 +507,56 @@ export default function RoomReviewPage() {
   const [cachedDescs, setCachedDescs] = useState<Set<string>>(new Set());
   const [lockedKeys, setLockedKeys] = useState<string[]>([]);
   const [roomTarget, setRoomTarget] = useState(0);
+  const [claimGoal, setClaimGoal] = useState(CLAIM_GOAL_DEFAULT);
   const [editTarget, setEditTarget] = useState(false);
   const [targetInput, setTargetInput] = useState("");
   const [skippedSuggestions, setSkippedSuggestions] = useState<Set<string>>(new Set());
   const [sliderSnapIndex, setSliderSnapIndex] = useState(0);
+
+  const [guidedEnter, setGuidedEnter] = useState(false);
+  const [guidedLoadBubble, setGuidedLoadBubble] = useState(false);
+  const [guidedLoadVisible, setGuidedLoadVisible] = useState(false);
+  const [guidedLoadDismissed, setGuidedLoadDismissed] = useState(false);
+  const [guidedUpgradeDelta, setGuidedUpgradeDelta] = useState<number | null>(null);
+  const [guidedUpgradeFromTo, setGuidedUpgradeFromTo] = useState<{ from: number; to: number } | null>(null);
+  const [showGuidedComplete, setShowGuidedComplete] = useState(false);
+  const firstUpgradeGuidedRef = useRef(false);
+  const baselineOriginalRoomRef = useRef<number | null>(null);
+  const guidedCompleteLatchRef = useRef(false);
+
+  useEffect(() => {
+    if (!guided) return;
+    requestAnimationFrame(() => setGuidedEnter(true));
+  }, [guided]);
+
+  useEffect(() => {
+    if (!guided || guidedLoadBubble || guidedLoadDismissed) return;
+    const t = setTimeout(() => {
+      setGuidedLoadBubble(true);
+      setGuidedLoadVisible(true);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [guided, guidedLoadBubble, guidedLoadDismissed]);
+
+  useEffect(() => {
+    if (!guided || items.length === 0 || baselineOriginalRoomRef.current !== null) return;
+    const o = items
+      .filter((i) => !i.source || i.source === "original")
+      .reduce((s, i) => s + i.qty * i.unit_cost, 0);
+    baselineOriginalRoomRef.current = o;
+  }, [guided, items]);
+
+  useEffect(() => {
+    firstUpgradeGuidedRef.current = false;
+    baselineOriginalRoomRef.current = null;
+    guidedCompleteLatchRef.current = false;
+    setShowGuidedComplete(false);
+    setGuidedLoadBubble(false);
+    setGuidedLoadVisible(false);
+    setGuidedLoadDismissed(false);
+    setGuidedUpgradeDelta(null);
+    setGuidedUpgradeFromTo(null);
+  }, [roomSlug]);
 
   const bundleSnapValues = useMemo(() => {
     const vals = BUNDLES_DATA.filter((b) => b.room === roomName).map((b) => b.total_value);
@@ -513,6 +583,7 @@ export default function RoomReviewPage() {
       const fallbackName = SLUG_TO_ROOM[roomSlug] ?? "";
       setRoomName(fallbackName);
       setItems([]);
+      setClaimGoal(CLAIM_GOAL_DEFAULT);
       if (fallbackName) {
         const def = DEFAULT_ROOM_TARGETS[fallbackName] ?? 0;
         setRoomTarget(readRoomGoal(sessionId, fallbackName) ?? def);
@@ -520,6 +591,7 @@ export default function RoomReviewPage() {
       setIsLoading(false);
       return;
     }
+    setClaimGoal(sess.target_value ?? CLAIM_GOAL_DEFAULT);
     const rooms = sess.room_summary?.map((r) => r.room) ?? [...new Set(claimItems.map((i) => i.room))];
     setAllRooms(rooms);
     const name = SLUG_TO_ROOM[roomSlug] ?? rooms.find((r) => slugify(r) === roomSlug) ?? "";
@@ -582,6 +654,12 @@ export default function RoomReviewPage() {
   const gapRemaining = Math.max(0, roomTarget - roomTotal);
   const stillNeeded = Math.max(0, roomTarget - roomTotal);
 
+  useEffect(() => {
+    if (!guided || guidedCompleteLatchRef.current || progressPct < 100) return;
+    guidedCompleteLatchRef.current = true;
+    setShowGuidedComplete(true);
+  }, [guided, progressPct]);
+
   const roomIdx = allRooms.indexOf(roomName);
   const prevRoom = roomIdx > 0 ? allRooms[roomIdx - 1] : null;
   const nextRoom = roomIdx < allRooms.length - 1 ? allRooms[roomIdx + 1] : null;
@@ -618,9 +696,28 @@ export default function RoomReviewPage() {
     setItems(newRoomItems);
   }
 
+  function claimTotals(claim: ClaimItem[]) {
+    const t = claim.reduce((s, i) => s + i.qty * i.unit_cost, 0);
+    const g = claimGoal > 0 ? Math.min(100, Math.round((t / claimGoal) * 100)) : 0;
+    return { total: t, pct: g };
+  }
+
+  function fireUpgradeReward(beforeItems: ClaimItem[], afterItems: ClaimItem[], lineDelta: number) {
+    const before = claimTotals(beforeItems);
+    const after = claimTotals(afterItems);
+    dispatchUpgradeReward({
+      delta: lineDelta,
+      claimTotal: after.total,
+      goalPctBefore: before.pct,
+      goalPctAfter: after.pct,
+    });
+  }
+
   async function handleApplyUpgrade(item: ClaimItem, option: UpgradeOption) {
     if (!session?.claim_items || isItemLocked(item)) return;
     setIsSaving(true);
+    const beforeClaim = session.claim_items;
+    const lineDelta = (option.price - item.unit_cost) * item.qty;
     const stableCode = `upgrade:${roomName}:${item.description}:${item.unit_cost}`.slice(0, 180);
     const snap: ClaimItem["pre_upgrade_item"] = {
       description: item.description,
@@ -650,7 +747,15 @@ export default function RoomReviewPage() {
       }
       return ci;
     });
+    const rest = beforeClaim.filter((i) => i.room !== roomName);
+    const afterClaim = [...rest, ...nextItems];
     await saveRoomItems(nextItems);
+    fireUpgradeReward(beforeClaim, afterClaim, lineDelta);
+    if (guided && !firstUpgradeGuidedRef.current) {
+      firstUpgradeGuidedRef.current = true;
+      setGuidedUpgradeDelta(lineDelta);
+      setGuidedUpgradeFromTo({ from: item.unit_cost, to: option.price });
+    }
     try {
       await supabase.from("bundle_decisions").upsert(
         {
@@ -684,8 +789,10 @@ export default function RoomReviewPage() {
   }
 
   async function handleChangeUpgrade(item: ClaimItem, option: UpgradeOption) {
-    if (!item.pre_upgrade_item || isItemLocked(item)) return;
+    if (!session?.claim_items || !item.pre_upgrade_item || isItemLocked(item)) return;
     setIsSaving(true);
+    const beforeClaim = session.claim_items;
+    const lineDelta = (option.price - item.unit_cost) * item.qty;
     const orig = item.pre_upgrade_item;
     const nextItems = items.map((ci) => {
       if (ci.room === item.room && ci.description === item.description && ci.unit_cost === item.unit_cost) {
@@ -707,7 +814,10 @@ export default function RoomReviewPage() {
       }
       return ci;
     });
+    const rest = beforeClaim.filter((i) => i.room !== roomName);
+    const afterClaim = [...rest, ...nextItems];
     await saveRoomItems(nextItems);
+    fireUpgradeReward(beforeClaim, afterClaim, lineDelta);
     setIsSaving(false);
     setToast(`Changed upgrade — ${option.title}`);
   }
@@ -740,6 +850,7 @@ export default function RoomReviewPage() {
   }
 
   async function handleAddSuggestion(row: SuggestedAdditionRow, tier: "mid" | "premium") {
+    if (!session?.claim_items) return;
     const opt = tier === "mid" ? row.mid : row.premium;
     const line: ClaimItem = {
       room: roomName,
@@ -755,7 +866,13 @@ export default function RoomReviewPage() {
       source: "bundle",
       vendor_url: opt.url,
     };
-    await saveRoomItems([...items, line]);
+    const beforeClaim = session.claim_items;
+    const nextRoom = [...items, line];
+    const rest = beforeClaim.filter((i) => i.room !== roomName);
+    const afterClaim = [...rest, ...nextRoom];
+    const lineDelta = opt.price;
+    await saveRoomItems(nextRoom);
+    fireUpgradeReward(beforeClaim, afterClaim, lineDelta);
     setToast(`Added ${row.label}`);
   }
 
@@ -832,7 +949,10 @@ export default function RoomReviewPage() {
         <div className="mt-4">
           <p className="text-base text-gray-600 mb-1">Progress: {progressPct}%</p>
           <div className="h-3 w-full max-w-xl rounded-full bg-gray-200 overflow-hidden">
-            <div className="h-full bg-[#2563EB] transition-all" style={{ width: `${progressPct}%` }} />
+            <div
+              className="h-full bg-[#2563EB] transition-all duration-500"
+              style={{ width: `${progressPct}%` }}
+            />
           </div>
         </div>
       </header>
@@ -890,6 +1010,11 @@ export default function RoomReviewPage() {
                               <p className="text-blue-600 font-bold tabular-nums mt-1">
                                 {formatCurrency(item.unit_cost)} ✓
                               </p>
+                              {item.previous_unit_cost != null && (
+                                <p className="mt-1 text-base font-bold text-green-600 tabular-nums">
+                                  +{formatCurrency((item.unit_cost - item.previous_unit_cost) * item.qty)} added ✓
+                                </p>
+                              )}
                               <div className="mt-2 flex flex-wrap gap-2">
                                 <button
                                   type="button"
@@ -1061,10 +1186,10 @@ export default function RoomReviewPage() {
             </Link>
             {nextRoom ? (
               <Link
-                href={`/review/${slugify(nextRoom)}`}
+                href={`/review/${slugify(nextRoom)}${guided ? "?guided=true" : ""}`}
                 className="min-h-[44px] flex items-center rounded-xl bg-[#2563EB] px-4 py-2 font-bold text-white"
               >
-                Next room →
+                {guided ? "Next Room →" : "Next room →"}
               </Link>
             ) : (
               <Link href="/review" className="min-h-[44px] flex items-center rounded-xl bg-gray-200 px-4 py-2 font-medium text-gray-700">
@@ -1074,6 +1199,117 @@ export default function RoomReviewPage() {
           </div>
         </div>
       </footer>
+
+      {/* Guided tour — character + bubbles */}
+      {guided && (
+        <>
+          <div
+            className={`fixed bottom-48 right-4 z-[48] origin-bottom-right transition-transform duration-500 ease-out md:bottom-40 ${
+              guidedEnter ? "translate-x-0" : "translate-x-[130%]"
+            }`}
+          >
+            <div className="scale-100 drop-shadow-md sm:scale-[1.25]">
+              <AniGuide
+                expression={showGuidedComplete ? "happy" : guidedUpgradeDelta != null ? "excited" : "excited"}
+                size={80}
+              />
+            </div>
+          </div>
+
+          {guidedLoadBubble && !guidedLoadDismissed && (
+            <div className="fixed bottom-48 right-4 z-[49] flex w-[min(calc(100vw-2rem),320px)] flex-col items-stretch gap-3 sm:bottom-36 sm:right-[5.5rem] sm:max-w-[300px]">
+              <SpeechBubble
+                direction="right"
+                visible={guidedLoadVisible}
+                text={`This is the ${roomName}!\nYou have ${items.length} items worth ${formatCurrency(roomTotal)}.\nLet's see what we can upgrade! ✨`}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setGuidedLoadDismissed(true);
+                  setGuidedLoadVisible(false);
+                }}
+                className="min-h-[48px] rounded-xl bg-[#2563EB] px-4 text-base font-bold text-white shadow-md transition hover:bg-blue-700"
+              >
+                OK →
+              </button>
+            </div>
+          )}
+
+          {guidedUpgradeDelta != null && guidedUpgradeFromTo && (
+            <div className="fixed bottom-48 right-4 z-[49] flex w-[min(calc(100vw-2rem),320px)] flex-col items-stretch gap-3 sm:bottom-36 sm:right-[5.5rem] sm:max-w-[300px]">
+              <SpeechBubble
+                direction="right"
+                visible
+                text={`Nice! You just upgraded from ${formatCurrency(guidedUpgradeFromTo.from)} → ${formatCurrency(guidedUpgradeFromTo.to)}.\nThat's added to your claim!`}
+              />
+              <p className="text-center text-3xl font-black text-green-600 tabular-nums drop-shadow-sm">
+                +<CountUpMoney value={guidedUpgradeDelta} />
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setGuidedUpgradeDelta(null);
+                  setGuidedUpgradeFromTo(null);
+                }}
+                className="min-h-[48px] rounded-xl bg-[#16A34A] px-4 text-base font-bold text-white shadow-md transition hover:bg-green-700"
+              >
+                Keep going →
+              </button>
+            </div>
+          )}
+
+          {showGuidedComplete && (
+            <div className="fixed bottom-48 right-4 z-[49] flex w-[min(calc(100vw-2rem),340px)] flex-col items-stretch gap-3 rounded-2xl border border-gray-200 bg-white/95 p-4 shadow-xl backdrop-blur-sm sm:bottom-32 sm:right-[5.5rem]">
+              <SpeechBubble
+                direction="right"
+                visible
+                text={`Room done! 🎉\n${roomName}: ${formatCurrency(baselineOriginalRoomRef.current ?? originalSub)} → ${formatCurrency(roomTotal)}`}
+              />
+              {(() => {
+                const beforeR = baselineOriginalRoomRef.current ?? originalSub;
+                const added = Math.max(0, roomTotal - beforeR);
+                const pct = beforeR > 0 ? Math.round(((roomTotal - beforeR) / beforeR) * 100) : 100;
+                return (
+                  <div className="rounded-xl border border-gray-100 bg-gray-50 p-3 text-base">
+                    <div className="flex justify-between tabular-nums">
+                      <span className="text-gray-600">Before</span>
+                      <span className="font-semibold">{formatCurrency(beforeR)}</span>
+                    </div>
+                    <div className="mt-1 flex justify-between tabular-nums">
+                      <span className="text-gray-600">After</span>
+                      <span className="font-semibold">{formatCurrency(roomTotal)}</span>
+                    </div>
+                    <div className="mt-2 flex justify-between font-bold text-green-600 tabular-nums">
+                      <span>Added</span>
+                      <span>
+                        +{formatCurrency(added)} ↑ {pct}%
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+              {nextRoom ? (
+                <Link
+                  href={`/review/${slugify(nextRoom)}?guided=true`}
+                  onClick={() => setShowGuidedComplete(false)}
+                  className="flex min-h-[48px] items-center justify-center rounded-xl bg-[#2563EB] px-4 text-center text-base font-bold text-white"
+                >
+                  Next Room: {nextRoom} →
+                </Link>
+              ) : (
+                <Link
+                  href="/review"
+                  onClick={() => setShowGuidedComplete(false)}
+                  className="flex min-h-[48px] items-center justify-center rounded-xl bg-gray-800 px-4 text-center text-base font-bold text-white"
+                >
+                  Back to dashboard →
+                </Link>
+              )}
+            </div>
+          )}
+        </>
+      )}
 
       {toast && (
         <div className="fixed bottom-52 left-1/2 z-40 -translate-x-1/2 rounded-xl bg-gray-900 px-5 py-3 text-base text-white shadow-xl">

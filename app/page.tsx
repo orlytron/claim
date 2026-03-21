@@ -1,12 +1,17 @@
 "use client";
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import AniGuide from "./components/AniGuide";
 import { ClaimItem } from "./lib/types";
 import { getRoomSummary } from "./actions/getRoomSummary";
 import { loadSession, saveSession, RoomSummary } from "./lib/session";
+import { CLAIM_GOAL_DEFAULT } from "./lib/room-targets";
+import { useClaimMode } from "./lib/useClaimMode";
 
 type Phase = "loading" | "idle" | "scanning" | "parsing" | "done";
+type BootPhase = "pending" | "welcomeBack" | "ready";
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -37,11 +42,25 @@ function groupByRoom(items: ClaimItem[]): Record<string, ClaimItem[]> {
   }, {});
 }
 
+function formatUsd0(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
 export default function Home() {
   const router = useRouter();
+  const { sessionId, hydrated } = useClaimMode();
+  const [bootPhase, setBootPhase] = useState<BootPhase>("pending");
+  const [welcomeClaim, setWelcomeClaim] = useState(0);
+  const [welcomeGoal, setWelcomeGoal] = useState(CLAIM_GOAL_DEFAULT);
+  const [showPdfUpload, setShowPdfUpload] = useState(false);
+
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [phase, setPhase] = useState<Phase>("loading");
+  const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [roomSummary, setRoomSummary] = useState<RoomSummary[] | null>(null);
   const [roomItems, setRoomItems] = useState<Record<string, ClaimItem[]>>({});
@@ -49,20 +68,26 @@ export default function Home() {
   const [targetValue, setTargetValue] = useState<string>("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // ── Hydrate from Supabase on every page load ─────────────────────────────
   useEffect(() => {
-    async function hydrate() {
-      const session = await loadSession();
-
+    if (!hydrated) return;
+    let cancelled = false;
+    (async () => {
+      const session = await loadSession(sessionId);
+      if (cancelled) return;
       if (session?.claim_items && session.claim_items.length > 0) {
-        router.replace("/review");
-        return;
+        const total = session.claim_items.reduce((s, i) => s + i.qty * i.unit_cost, 0);
+        setWelcomeClaim(total);
+        setWelcomeGoal(session.target_value ?? CLAIM_GOAL_DEFAULT);
+        setBootPhase("welcomeBack");
       } else {
+        setBootPhase("ready");
         setPhase("idle");
       }
-    }
-    hydrate();
-  }, []);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated, sessionId]);
 
   const resetParseState = () => {
     setRoomSummary(null);
@@ -184,11 +209,14 @@ export default function Home() {
         0
       );
 
-      await saveSession({
-        claim_items: allItems,
-        current_total: currentTotal,
-        status: "complete",
-      });
+      await saveSession(
+        {
+          claim_items: allItems,
+          current_total: currentTotal,
+          status: "complete",
+        },
+        sessionId
+      );
 
       setPhase("done");
     } catch (err) {
@@ -201,7 +229,7 @@ export default function Home() {
   const handleConfirm = async () => {
     const parsed = parseFloat(targetValue.replace(/[^0-9.]/g, ""));
     if (!isNaN(parsed) && parsed > 0) {
-      await saveSession({ target_value: parsed });
+      await saveSession({ target_value: parsed }, sessionId);
     }
     router.push("/review");
   };
@@ -263,17 +291,86 @@ export default function Home() {
 
       <main className="mx-auto max-w-4xl px-6 py-12">
 
-        {/* ── Hydrating from Supabase ───────────────────────────────────── */}
-        {phase === "loading" && (
+        {/* ── Boot / welcome ─────────────────────────────────────────────── */}
+        {(!hydrated || bootPhase === "pending") && (
           <div className="flex flex-col items-center py-24">
             <Spinner size="lg" color="blue" />
             <p className="mt-4 text-sm text-gray-500">Loading your claim…</p>
           </div>
         )}
 
+        {hydrated && bootPhase === "welcomeBack" && (
+          <div className="mx-auto flex max-w-lg flex-col items-center px-4 py-12 text-center">
+            <AniGuide expression="happy" size={80} className="sm:scale-125" />
+            <h2 className="mt-6 text-2xl font-bold text-gray-900">Welcome back, David.</h2>
+            <p className="mt-2 text-lg text-gray-600">
+              Your claim: <span className="font-bold tabular-nums text-gray-900">{formatUsd0(welcomeClaim)}</span>
+            </p>
+            <p className="text-lg text-gray-600">
+              Goal:{" "}
+              <span className="font-bold tabular-nums text-gray-900">{formatUsd0(welcomeGoal)}</span>
+            </p>
+            <div className="mt-6 w-full max-w-md">
+              <p className="mb-2 text-sm font-medium text-gray-500">
+                Progress:{" "}
+                {welcomeGoal > 0 ? Math.min(100, Math.round((welcomeClaim / welcomeGoal) * 100)) : 0}%
+              </p>
+              <div className="h-3 w-full overflow-hidden rounded-full bg-gray-200">
+                <div
+                  className="h-full rounded-full bg-[#2563EB] transition-all duration-500"
+                  style={{
+                    width: `${welcomeGoal > 0 ? Math.min(100, (welcomeClaim / welcomeGoal) * 100) : 0}%`,
+                  }}
+                />
+              </div>
+            </div>
+            <div className="mt-10 flex w-full max-w-sm flex-col gap-3">
+              <Link
+                href="/review"
+                className="flex min-h-[52px] items-center justify-center rounded-2xl bg-[#2563EB] text-base font-bold text-white shadow-md transition hover:bg-blue-700"
+              >
+                ▶ Continue where I left off
+              </Link>
+              <Link
+                href="/onboarding"
+                className="flex min-h-[52px] items-center justify-center rounded-2xl border-2 border-gray-200 bg-white text-base font-bold text-gray-800 shadow-sm transition hover:bg-gray-50"
+              >
+                ↺ Start guided tour again
+              </Link>
+            </div>
+          </div>
+        )}
+
+        {hydrated && bootPhase === "ready" && !showPdfUpload && phase === "idle" && (
+          <div className="flex flex-col items-center py-16">
+            <Link
+              href="/onboarding"
+              className="flex min-h-[56px] items-center justify-center rounded-2xl bg-[#2563EB] px-10 text-lg font-bold text-white shadow-md transition hover:bg-blue-700"
+            >
+              ▶ Begin →
+            </Link>
+            <button
+              type="button"
+              onClick={() => setShowPdfUpload(true)}
+              className="mt-6 text-sm font-medium text-gray-500 underline hover:text-gray-700"
+            >
+              Upload claim PDF instead
+            </button>
+          </div>
+        )}
+
         {/* ── Upload zone ───────────────────────────────────────────────── */}
-        {phase === "idle" && (
+        {hydrated && bootPhase === "ready" && (showPdfUpload || phase !== "idle") && (
           <div className="flex flex-col items-center">
+            {showPdfUpload && phase === "idle" && (
+              <button
+                type="button"
+                onClick={() => setShowPdfUpload(false)}
+                className="mb-4 self-start text-sm font-medium text-[#2563EB] hover:underline"
+              >
+                ← Back
+              </button>
+            )}
             <h1 className="mb-2 text-2xl font-semibold text-gray-900">
               Upload Your Insurance Claim
             </h1>

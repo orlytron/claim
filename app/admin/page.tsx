@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import ClientSuggestionForm from "../components/ClientSuggestionForm";
 import { supabase } from "../lib/supabase";
 import { formatCurrency } from "../lib/utils";
 
@@ -333,6 +334,19 @@ export default function AdminPage() {
       </header>
 
       <main className="mx-auto max-w-5xl px-6 py-8 space-y-10">
+
+        {/* ── Client suggestion (admin entry) ─────────────────────────────── */}
+        <section>
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-4">
+            Submit client suggestion
+          </h2>
+          <div className="rounded-xl border border-gray-200 bg-white p-6 max-w-lg">
+            <p className="text-sm text-gray-500 mb-4">
+              Log feedback on behalf of the client (same as the old floating form — now admin-only).
+            </p>
+            <ClientSuggestionForm />
+          </div>
+        </section>
 
         {/* ── SECTION 1: Claim Overview ─────────────────────────────────────── */}
         <section>
