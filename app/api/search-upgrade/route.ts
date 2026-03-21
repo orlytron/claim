@@ -137,78 +137,80 @@ export async function POST(req: NextRequest) {
       category: string;
     };
 
-  const desc = (item_description ?? "").trim();
-  console.log("Upgrade API called for:", desc, "price:", current_price);
+  const cleanDesc = (item_description ?? "").trim();
+  console.log("Upgrade API called for:", cleanDesc, "price:", current_price);
 
-  if (!desc || !current_price) {
+  if (!cleanDesc || !current_price) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   }
 
   // ── Cache (service role) — case-insensitive exact, then fuzzy first word ───
-  console.log("Cache lookup:", desc);
+  console.log("Cache lookup:", cleanDesc);
+  let cached: { mid: unknown; premium: unknown } | null = null;
   try {
-    const { data: cached, error: cacheErr } = await supabaseAdmin
+    const { data: exactRow, error: cacheErr } = await supabaseAdmin
       .from("upgrades_cache")
       .select("mid, premium")
-      .ilike("item_description", desc)
+      .ilike("item_description", cleanDesc)
       .maybeSingle();
 
     if (cacheErr) console.log("Cache read error:", cacheErr.message);
+    cached = exactRow;
+
+    console.log("Cache hit:", !!cached);
 
     if (cached?.mid) {
-      console.log("Cache hit:", true);
       console.log("Mid:", (cached.mid as UpgradeProduct)?.title, "$" + (cached.mid as UpgradeProduct)?.price);
       return NextResponse.json({ mid: cached.mid, premium: cached.premium, source: "cache" });
     }
 
-    const firstWord = desc.split(/\s+/).filter(Boolean)[0] ?? "";
-    if (firstWord.length >= 2) {
-      const pattern = `%${firstWord.replace(/[%_]/g, "")}%`;
+    const firstWord = cleanDesc.split(/\s+/).filter(Boolean)[0] ?? "";
+    if (firstWord.length >= 4) {
+      const safe = firstWord.replace(/[%_]/g, "");
       const { data: fuzzy } = await supabaseAdmin
         .from("upgrades_cache")
         .select("mid, premium")
-        .ilike("item_description", pattern)
-        .limit(1)
+        .ilike("item_description", `%${safe}%`)
         .maybeSingle();
 
       if (fuzzy?.mid) {
-        console.log("Cache fuzzy hit:", true);
-        return NextResponse.json({ mid: fuzzy.mid, premium: fuzzy.premium, source: "cache_fuzzy" });
+        return NextResponse.json({
+          ...fuzzy,
+          source: "cache-fuzzy",
+        });
       }
     }
-
-    console.log("Cache hit:", false);
   } catch (e) {
     console.log("Cache lookup exception (non-fatal):", e);
   }
 
   const brandPrefix = brand ? `${brand} ` : "";
   const catSuffix = category ? ` ${category}` : "";
-  const baseQuery = `${brandPrefix}${desc} 2024${catSuffix}`.trim();
-  const noBrandQuery = `${desc} 2024${catSuffix}`.trim();
+  const baseQuery = `${brandPrefix}${cleanDesc} 2024${catSuffix}`.trim();
+  const noBrandQuery = `${cleanDesc} 2024${catSuffix}`.trim();
 
   let [serpMid, serpPremium] = await serpSearchBoth(baseQuery);
   if (!serpMid && brand) {
     [serpMid, serpPremium] = await serpSearchBoth(noBrandQuery);
   }
 
-  const fb = localFallbackBoth(desc, brand, current_price);
+  const fb = localFallbackBoth(cleanDesc, brand, current_price);
   const mid: UpgradeProduct = serpMid
-    ? fillFallbacks(serpMid, serpMid.title || desc)
+    ? fillFallbacks(serpMid, serpMid.title || cleanDesc)
     : fb.mid;
   const premium: UpgradeProduct = serpPremium
-    ? fillFallbacks(serpPremium, serpPremium.title || desc)
+    ? fillFallbacks(serpPremium, serpPremium.title || cleanDesc)
     : fb.premium;
 
   try {
     await supabaseAdmin.from("upgrades_cache").insert({
-      item_description: desc,
+      item_description: cleanDesc,
       brand: brand ?? "",
       search_query: baseQuery,
       mid,
       premium,
     });
-    console.log("Cache STORED:", desc);
+    console.log("Cache STORED:", cleanDesc);
   } catch (e) {
     console.log("Cache store error (non-fatal):", e);
   }

@@ -28,7 +28,7 @@ export interface ClaimItem {
   };
 }
 
-export type TierKey = "keep" | "entry" | "mid" | "premium" | "ultra";
+export type TierKey = "keep" | "entry" | "mid" | "premium";
 
 export type TierSuggestion = {
   tier: TierKey;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import AniGuide from "../../components/AniGuide";
@@ -225,25 +225,31 @@ function LockButton({ locked, onToggle }: { locked: boolean; onToggle: () => voi
 
 // ── Right column: existing item + cache ────────────────────────────────────────
 
+const ENTRY_TITLE_PREFIX = "Entry upgrade —";
+
 function ExistingUpgradePanel({
   item,
   locked,
   cacheHas,
   onApply,
+  onKeepOriginal,
 }: {
   item: ClaimItem;
   locked: boolean;
   cacheHas: boolean;
   onApply: (option: UpgradeOption) => Promise<void>;
+  onKeepOriginal?: () => void;
 }) {
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState<{ mid: UpgradeProduct; premium: UpgradeProduct } | null>(null);
+  const [data, setData] = useState<{ mid: UpgradeProduct; premium: UpgradeProduct | null } | null>(null);
   const [customDesc, setCustomDesc] = useState("");
   const [customPrice, setCustomPrice] = useState("");
-  const [applying, setApplying] = useState<"mid" | "premium" | "custom" | null>(null);
+  const [applying, setApplying] = useState<"entry" | "mid" | "premium" | "custom" | null>(null);
 
   const baseUnit =
     item.source === "upgrade" && item.pre_upgrade_item ? item.pre_upgrade_item.unit_cost : item.unit_cost;
+  const lineOriginal = baseUnit * item.qty;
+  const isUpgradedLine = item.source === "upgrade" && !!item.pre_upgrade_item;
 
   useEffect(() => {
     setCustomDesc(item.description);
@@ -270,8 +276,14 @@ function ExistingUpgradePanel({
           }),
         });
         if (!res.ok) throw new Error("fetch");
-        const j = (await res.json()) as { mid: UpgradeProduct; premium: UpgradeProduct };
-        if (!cancelled) setData(j);
+        const j = (await res.json()) as {
+          mid?: UpgradeProduct;
+          premium?: UpgradeProduct | null;
+        };
+        if (!cancelled && j.mid) {
+          const prem = j.premium && typeof j.premium === "object" && j.premium.price > 0 ? j.premium : null;
+          setData({ mid: j.mid, premium: prem });
+        } else if (!cancelled) setData(null);
       } catch {
         if (!cancelled) setData(null);
       } finally {
@@ -295,16 +307,40 @@ function ExistingUpgradePanel({
 
   const customOk = customDesc.trim().length > 0 && parseFloat(customPrice) > 0;
 
-  function rowClass(active: boolean) {
-    return `flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2.5 text-base transition-colors duration-300 ${
-      active ? "border-blue-400 bg-blue-50" : "border-gray-200 bg-white/80"
-    }`;
-  }
+  const entryUnitPrice = data?.mid ? Math.round(data.mid.price * 0.7) : 0;
+  const showEntry = !!data?.mid && entryUnitPrice > baseUnit * 1.15;
+  const showPremium =
+    !!data?.mid && !!data.premium && data.premium.price > data.mid.price;
 
+  const entrySelected = isUpgradedLine && item.description.startsWith(ENTRY_TITLE_PREFIX);
   const midSelected =
-    item.source === "upgrade" && data && Math.abs(item.unit_cost - data.mid.price) < 0.01;
+    isUpgradedLine &&
+    !entrySelected &&
+    !!data &&
+    Math.abs(item.unit_cost - data.mid.price) < 0.01 &&
+    item.description === data.mid.title;
   const premSelected =
-    item.source === "upgrade" && data && Math.abs(item.unit_cost - data.premium.price) < 0.01;
+    isUpgradedLine &&
+    !!data?.premium &&
+    Math.abs(item.unit_cost - data.premium.price) < 0.01 &&
+    item.description === data.premium.title;
+  const customSelected = isUpgradedLine && !entrySelected && !midSelected && !premSelected;
+  const keepSelected = !isUpgradedLine;
+
+  function tierShell(selected: boolean, children: ReactNode) {
+    return (
+      <div
+        className={`rounded-xl border-2 p-4 transition-colors duration-300 ${
+          selected ? "border-blue-500 bg-blue-50/80" : "border-gray-200 bg-white/90"
+        }`}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1 space-y-1 overflow-visible">{children}</div>
+          {selected && <span className="shrink-0 text-lg font-bold text-blue-600" aria-hidden>✓</span>}
+        </div>
+      </div>
+    );
+  }
 
   if (locked) {
     return (
@@ -317,139 +353,233 @@ function ExistingUpgradePanel({
   if (!cacheHas) return null;
 
   return (
-    <div className="min-h-[120px] space-y-3 rounded-xl border border-gray-200 bg-[#F0F7FF] p-4 text-base">
+    <div className="min-h-[120px] space-y-4 rounded-xl border border-gray-200 bg-[#F0F7FF] p-4 text-base">
       {loading ? (
         <div className="flex items-center gap-2 py-6 text-gray-500">
           <SmallSpinner /> Loading suggestions…
         </div>
       ) : (
         <>
-          {item.source === "upgrade" && item.pre_upgrade_item && (
-            <p className="border-b border-gray-200 pb-2 text-sm text-gray-600">
+          {isUpgradedLine && (
+            <p className="text-sm text-gray-600">
               Pick another option below, or <span className="font-medium">revert</span> on the left.
             </p>
           )}
 
-          {data && (
+          {!isUpgradedLine &&
+            tierShell(keepSelected, (
+              <>
+                <p className="text-sm font-bold text-gray-800">Keep original</p>
+                <p className="break-words text-base font-medium whitespace-normal text-gray-900">
+                  {item.pre_upgrade_item?.description ?? item.description}
+                </p>
+                <p className="break-words text-sm text-gray-500 whitespace-normal">
+                  {item.brand ? `${item.brand} · ` : ""}Original line
+                </p>
+                <p className="text-xl font-bold tabular-nums text-[#2563EB]">{formatCurrency(lineOriginal)}</p>
+                <p className="text-sm font-semibold text-gray-500">—</p>
+                <button
+                  type="button"
+                  disabled={applying !== null}
+                  onClick={() => onKeepOriginal?.()}
+                  className="mt-2 rounded-lg bg-gray-200 px-4 py-2 text-sm font-bold text-gray-800 hover:bg-gray-300 disabled:opacity-40"
+                >
+                  Keep
+                </button>
+              </>
+            ))}
+
+          {!isUpgradedLine && <div className="border-t border-gray-300" />}
+
+          {data?.mid && (
             <>
-              <div className={rowClass(!!midSelected)}>
-                <span className="shrink-0 font-bold text-gray-700">Mid:</span>
-                <span className="min-w-0 flex-1 truncate font-medium text-gray-900" title={data.mid.title}>
-                  {data.mid.title}
-                </span>
-                <span className="shrink-0 font-bold tabular-nums">{formatCurrency(data.mid.price)}</span>
-                <span className="shrink-0 font-bold text-green-600 tabular-nums">
-                  +{formatCurrency((data.mid.price - baseUnit) * item.qty)}
-                </span>
-                <a
-                  href={data.mid.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="shrink-0 text-sm font-semibold text-blue-600 underline"
-                >
-                  View ↗
-                </a>
-                <button
-                  type="button"
-                  disabled={applying !== null}
-                  onClick={() => {
-                    setApplying("mid");
-                    void onApply({
-                      label: "Mid",
-                      price: data.mid.price,
-                      title: data.mid.title,
-                      brand: data.mid.brand,
-                      model: data.mid.model,
-                      retailer: data.mid.retailer,
-                      url: data.mid.url,
-                    }).finally(() => setApplying(null));
-                  }}
-                  className="shrink-0 rounded-lg bg-[#2563EB] px-3 py-1.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-                >
-                  {applying === "mid" ? "…" : "Select ↗"}
-                </button>
-              </div>
-              <div className={rowClass(!!premSelected)}>
-                <span className="shrink-0 font-bold text-gray-700">Premium:</span>
-                <span className="min-w-0 flex-1 truncate font-medium text-gray-900" title={data.premium.title}>
-                  {data.premium.title}
-                </span>
-                <span className="shrink-0 font-bold tabular-nums">{formatCurrency(data.premium.price)}</span>
-                <span className="shrink-0 font-bold text-green-600 tabular-nums">
-                  +{formatCurrency((data.premium.price - baseUnit) * item.qty)}
-                </span>
-                <a
-                  href={data.premium.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="shrink-0 text-sm font-semibold text-blue-600 underline"
-                >
-                  View ↗
-                </a>
-                <button
-                  type="button"
-                  disabled={applying !== null}
-                  onClick={() => {
-                    setApplying("premium");
-                    void onApply({
-                      label: "Premium",
-                      price: data.premium.price,
-                      title: data.premium.title,
-                      brand: data.premium.brand,
-                      model: data.premium.model,
-                      retailer: data.premium.retailer,
-                      url: data.premium.url,
-                    }).finally(() => setApplying(null));
-                  }}
-                  className="shrink-0 rounded-lg bg-[#2563EB] px-3 py-1.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-                >
-                  {applying === "premium" ? "…" : "Select ↗"}
-                </button>
-              </div>
+              {showEntry &&
+                tierShell(entrySelected, (
+                  <>
+                    <p className="text-sm font-bold text-gray-800">Entry upgrade</p>
+                    <p className="break-words text-base font-medium whitespace-normal text-gray-900">
+                      Entry upgrade (derived from mid tier)
+                    </p>
+                    <p className="break-words text-sm text-gray-500 whitespace-normal">
+                      {(data.mid.brand || item.brand || "").trim()}
+                      {(data.mid.brand || item.brand) && " · "}
+                      Estimated value
+                    </p>
+                    <p className="text-xl font-bold tabular-nums text-[#2563EB]">
+                      {formatCurrency(entryUnitPrice * item.qty)}
+                    </p>
+                    <p className="text-base font-bold text-green-600 tabular-nums">
+                      +{formatCurrency((entryUnitPrice - baseUnit) * item.qty)}
+                    </p>
+                    <button
+                      type="button"
+                      disabled={applying !== null}
+                      onClick={() => {
+                        setApplying("entry");
+                        const shortDesc =
+                          item.pre_upgrade_item?.description ?? item.description;
+                        void onApply({
+                          label: "Entry",
+                          price: entryUnitPrice,
+                          title: `${ENTRY_TITLE_PREFIX} ${shortDesc}`.slice(0, 240),
+                          brand: data.mid.brand || item.brand,
+                          model: "",
+                          retailer: "",
+                          url: "",
+                        }).finally(() => setApplying(null));
+                      }}
+                      className="mt-2 rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                    >
+                      {applying === "entry" ? "…" : "Select"}
+                    </button>
+                  </>
+                ))}
+
+              {tierShell(midSelected, (
+                <>
+                  <p className="text-sm font-bold text-gray-800">Mid upgrade</p>
+                  <p className="break-words text-base font-medium whitespace-normal text-gray-900">{data.mid.title}</p>
+                  <p className="break-words text-sm text-gray-500 whitespace-normal">
+                    {data.mid.brand}
+                    {data.mid.brand && data.mid.retailer ? " · " : ""}
+                    {data.mid.retailer || ""}
+                  </p>
+                  <p className="text-xl font-bold tabular-nums text-[#2563EB]">
+                    {formatCurrency(data.mid.price * item.qty)}
+                  </p>
+                  <p className="text-base font-bold text-green-600 tabular-nums">
+                    +{formatCurrency((data.mid.price - baseUnit) * item.qty)}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={applying !== null}
+                      onClick={() => {
+                        setApplying("mid");
+                        void onApply({
+                          label: "Mid",
+                          price: data.mid.price,
+                          title: data.mid.title,
+                          brand: data.mid.brand,
+                          model: data.mid.model,
+                          retailer: data.mid.retailer,
+                          url: data.mid.url,
+                        }).finally(() => setApplying(null));
+                      }}
+                      className="rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                    >
+                      {applying === "mid" ? "…" : "Select"}
+                    </button>
+                    <a
+                      href={data.mid.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center rounded-lg border border-blue-200 bg-white px-4 py-2 text-sm font-bold text-blue-600 hover:bg-blue-50"
+                    >
+                      View ↗
+                    </a>
+                  </div>
+                </>
+              ))}
+
+              {showPremium &&
+                data.premium &&
+                tierShell(premSelected, (
+                  <>
+                    <p className="text-sm font-bold text-gray-800">Premium upgrade</p>
+                    <p className="break-words text-base font-medium whitespace-normal text-gray-900">
+                      {data.premium.title}
+                    </p>
+                    <p className="break-words text-sm text-gray-500 whitespace-normal">
+                      {data.premium.brand}
+                      {data.premium.brand && data.premium.retailer ? " · " : ""}
+                      {data.premium.retailer || ""}
+                    </p>
+                    <p className="text-xl font-bold tabular-nums text-[#2563EB]">
+                      {formatCurrency(data.premium.price * item.qty)}
+                    </p>
+                    <p className="text-base font-bold text-green-600 tabular-nums">
+                      +{formatCurrency((data.premium.price - baseUnit) * item.qty)}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={applying !== null}
+                        onClick={() => {
+                          setApplying("premium");
+                          void onApply({
+                            label: "Premium",
+                            price: data.premium!.price,
+                            title: data.premium!.title,
+                            brand: data.premium!.brand,
+                            model: data.premium!.model,
+                            retailer: data.premium!.retailer,
+                            url: data.premium!.url,
+                          }).finally(() => setApplying(null));
+                        }}
+                        className="rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                      >
+                        {applying === "premium" ? "…" : "Select"}
+                      </button>
+                      <a
+                        href={data.premium.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center rounded-lg border border-blue-200 bg-white px-4 py-2 text-sm font-bold text-blue-600 hover:bg-blue-50"
+                      >
+                        View ↗
+                      </a>
+                    </div>
+                  </>
+                ))}
             </>
           )}
 
-          <div className={rowClass(false)}>
-            <span className="shrink-0 font-bold text-gray-700">Custom:</span>
-            <input
-              type="text"
-              value={customDesc}
-              onChange={(e) => setCustomDesc(e.target.value)}
-              className="min-w-[120px] flex-1 rounded-lg border border-gray-200 px-2 py-1.5 text-sm"
-              placeholder="Description"
-            />
-            <div className="flex shrink-0 items-center gap-1">
-              <span className="text-gray-400">$</span>
+          <div className="border-t border-gray-300" />
+
+          {tierShell(customSelected, (
+            <>
+              <p className="text-sm font-bold text-gray-800">Custom</p>
               <input
-                type="number"
-                min={0}
-                step="any"
-                value={customPrice}
-                onChange={(e) => setCustomPrice(e.target.value)}
-                className="w-24 rounded-lg border border-gray-200 px-2 py-1.5 text-sm tabular-nums"
-                placeholder="Price"
+                type="text"
+                value={customDesc}
+                onChange={(e) => setCustomDesc(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-base break-words"
+                placeholder="Description"
               />
-            </div>
-            <button
-              type="button"
-              disabled={applying !== null || !customOk}
-              onClick={() => {
-                setApplying("custom");
-                void onApply({
-                  label: "Custom",
-                  price: parseFloat(customPrice),
-                  title: customDesc.trim(),
-                  brand: item.brand,
-                  model: "",
-                  retailer: "",
-                  url: "",
-                }).finally(() => setApplying(null));
-              }}
-              className="shrink-0 rounded-lg bg-[#16A34A] px-3 py-1.5 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-40"
-            >
-              {applying === "custom" ? "…" : "Apply"}
-            </button>
-          </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="text-gray-400">$</span>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={customPrice}
+                  onChange={(e) => setCustomPrice(e.target.value)}
+                  className="min-w-[100px] flex-1 rounded-lg border border-gray-200 px-3 py-2 text-base tabular-nums"
+                  placeholder="Price"
+                />
+              </div>
+              <button
+                type="button"
+                disabled={applying !== null || !customOk}
+                onClick={() => {
+                  setApplying("custom");
+                  void onApply({
+                    label: "Custom",
+                    price: parseFloat(customPrice),
+                    title: customDesc.trim(),
+                    brand: item.brand,
+                    model: "",
+                    retailer: "",
+                    url: "",
+                  }).finally(() => setApplying(null));
+                }}
+                className="mt-2 rounded-lg bg-[#16A34A] px-4 py-2 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-40"
+              >
+                {applying === "custom" ? "…" : "Apply"}
+              </button>
+            </>
+          ))}
         </>
       )}
     </div>
@@ -542,7 +672,7 @@ function SuggestedAdditionPanel({
     <div className="space-y-3 rounded-xl border border-gray-200 bg-[#F0F7FF] p-4 text-base">
       <div className={rowCls()}>
         <span className="shrink-0 font-bold text-gray-700">Mid:</span>
-        <span className="min-w-0 flex-1 truncate font-medium" title={row.mid.title}>
+        <span className="min-w-0 flex-1 break-words font-medium whitespace-normal [overflow-wrap:anywhere]">
           {row.mid.title}
         </span>
         <span className="shrink-0 font-bold tabular-nums">{formatCurrency(row.mid.price)}</span>
@@ -564,7 +694,7 @@ function SuggestedAdditionPanel({
       </div>
       <div className={rowCls()}>
         <span className="shrink-0 font-bold text-gray-700">Premium:</span>
-        <span className="min-w-0 flex-1 truncate font-medium" title={row.premium.title}>
+        <span className="min-w-0 flex-1 break-words font-medium whitespace-normal [overflow-wrap:anywhere]">
           {row.premium.title}
         </span>
         <span className="shrink-0 font-bold tabular-nums">{formatCurrency(row.premium.price)}</span>
@@ -1080,7 +1210,7 @@ export default function RoomReviewPage() {
         )}
         <div className="mt-4">
           <p className="text-base text-gray-600 mb-1">Progress: {progressPct}%</p>
-          <div className="h-3 w-full max-w-xl rounded-full bg-gray-200 overflow-hidden">
+          <div className="h-3 w-full rounded-full bg-gray-200 overflow-hidden">
             <div
               className="h-full bg-[#2563EB] transition-all duration-500"
               style={{ width: `${progressPct}%` }}
@@ -1112,7 +1242,7 @@ export default function RoomReviewPage() {
               </div>
             </div>
 
-            <div className="divide-y divide-gray-200 border-x border-b border-gray-200 rounded-b-lg overflow-hidden">
+            <div className="divide-y divide-gray-200 border-x border-b border-gray-200 rounded-b-lg">
               {upgradeItems.map((item, idx) => {
                 const lk = lockKeyForItem(item);
                 const locked = lockedKeys.includes(lk);
@@ -1127,18 +1257,20 @@ export default function RoomReviewPage() {
                     key={`${generateItemId(item)}-${idx}`}
                     className={`flex flex-col md:grid md:grid-cols-2 ${rowBg}`}
                   >
-                    <div className="border-b md:border-b-0 md:border-r border-gray-200 p-4 py-5 text-base min-h-[100px] md:bg-white/80">
+                    <div className="border-b md:border-b-0 md:border-r border-gray-200 p-4 py-5 text-base min-h-[100px] md:bg-white/80 overflow-visible">
                       <p className="md:hidden font-bold uppercase tracking-wide text-gray-500 text-sm mb-3">What you have</p>
                       <div className="flex justify-between gap-3">
-                        <div className="min-w-0 flex-1">
+                        <div className="min-w-0 flex-1 overflow-visible break-words whitespace-normal [overflow-wrap:anywhere]">
                           {upgraded && item.pre_upgrade_item ? (
                             <>
-                              <p className="line-through text-gray-400">
+                              <p className="break-words whitespace-normal line-through text-gray-400 [overflow-wrap:anywhere]">
                                 {item.pre_upgrade_item.description}{" "}
                                 <span className="tabular-nums">{formatCurrency(item.previous_unit_cost!)}</span>
                               </p>
                               <p className="text-gray-500 my-1">↓</p>
-                              <p className="font-bold text-gray-900">{item.description}</p>
+                              <p className="break-words whitespace-normal font-bold text-gray-900 [overflow-wrap:anywhere]">
+                                {item.description}
+                              </p>
                               <p className="text-blue-600 font-bold tabular-nums mt-1">
                                 {formatCurrency(item.unit_cost)} ✓
                               </p>
@@ -1170,7 +1302,9 @@ export default function RoomReviewPage() {
                             </>
                           ) : (
                             <>
-                              <p className="font-bold text-gray-900 text-lg leading-snug">{item.description}</p>
+                              <p className="font-bold text-gray-900 text-lg leading-snug break-words whitespace-normal [overflow-wrap:anywhere]">
+                                {item.description}
+                              </p>
                               <p className="text-gray-600 mt-1">
                                 {item.brand ? <>{item.brand} · </> : null}Qty: {item.qty}
                               </p>
@@ -1189,6 +1323,7 @@ export default function RoomReviewPage() {
                           item={item}
                           locked={locked}
                           cacheHas={cacheHas}
+                          onKeepOriginal={() => setToast("Keeping original line")}
                           onApply={(opt) =>
                             upgraded && item.pre_upgrade_item
                               ? handleChangeUpgrade(item, opt)

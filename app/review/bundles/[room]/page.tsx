@@ -47,20 +47,6 @@ interface RevisedBundle {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function plausibilityLabel(p: "green" | "yellow" | "red") {
-  if (p === "green") return "fully defensible";
-  if (p === "yellow") return "needs narrative";
-  return "strong narrative required";
-}
-
-function plausibilityColors(p: "green" | "yellow" | "red") {
-  if (p === "green")
-    return { badge: "bg-green-50 text-green-700 border-green-200", dot: "bg-[#16A34A]" };
-  if (p === "yellow")
-    return { badge: "bg-amber-50 text-amber-700 border-amber-200", dot: "bg-[#D97706]" };
-  return { badge: "bg-red-50 text-red-700 border-red-200", dot: "bg-[#DC2626]" };
-}
-
 function Spinner({ size = "sm" }: { size?: "sm" | "md" }) {
   return (
     <svg
@@ -123,8 +109,6 @@ function BundleCard({
   const [displayItems, setDisplayItems] = useState<BundleItem[]>(bundle.items);
   const [swappingIdx, setSwappingIdx] = useState<number | null>(null);
   const [swapOptions, setSwapOptions] = useState<Record<number, BundleItem[]>>({});
-
-  const colors = plausibilityColors(bundle.plausibility);
 
   // ── Accept / Undo ──────────────────────────────────────────────────────────
 
@@ -257,8 +241,6 @@ function BundleCard({
   const totalValue = displayItems.reduce((s, i) => s + i.total, 0);
   const previewItems = displayItems.slice(0, 4);
   const remaining = displayItems.length - 4;
-  const revColors = revision ? plausibilityColors(revision.plausibility) : null;
-
   return (
     <div
       className={`rounded-xl border bg-white shadow-sm transition-all ${
@@ -274,12 +256,6 @@ function BundleCard({
                 ⭐ SWEET SPOT
               </span>
             )}
-            <span
-              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium ${colors.badge}`}
-            >
-              <span className={`h-1.5 w-1.5 rounded-full ${colors.dot}`} />
-              {plausibilityLabel(bundle.plausibility)}
-            </span>
             {accepted && (
               <span className="inline-flex items-center gap-1 rounded-full bg-green-50 border border-green-200 px-2.5 py-0.5 text-xs font-semibold text-green-700">
                 ✓ Accepted
@@ -484,14 +460,6 @@ function BundleCard({
                 <p className="text-xs text-gray-500 italic mt-1">&ldquo;{revision.description}&rdquo;</p>
               )}
             </div>
-            {revColors && (
-              <span
-                className={`shrink-0 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium ${revColors.badge}`}
-              >
-                <span className={`h-1.5 w-1.5 rounded-full ${revColors.dot}`} />
-                {plausibilityLabel(revision.plausibility)}
-              </span>
-            )}
           </div>
 
           {/* Revised items */}

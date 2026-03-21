@@ -21,29 +21,12 @@ function computeRoomTotals(session: SessionData): Record<string, number> {
   return totals;
 }
 
-function computePlausibility(session: SessionData) {
-  const counts = { green: 0, yellow: 0, red: 0 };
-  if (!session.claim_items) return counts;
-
-  session.claim_items.forEach((item) => {
-    const id = generateItemId(item);
-    const storedTier = session.item_tiers?.[id];
-    if (!storedTier) { counts.green++; return; }
-    const selectedTierData = storedTier.tiers?.find((t) => t.tier === storedTier.selected_tier);
-    const p = (selectedTierData?.plausibility ?? "green") as "green" | "yellow" | "red";
-    counts[p]++;
-  });
-
-  return counts;
-}
-
 export default function SideNav({ session }: { session: SessionData | null }) {
   const pathname = usePathname();
   if (!session) return null;
 
   const rooms = session.room_summary?.map((r) => r.room) ?? [];
   const roomTotals = computeRoomTotals(session);
-  const plausibility = computePlausibility(session);
   const targetValue = session.target_value ?? 0;
   const grandTotal = Object.values(roomTotals).reduce((s, v) => s + v, 0);
   const grandPct = targetValue > 0 ? Math.min(100, (grandTotal / targetValue) * 100) : 0;
@@ -105,7 +88,9 @@ export default function SideNav({ session }: { session: SessionData | null }) {
                     : "text-gray-700 hover:bg-gray-50 hover:text-gray-900"
                 }`}
               >
-                <span className="truncate">{room}</span>
+                <span className="min-w-0 flex-1 break-words whitespace-normal [overflow-wrap:anywhere]">
+                  {room}
+                </span>
                 {budget > 0 && (
                   <span
                     className={`ml-2 shrink-0 text-xs tabular-nums ${
@@ -151,22 +136,6 @@ export default function SideNav({ session }: { session: SessionData | null }) {
       </nav>
 
       <div className="border-t border-gray-100 px-4 py-4 space-y-3">
-        {/* Plausibility summary */}
-        <div className="flex gap-3 text-xs">
-          <span className="flex items-center gap-1 text-green-600">
-            <span className="h-2 w-2 rounded-full bg-green-500" />
-            {plausibility.green} clean
-          </span>
-          <span className="flex items-center gap-1 text-amber-600">
-            <span className="h-2 w-2 rounded-full bg-amber-500" />
-            {plausibility.yellow}
-          </span>
-          <span className="flex items-center gap-1 text-red-600">
-            <span className="h-2 w-2 rounded-full bg-red-500" />
-            {plausibility.red}
-          </span>
-        </div>
-
         <a
           href="/api/export-xact"
           className="block w-full rounded-md border border-gray-200 px-3 py-2 text-center text-xs font-medium text-gray-700 hover:bg-gray-50"

@@ -6,14 +6,9 @@ function buildSystemPrompt(): string {
   return `You are an insurance claim upgrade specialist.
 You suggest like-kind-and-quality replacements for personal property items in luxury insurance claims.
 
-PLAUSIBILITY RULES:
-- green: same brand family or up to 2.5x original price
-- yellow: 2.5x to 5x original price, needs narrative
-- red: over 5x original price, needs strong narrative
+Each tier must include plausibility and plausibility_reason for backend storage only — never user-facing difficulty or narrative text.
 
 UPGRADE MULTIPLE = suggested price / original price
-
-For yellow items, adjuster_narrative must explain why this upgrade is justified based on the lifestyle profile of the insured.
 
 All suggestions must:
 - Be the same item category (sofa stays sofa)
@@ -27,8 +22,8 @@ For children's rooms (kids_bedroom), suggest age-appropriate items — NOT luxur
 For shared/master bathrooms, suggest quality but functional items.
 For garage/outdoor, suggest durable and activity-appropriate items.
 
-Return ONLY a raw JSON array of exactly 5 objects.
-One object per tier: keep, entry, mid, premium, ultra.
+Return ONLY a raw JSON array of exactly 4 objects.
+One object per tier: keep, entry, mid, premium.
 No markdown. No backticks. Just the array.`;
 }
 
@@ -60,7 +55,7 @@ Lifestyle profile:
 - Avoid: ${avoid}
 - Suggested furniture brands: ${furnitureBrands}
 
-Generate 5 upgrade tiers for this item.
+Generate 4 upgrade tiers for this item.
 Keep tier must use the original item details (brand: "${item.brand || "unknown"}", unit_cost: ${item.unit_cost}).
 Each higher tier must be a genuinely better version of the same item type, matching the lifestyle profile and room context.`;
 }

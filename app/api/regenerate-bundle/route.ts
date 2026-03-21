@@ -32,7 +32,7 @@ The client has a specific taste profile:
 You will receive a bundle of items and client feedback. Regenerate the bundle respecting the feedback while:
 - Keeping the same total value (within 10%)
 - Keeping the same room and category focus
-- Maintaining plausibility for insurance claim
+- Including a plausibility code for internal database storage only (not user-facing)
 - All items must be available before Jan 1 2025
 - Keep items the client said they liked
 - Replace items the client said to change
