@@ -12,6 +12,7 @@ import { supabase } from "../../../lib/supabase";
 import { loadSession, saveSession } from "../../../lib/session";
 import { ClaimItem } from "../../../lib/types";
 import { formatCurrency } from "../../../lib/utils";
+import { BUNDLES_DATA } from "../../../lib/bundles-data";
 
 // ── Slug ↔ room name ──────────────────────────────────────────────────────────
 
@@ -31,27 +32,8 @@ const SLUG_TO_ROOM: Record<string, string> = {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface BundleItem {
-  description: string;
-  brand: string;
-  qty: number;
-  unit_cost: number;
-  total: number;
-  category: string;
-}
-
-interface Bundle {
-  id: string;
-  room: string;
-  bundle_code: string;
-  name: string;
-  description: string;
-  tier: string;
-  total_value: number;
-  sweet_spot: boolean;
-  plausibility: "green" | "yellow" | "red";
-  items: BundleItem[];
-}
+type BundleItem = (typeof BUNDLES_DATA)[number]["items"][number];
+type Bundle = (typeof BUNDLES_DATA)[number];
 
 interface RevisedBundle {
   name: string;
@@ -570,12 +552,6 @@ export default function BundleBrowserPage() {
     setIsLoading(true);
 
     const session = await loadSession();
-    const rooms =
-      session?.room_summary?.map((r) => r.room) ??
-      [...new Set(session?.claim_items?.map((i) => i.room) ?? [])];
-
-    console.log("URL param:", roomSlug);
-    console.log("Decoded room:", SLUG_TO_ROOM[roomSlug]);
     const name = SLUG_TO_ROOM[roomSlug] || roomSlug;
     setRoomName(name);
 
@@ -587,13 +563,11 @@ export default function BundleBrowserPage() {
       setCurrentRoomTotal(total);
     }
 
-    const { data: bundleRows } = await supabase
-      .from("bundles")
-      .select("*")
-      .eq("room", name)
-      .order("total_value", { ascending: true });
-
-    setBundles((bundleRows as Bundle[]) ?? []);
+    // Load bundles locally — no Supabase needed
+    const localBundles = BUNDLES_DATA
+      .filter((b) => b.room === name)
+      .sort((a, b) => a.total_value - b.total_value);
+    setBundles(localBundles);
 
     const { data: decisions } = await supabase
       .from("bundle_decisions")

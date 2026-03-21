@@ -12,6 +12,7 @@ import { formatCurrency } from "../lib/utils";
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const TARGET = 1_600_000;
+const MAX_ROOM_ALLOC = 400_000;
 const LS_DECISIONS = "bundle_decisions_v1";
 
 const ROOMS: { name: string; slug: string; display?: string }[] = [
@@ -32,34 +33,33 @@ function getLocalDecisions(): Record<string, string> {
   if (typeof window === "undefined") return {};
   try { return JSON.parse(localStorage.getItem(LS_DECISIONS) ?? "{}"); } catch { return {}; }
 }
-
 function setLocalDecision(code: string, action: string) {
-  const d = getLocalDecisions();
-  d[code] = action;
+  const d = getLocalDecisions(); d[code] = action;
   localStorage.setItem(LS_DECISIONS, JSON.stringify(d));
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function compact(v: number): string {
+function compact(v: number) {
   if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
   if (v >= 1_000) return `$${Math.round(v / 1_000)}K`;
   return `$${Math.round(v)}`;
 }
 
-function plausText(p: "green" | "yellow" | "red") {
-  if (p === "green") return { label: "Easy", dot: "bg-green-500", text: "text-green-700", bg: "bg-green-50 border-green-200" };
-  if (p === "yellow") return { label: "Medium", dot: "bg-amber-500", text: "text-amber-700", bg: "bg-amber-50 border-amber-200" };
-  return { label: "Review", dot: "bg-red-500", text: "text-red-700", bg: "bg-red-50 border-red-200" };
-}
-
 function itemPlaus(unit_cost: number) {
-  if (unit_cost > 15000) return plausText("red");
-  if (unit_cost > 5000) return plausText("yellow");
-  return plausText("green");
+  if (unit_cost > 15000) return { label: "Review", dot: "bg-red-500" };
+  if (unit_cost > 5000) return { label: "Medium", dot: "bg-amber-500" };
+  return { label: "Easy", dot: "bg-green-500" };
 }
 
-function Spinner() {
+function getClosestBundle(bundles: Bundle[], allocation: number): Bundle | null {
+  if (!bundles.length || allocation <= 0) return null;
+  return bundles.reduce((best, b) =>
+    Math.abs(b.total_value - allocation) < Math.abs(best.total_value - allocation) ? b : best
+  );
+}
+
+function SmallSpinner() {
   return (
     <svg className="h-5 w-5 animate-spin text-[#2563EB]" fill="none" viewBox="0 0 24 24">
       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -69,18 +69,15 @@ function Spinner() {
 }
 
 function Toast({ message, onDismiss }: { message: string; onDismiss: () => void }) {
-  useEffect(() => {
-    const t = setTimeout(onDismiss, 4000);
-    return () => clearTimeout(t);
-  }, [onDismiss]);
+  useEffect(() => { const t = setTimeout(onDismiss, 4000); return () => clearTimeout(t); }, [onDismiss]);
   return (
-    <div className="fixed bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-2xl bg-gray-900 px-6 py-4 text-base text-white shadow-2xl">
+    <div className="fixed bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-2xl bg-gray-900 px-6 py-4 text-base text-white shadow-2xl whitespace-nowrap">
       <span className="text-green-400 mr-2">✓</span>{message}
     </div>
   );
 }
 
-// ── Item Picker ("Build Your Own") ────────────────────────────────────────────
+// ── Accordion Item Picker (Part 5) ────────────────────────────────────────────
 
 function ItemPicker({
   room,
@@ -93,76 +90,117 @@ function ItemPicker({
   onAdd: (items: BundleItem[]) => void;
   onClose: () => void;
 }) {
+  const sweetCode = bundles.find((b) => b.sweet_spot)?.bundle_code ?? bundles[0]?.bundle_code ?? null;
+  const [openCode, setOpenCode] = useState<string | null>(sweetCode);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const allItems = useMemo(() => {
+  // Flat deduplicated list for total calculation
+  const allItemsFlat = useMemo(() => {
     const seen = new Set<string>();
     const out: BundleItem[] = [];
     for (const b of bundles) {
       for (const item of b.items) {
-        if (!seen.has(item.description)) {
-          seen.add(item.description);
-          out.push(item);
-        }
+        if (!seen.has(item.description)) { seen.add(item.description); out.push(item); }
       }
     }
-    return out.sort((a, b) => a.unit_cost - b.unit_cost);
+    return out;
   }, [bundles]);
 
-  const selectedTotal = allItems
+  const selectedTotal = allItemsFlat
     .filter((i) => selected.has(i.description))
     .reduce((s, i) => s + i.total, 0);
 
+  function toggle(desc: string) {
+    setSelected((prev) => { const n = new Set(prev); n.has(desc) ? n.delete(desc) : n.add(desc); return n; });
+  }
+
+  function selectAll(bundle: Bundle) {
+    setSelected((prev) => { const n = new Set(prev); bundle.items.forEach((i) => n.add(i.description)); return n; });
+  }
+
   return (
-    <div className="border-t border-gray-100 pt-5">
-      <div className="flex items-center justify-between mb-5">
+    <div className="border-t border-gray-100 pt-5 mt-5">
+      <div className="flex items-center justify-between mb-4">
         <h3 className="text-xl font-bold text-gray-900">Pick Items for {room}</h3>
         <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg p-1">✕</button>
       </div>
+      <p className="text-sm text-gray-400 mb-4">Tap a package to expand it. Check the items you want.</p>
 
-      <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
-        {allItems.map((item, i) => {
-          const p = itemPlaus(item.unit_cost);
-          const isSel = selected.has(item.description);
+      <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+        {bundles.map((bundle) => {
+          const isOpen = openCode === bundle.bundle_code;
+          const selectedCount = bundle.items.filter((i) => selected.has(i.description)).length;
           return (
-            <label
-              key={i}
-              className={`flex items-center gap-4 rounded-xl border-2 p-4 cursor-pointer transition-colors ${
-                isSel ? "border-[#2563EB] bg-blue-50" : "border-gray-200 bg-white hover:border-gray-300"
-              }`}
-            >
-              <input
-                type="checkbox"
-                checked={isSel}
-                onChange={() =>
-                  setSelected((prev) => {
-                    const n = new Set(prev);
-                    n.has(item.description) ? n.delete(item.description) : n.add(item.description);
-                    return n;
-                  })
-                }
-                className="h-5 w-5 accent-[#2563EB] shrink-0"
-              />
-              <span className="flex-1 text-base text-gray-900 leading-snug">{item.description}</span>
-              <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${p.dot}`} title={p.label} />
-              <span className="shrink-0 text-base font-bold tabular-nums text-gray-900">
-                {formatCurrency(item.unit_cost)}
-              </span>
-            </label>
+            <div key={bundle.bundle_code} className={`rounded-xl border-2 overflow-hidden transition-colors ${isOpen ? "border-[#2563EB]" : "border-gray-200"}`}>
+              {/* Header */}
+              <button
+                onClick={() => setOpenCode(isOpen ? null : bundle.bundle_code)}
+                className="flex w-full items-center gap-2 px-4 py-3 text-left bg-white hover:bg-gray-50"
+              >
+                <span className="text-gray-400 text-sm">{isOpen ? "▼" : "▶"}</span>
+                <span className="flex-1 text-base font-bold text-gray-900">{bundle.name}</span>
+                {bundle.sweet_spot && <span className="text-sm">⭐</span>}
+                {selectedCount > 0 && (
+                  <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700">
+                    {selectedCount} selected
+                  </span>
+                )}
+                <span className="shrink-0 tabular-nums text-base font-bold text-gray-500">{compact(bundle.total_value)}</span>
+              </button>
+
+              {/* Items */}
+              {isOpen && (
+                <div className="border-t border-gray-100 bg-gray-50 px-4 pb-3 pt-2">
+                  <button
+                    onClick={() => selectAll(bundle)}
+                    className="mb-2 text-sm font-semibold text-[#2563EB] hover:underline"
+                  >
+                    Select All in Bundle
+                  </button>
+                  <div className="space-y-1">
+                    {bundle.items.map((item, i) => {
+                      const p = itemPlaus(item.unit_cost);
+                      const isSel = selected.has(item.description);
+                      return (
+                        <label
+                          key={i}
+                          className={`flex items-center gap-3 rounded-lg border-2 p-3 cursor-pointer transition-colors ${isSel ? "border-[#2563EB] bg-blue-50" : "border-transparent bg-white hover:border-gray-200"}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSel}
+                            onChange={() => toggle(item.description)}
+                            className="h-5 w-5 accent-[#2563EB] shrink-0"
+                          />
+                          <span className="flex-1 text-base text-gray-900 leading-snug">
+                            {item.brand ? `${item.brand} ` : ""}{item.description}
+                          </span>
+                          <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${p.dot}`} title={p.label} />
+                          <span className="shrink-0 text-base font-bold tabular-nums text-gray-900">
+                            {formatCurrency(item.unit_cost)}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
           );
         })}
       </div>
 
       {selected.size > 0 && (
-        <div className="mt-5 flex items-center justify-between gap-4 rounded-xl bg-gray-50 p-4">
-          <p className="text-base text-gray-600">
-            Selected: <span className="text-2xl font-bold text-gray-900">{formatCurrency(selectedTotal)}</span>
-          </p>
+        <div className="mt-4 flex items-center justify-between gap-4 rounded-2xl bg-gray-50 p-4 border border-gray-200">
+          <div>
+            <p className="text-sm text-gray-500">Selected: {selected.size} items</p>
+            <p className="text-2xl font-bold tabular-nums text-gray-900">{formatCurrency(selectedTotal)}</p>
+          </div>
           <button
-            onClick={() => onAdd(allItems.filter((i) => selected.has(i.description)))}
-            className="min-h-[48px] rounded-xl bg-[#16A34A] px-6 py-3 text-base font-bold text-white transition-colors hover:bg-green-700"
+            onClick={() => onAdd(allItemsFlat.filter((i) => selected.has(i.description)))}
+            className="min-h-[48px] rounded-xl bg-[#16A34A] px-6 py-3 text-base font-bold text-white hover:bg-green-700 shrink-0"
           >
-            Add Selected Items →
+            Add These Items →
           </button>
         </div>
       )}
@@ -170,27 +208,19 @@ function ItemPicker({
   );
 }
 
-// ── Existing Items Tab ────────────────────────────────────────────────────────
+// ── Items Tab ─────────────────────────────────────────────────────────────────
 
-function ItemsTab({
-  items,
-  onUpdate,
-}: {
-  items: ClaimItem[];
-  onUpdate: (item: ClaimItem, newUnitCost: number) => void;
-}) {
+function ItemsTab({ items, onUpdate }: { items: ClaimItem[]; onUpdate: (item: ClaimItem, newPrice: number) => void }) {
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [positions, setPositions] = useState<Record<number, number>>({});
 
-  if (items.length === 0) {
-    return <p className="py-8 text-center text-base text-gray-400">No items recorded for this room.</p>;
-  }
+  if (!items.length) return <p className="py-8 text-center text-base text-gray-400">No items recorded for this room.</p>;
 
   return (
     <div className="space-y-1.5">
       {items.map((item, idx) => {
         const mid = Math.round((item.unit_cost * 1.8) / 100) * 100;
-        const high = Math.round(item.unit_cost * 3 / 100) * 100;
+        const high = Math.round((item.unit_cost * 3) / 100) * 100;
         const opts = [
           { label: "Original", price: item.unit_cost },
           { label: "Upgrade 1", price: mid },
@@ -198,79 +228,34 @@ function ItemsTab({
         ];
         const pos = positions[idx] ?? 0;
         const isExpanded = expandedIdx === idx;
-
         return (
           <div key={idx} className="rounded-xl border border-gray-200 bg-white overflow-hidden">
             <div className="flex items-center gap-3 px-4 py-3.5">
               <div className="flex-1 min-w-0">
-                <p className="text-base font-medium text-gray-900 leading-snug truncate">
-                  {item.description}
-                </p>
-                {item.brand && (
-                  <p className="text-sm text-gray-400 mt-0.5">{item.brand}</p>
-                )}
+                <p className="text-base font-medium text-gray-900 leading-snug truncate">{item.description}</p>
+                {item.brand && <p className="text-sm text-gray-400 mt-0.5">{item.brand}</p>}
               </div>
-              <p className="shrink-0 tabular-nums text-base font-bold text-gray-900">
-                {formatCurrency(item.unit_cost * item.qty)}
-              </p>
+              <p className="shrink-0 tabular-nums text-base font-bold text-gray-900">{formatCurrency(item.unit_cost * item.qty)}</p>
               <button
-                onClick={() => {
-                  setExpandedIdx(isExpanded ? null : idx);
-                  setPositions((p) => ({ ...p, [idx]: 0 }));
-                }}
-                className="shrink-0 rounded-lg border border-gray-200 px-2.5 py-1 text-sm text-gray-400 hover:border-gray-300 hover:text-gray-600"
-                title="Adjust value"
-              >
-                ↕
-              </button>
+                onClick={() => { setExpandedIdx(isExpanded ? null : idx); setPositions((p) => ({ ...p, [idx]: 0 })); }}
+                className="shrink-0 rounded-lg border border-gray-200 px-2.5 py-1 text-sm text-gray-400 hover:border-gray-300"
+              >↕</button>
             </div>
-
             {isExpanded && (
               <div className="border-t border-gray-100 bg-gray-50 px-4 py-4">
                 <div className="flex items-center gap-3 justify-between">
-                  <button
-                    onClick={() => setPositions((p) => ({ ...p, [idx]: Math.max(0, pos - 1) }))}
-                    disabled={pos === 0}
-                    className="text-2xl text-gray-400 disabled:opacity-20 hover:text-gray-700 px-2"
-                  >
-                    ◀
-                  </button>
+                  <button onClick={() => setPositions((p) => ({ ...p, [idx]: Math.max(0, pos - 1) }))} disabled={pos === 0} className="text-2xl text-gray-300 disabled:opacity-20 hover:text-gray-600 px-2">◀</button>
                   <div className="flex-1 text-center">
                     <p className="text-sm font-medium text-gray-500 mb-1">{opts[pos].label}</p>
-                    <p className="text-2xl font-bold tabular-nums text-gray-900">
-                      {formatCurrency(opts[pos].price)}
-                    </p>
-                    {item.qty > 1 && (
-                      <p className="text-sm text-gray-400 mt-0.5">
-                        × {item.qty} = {formatCurrency(opts[pos].price * item.qty)}
-                      </p>
-                    )}
+                    <p className="text-2xl font-bold tabular-nums text-gray-900">{formatCurrency(opts[pos].price)}</p>
+                    {item.qty > 1 && <p className="text-sm text-gray-400 mt-0.5">× {item.qty} = {formatCurrency(opts[pos].price * item.qty)}</p>}
                   </div>
-                  <button
-                    onClick={() => setPositions((p) => ({ ...p, [idx]: Math.min(opts.length - 1, pos + 1) }))}
-                    disabled={pos === opts.length - 1}
-                    className="text-2xl text-gray-400 disabled:opacity-20 hover:text-gray-700 px-2"
-                  >
-                    ▶
-                  </button>
+                  <button onClick={() => setPositions((p) => ({ ...p, [idx]: Math.min(opts.length - 1, pos + 1) }))} disabled={pos === opts.length - 1} className="text-2xl text-gray-300 disabled:opacity-20 hover:text-gray-600 px-2">▶</button>
                 </div>
                 {pos !== 0 && (
-                  <button
-                    onClick={() => {
-                      onUpdate(item, opts[pos].price);
-                      setExpandedIdx(null);
-                    }}
-                    className="mt-4 w-full min-h-[48px] rounded-xl bg-[#2563EB] py-3 text-base font-bold text-white transition-colors hover:bg-blue-700"
-                  >
-                    Apply
-                  </button>
+                  <button onClick={() => { onUpdate(item, opts[pos].price); setExpandedIdx(null); }} className="mt-4 w-full min-h-[48px] rounded-xl bg-[#2563EB] py-3 text-base font-bold text-white hover:bg-blue-700">Apply</button>
                 )}
-                <button
-                  onClick={() => setExpandedIdx(null)}
-                  className="mt-2 w-full py-2 text-sm text-gray-400 hover:text-gray-600"
-                >
-                  Cancel
-                </button>
+                <button onClick={() => setExpandedIdx(null)} className="mt-2 w-full py-2 text-sm text-gray-400 hover:text-gray-600">Cancel</button>
               </div>
             )}
           </div>
@@ -280,165 +265,151 @@ function ItemsTab({
   );
 }
 
-// ── Bundles Tab ───────────────────────────────────────────────────────────────
+// ── Bundles Tab (budget-pool aware) ──────────────────────────────────────────
 
 function BundlesTab({
   room,
   bundles,
+  allocation,
+  onAllocationChange,
   acceptedCodes,
   saving,
   onAccept,
+  isPoolFull,
 }: {
   room: { name: string; slug: string; display?: string };
   bundles: Bundle[];
+  allocation: number;
+  onAllocationChange: (v: number) => void;
   acceptedCodes: Set<string>;
   saving: boolean;
   onAccept: (bundle: Bundle) => void;
+  isPoolFull: boolean;
 }) {
-  const sweetIdx = bundles.findIndex((b) => b.sweet_spot);
-  const [idx, setIdx] = useState(sweetIdx >= 0 ? sweetIdx : 0);
   const [showPicker, setShowPicker] = useState(false);
   const [plausOpen, setPlausOpen] = useState(false);
-  const [pickerItems, setPickerItems] = useState<BundleItem[] | null>(null);
-  const [pickerSaving, setPickerSaving] = useState(false);
 
-  const bundle = bundles[idx];
-  const isAccepted = bundle ? acceptedCodes.has(bundle.bundle_code) : false;
+  const maxVal = Math.min(MAX_ROOM_ALLOC, bundles.length ? bundles[bundles.length - 1].total_value + 20_000 : MAX_ROOM_ALLOC);
+  const closest = getClosestBundle(bundles, allocation);
+  const isAccepted = closest ? acceptedCodes.has(closest.bundle_code) : false;
 
-  const plaus = bundle ? plausText(bundle.plausibility) : null;
-  const plausMsg = bundle?.plausibility === "green"
-    ? null
-    : bundle?.plausibility === "yellow"
-    ? "Some items in this package are higher-end replacements. A brief note about your household's lifestyle makes these straightforward to approve."
-    : "This package contains premium items that will need supporting documentation about your home and lifestyle.";
+  const plausMsg = !closest ? null
+    : closest.plausibility === "green" ? null
+    : closest.plausibility === "yellow"
+    ? "Some items are higher-end replacements. A brief note about your household's lifestyle makes these straightforward to approve."
+    : "This package contains premium items that will need supporting documentation.";
 
-  if (bundles.length === 0) {
-    return (
-      <div className="py-12 text-center">
-        <p className="text-base text-gray-400 mb-3">No packages available for this room yet.</p>
-        <Link href={`/review/${room.slug}`} className="text-[#2563EB] hover:underline text-base">
-          View existing items →
-        </Link>
-      </div>
-    );
+  if (!bundles.length) {
+    return <p className="py-8 text-center text-base text-gray-400">No packages available yet.</p>;
   }
 
   return (
     <div>
-      {/* Slider */}
+      {/* Allocation slider */}
       <div className="mb-6">
-        <p className="text-base font-semibold text-gray-500 mb-3">
-          How much would you like to add?
-        </p>
+        <p className="text-base font-semibold text-gray-600 mb-3">How much would you like to add?</p>
         <input
-          type="range"
-          min={0}
-          max={bundles.length - 1}
-          step={1}
-          value={idx}
-          onChange={(e) => { setIdx(Number(e.target.value)); setPlausOpen(false); }}
+          type="range" min={0} max={maxVal} step={5000}
+          value={allocation}
+          onChange={(e) => { onAllocationChange(Number(e.target.value)); setPlausOpen(false); }}
           className="w-full cursor-pointer accent-[#2563EB]"
           style={{ height: "8px" }}
+          disabled={isPoolFull && allocation === 0}
         />
-        <div className="mt-2 flex justify-between px-0.5">
-          {bundles.map((b, i) => (
-            <button
-              key={i}
-              onClick={() => setIdx(i)}
-              className={`text-sm tabular-nums transition-colors ${
-                i === idx ? "font-bold text-[#2563EB]" : "text-gray-300 hover:text-gray-400"
-              }`}
-            >
-              {compact(b.total_value)}
-            </button>
-          ))}
+        <div className="mt-2 flex items-center justify-between">
+          <span className="text-sm text-gray-300">$0</span>
+          <p className="text-2xl font-bold tabular-nums text-gray-900">
+            {allocation > 0 ? formatCurrency(allocation) : "Slide to allocate →"}
+          </p>
+          <span className="text-sm text-gray-300">{compact(maxVal)}</span>
         </div>
-        <p className="mt-3 text-2xl font-bold tabular-nums text-gray-900">
-          {bundle ? formatCurrency(bundle.total_value) : "—"}
-        </p>
+
+        {/* Bundle tick marks */}
+        {bundles.length > 0 && (
+          <div className="mt-1 flex justify-between px-0.5">
+            {bundles.map((b, i) => (
+              <button
+                key={i}
+                onClick={() => onAllocationChange(b.total_value)}
+                className={`text-xs tabular-nums transition-colors ${
+                  closest?.bundle_code === b.bundle_code && allocation > 0
+                    ? "font-bold text-[#2563EB]"
+                    : "text-gray-300 hover:text-gray-500"
+                }`}
+                title={b.name}
+              >
+                {compact(b.total_value)}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {isPoolFull && allocation === 0 && (
+          <p className="mt-2 text-sm text-amber-600 font-medium">
+            Budget fully placed — adjust another room to free up funds
+          </p>
+        )}
       </div>
 
-      {/* Bundle card */}
-      {bundle && (
-        <div className={`rounded-2xl border-2 p-6 transition-colors ${
-          isAccepted ? "border-green-400 bg-green-50" : "border-gray-200 bg-white"
-        }`}>
-          {/* Header */}
+      {/* Closest bundle card */}
+      {closest && allocation > 0 && (
+        <div className={`rounded-2xl border-2 p-6 transition-colors mb-4 ${isAccepted ? "border-green-400 bg-green-50" : "border-gray-200 bg-white"}`}>
           <div className="flex items-start justify-between gap-3 mb-4">
             <div>
-              {bundle.sweet_spot && (
-                <span className="mb-1 block text-sm font-semibold text-amber-600">⭐ Best match</span>
-              )}
-              <h3 className="text-2xl font-bold text-gray-900">{bundle.name}</h3>
-              {bundle.description && (
-                <p className="mt-1 text-base text-gray-500">{bundle.description}</p>
-              )}
+              {closest.sweet_spot && <span className="mb-1 block text-sm font-semibold text-amber-600">⭐ Best match</span>}
+              <p className="text-sm text-gray-400 mb-0.5">Closest package to {formatCurrency(allocation)}:</p>
+              <h3 className="text-2xl font-bold text-gray-900">{closest.name}</h3>
+              {closest.description && <p className="mt-1 text-base text-gray-500">{closest.description}</p>}
             </div>
-            {isAccepted && (
-              <span className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-sm font-bold text-green-700">
-                ✓ Added
-              </span>
-            )}
+            <div className="shrink-0 text-right">
+              <p className="text-2xl font-bold tabular-nums text-gray-900">{formatCurrency(closest.total_value)}</p>
+              {isAccepted && <span className="mt-1 block rounded-full bg-green-100 px-2 py-0.5 text-xs font-bold text-green-700">✓ Added</span>}
+            </div>
           </div>
 
-          {/* Items list */}
           <ul className="mb-5 space-y-2">
-            {bundle.items.slice(0, 7).map((item, i) => (
+            {closest.items.slice(0, 7).map((item, i) => (
               <li key={i} className="flex items-center justify-between gap-3 text-base">
                 <span className="text-gray-700 leading-snug">
                   {item.brand ? `${item.brand} ` : ""}{item.description}
                 </span>
-                <span className="shrink-0 tabular-nums font-semibold text-gray-900">
-                  {formatCurrency(item.total)}
-                </span>
+                <span className="shrink-0 tabular-nums font-semibold text-gray-900">{formatCurrency(item.total)}</span>
               </li>
             ))}
-            {bundle.items.length > 7 && (
-              <li className="text-sm text-gray-400">+ {bundle.items.length - 7} more items</li>
-            )}
+            {closest.items.length > 7 && <li className="text-sm text-gray-400">+ {closest.items.length - 7} more items</li>}
           </ul>
 
-          {/* Plausibility disclosure */}
           {plausMsg && (
             <div className="mb-5">
-              <button
-                onClick={() => setPlausOpen((v) => !v)}
-                className="flex items-center gap-2 text-base text-gray-500 hover:text-gray-700"
-              >
+              <button onClick={() => setPlausOpen((v) => !v)} className="flex items-center gap-2 text-base text-gray-500 hover:text-gray-700">
                 <span className="text-sm">{plausOpen ? "▼" : "▶"}</span>
                 Why this might need explanation
               </button>
               {plausOpen && (
-                <div className={`mt-2 rounded-xl border p-4 text-base ${plaus!.bg} ${plaus!.text}`}>
+                <div className={`mt-2 rounded-xl border p-4 text-base ${closest.plausibility === "yellow" ? "bg-amber-50 border-amber-200 text-amber-700" : "bg-red-50 border-red-200 text-red-700"}`}>
                   {plausMsg}
                 </div>
               )}
             </div>
           )}
 
-          {/* Accept button */}
           {isAccepted ? (
-            <p className="text-center text-base font-semibold text-green-700 py-2">
-              ✓ This package has been added to your claim
-            </p>
+            <p className="text-center text-base font-semibold text-green-700 py-2">✓ This package has been added to your claim</p>
           ) : (
             <button
-              onClick={() => onAccept(bundle)}
+              onClick={() => onAccept(closest)}
               disabled={saving}
-              className="flex w-full min-h-[56px] items-center justify-center gap-2 rounded-2xl bg-[#16A34A] text-base font-bold text-white transition-colors hover:bg-green-700 disabled:opacity-50"
+              className="flex w-full min-h-[56px] items-center justify-center gap-2 rounded-2xl bg-[#16A34A] text-base font-bold text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
             >
-              {saving ? <Spinner /> : "✓ Add This Bundle"}
+              {saving ? <SmallSpinner /> : "✓ Add This Bundle"}
             </button>
           )}
         </div>
       )}
 
-      {/* Item picker link / view all */}
-      <div className="mt-5 flex flex-wrap items-center gap-4 text-base">
-        <button
-          onClick={() => setShowPicker((v) => !v)}
-          className="text-[#2563EB] hover:underline"
-        >
+      {/* See all / item picker */}
+      <div className="flex flex-wrap items-center gap-4 text-base">
+        <button onClick={() => setShowPicker((v) => !v)} className="text-[#2563EB] hover:underline">
           {showPicker ? "Hide item picker" : "Or pick individual items from any bundle →"}
         </button>
         <Link href={`/review/bundles/${room.slug}`} className="text-gray-400 hover:text-gray-600">
@@ -446,25 +417,16 @@ function BundlesTab({
         </Link>
       </div>
 
-      {/* Item picker */}
       {showPicker && (
         <ItemPicker
           room={room.display ?? room.name}
           bundles={bundles}
           onAdd={(items) => {
-            setPickerItems(items);
-            setPickerSaving(true);
+            onAccept({ bundle_code: `PICK-${room.name}`, room: room.name, name: "Custom Selection", description: "", tier: "custom", total_value: items.reduce((s, i) => s + i.total, 0), sweet_spot: false, plausibility: "green", items } as Bundle);
+            setShowPicker(false);
           }}
           onClose={() => setShowPicker(false)}
         />
-      )}
-
-      {/* Picker saving indicator */}
-      {pickerSaving && pickerItems && (
-        <div className="mt-3 flex items-center gap-2 text-base text-green-600">
-          <Spinner />
-          <span>Saving {pickerItems.length} items…</span>
-        </div>
       )}
     </div>
   );
@@ -475,152 +437,87 @@ function BundlesTab({
 function RoomRow({
   room,
   roomTotal,
-  roomTarget,
+  allocation,
   sessionItems,
   acceptedCodes,
   saving,
+  isPoolFull,
+  addedThisSession,
   onAccept,
   onItemUpdate,
-  onTargetChange,
-  addedThisSession,
+  onAllocationChange,
 }: {
   room: { name: string; slug: string; display?: string };
   roomTotal: number;
-  roomTarget: number;
+  allocation: number;
   sessionItems: ClaimItem[];
   acceptedCodes: Set<string>;
   saving: boolean;
-  onAccept: (bundle: Bundle) => void;
-  onItemUpdate: (item: ClaimItem, newUnitCost: number) => void;
-  onTargetChange: (roomName: string, newTarget: number) => void;
+  isPoolFull: boolean;
   addedThisSession: number;
+  onAccept: (bundle: Bundle) => void;
+  onItemUpdate: (item: ClaimItem, newPrice: number) => void;
+  onAllocationChange: (roomName: string, v: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"bundles" | "items">("bundles");
-  const [editTarget, setEditTarget] = useState(false);
-  const [targetInput, setTargetInput] = useState(String(roomTarget || ""));
 
-  const bundles = useMemo(
-    () => BUNDLES_DATA.filter((b) => b.room === room.name),
-    [room.name]
-  );
-  const roomItems = useMemo(
-    () => sessionItems.filter((i) => i.room === room.name),
-    [sessionItems, room.name]
-  );
-
-  const pct = roomTarget > 0 ? Math.min(100, (roomTotal / roomTarget) * 100) : 0;
+  const bundles = useMemo(() => BUNDLES_DATA.filter((b) => b.room === room.name).sort((a, b) => a.total_value - b.total_value), [room.name]);
+  const roomItems = useMemo(() => sessionItems.filter((i) => i.room === room.name), [sessionItems, room.name]);
   const displayName = room.display ?? room.name;
+  const closest = getClosestBundle(bundles, allocation);
 
   return (
-    <div className={`rounded-2xl border-2 transition-all ${
-      open ? "border-gray-300 shadow-md" : "border-gray-200"
-    }`}>
+    <div className={`rounded-2xl border-2 transition-all ${open ? "border-gray-300 shadow-md" : "border-gray-200"}`}>
       {/* Row header */}
       <div className="flex items-center gap-3 px-5 py-4 min-h-[80px]">
-        {/* Left: name + count */}
-        <button
-          onClick={() => setOpen((v) => !v)}
-          className="flex-1 text-left min-w-0"
-        >
+        <button onClick={() => setOpen((v) => !v)} className="flex-1 text-left min-w-0">
           <p className="text-xl font-bold text-gray-900 leading-tight">{displayName}</p>
-          <p className="text-sm text-gray-400 mt-0.5">{roomItems.length} items</p>
+          <p className="text-sm text-gray-400 mt-0.5">
+            {formatCurrency(roomTotal)} existing · {roomItems.length} items
+          </p>
         </button>
 
-        {/* Middle: mini progress */}
-        <div className="hidden sm:block flex-1 max-w-[200px]">
-          {roomTarget > 0 ? (
+        {/* Mini allocation bar (desktop) */}
+        <div className="hidden sm:block w-40 shrink-0">
+          {allocation > 0 ? (
             <div>
+              <p className="text-xs text-gray-400 tabular-nums mb-1">
+                {closest ? closest.name : ""} · {formatCurrency(allocation)}
+              </p>
               <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
-                <div
-                  className={`h-full rounded-full transition-all ${
-                    pct >= 100 ? "bg-green-500" : "bg-[#2563EB]"
-                  }`}
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
-              <div className="mt-1 flex items-center gap-1">
-                {editTarget ? (
-                  <div className="flex items-center gap-1">
-                    <span className="text-xs text-gray-400">$</span>
-                    <input
-                      type="number"
-                      value={targetInput}
-                      onChange={(e) => setTargetInput(e.target.value)}
-                      onBlur={() => {
-                        const v = parseFloat(targetInput);
-                        if (!isNaN(v) && v > 0) onTargetChange(room.name, v);
-                        setEditTarget(false);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          const v = parseFloat(targetInput);
-                          if (!isNaN(v) && v > 0) onTargetChange(room.name, v);
-                          setEditTarget(false);
-                        }
-                      }}
-                      autoFocus
-                      className="w-24 rounded border border-gray-200 px-1 py-0.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    />
-                  </div>
-                ) : (
-                  <p className="text-xs text-gray-400 tabular-nums">
-                    {formatCurrency(roomTotal)} of {formatCurrency(roomTarget)}
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setEditTarget(true); setTargetInput(String(roomTarget)); }}
-                      className="ml-1 text-gray-300 hover:text-gray-500"
-                      title="Edit target"
-                    >
-                      ✏️
-                    </button>
-                  </p>
-                )}
+                <div className="h-full rounded-full bg-[#2563EB]" style={{ width: `${Math.min(100, (allocation / MAX_ROOM_ALLOC) * 100)}%` }} />
               </div>
             </div>
           ) : (
-            <p className="text-sm tabular-nums text-gray-500 font-semibold">
-              {formatCurrency(roomTotal)}
-            </p>
+            <p className="text-xs text-gray-400">No allocation yet</p>
           )}
         </div>
 
-        {/* Right: add button + chevron */}
         <div className="flex items-center gap-2 shrink-0">
           {addedThisSession > 0 && (
-            <span className="text-sm font-semibold text-green-600 tabular-nums">
-              ✓ +{formatCurrency(addedThisSession)}
-            </span>
+            <span className="text-sm font-semibold text-green-600 tabular-nums">✓ +{formatCurrency(addedThisSession)}</span>
           )}
           <Link
             href={`/review/bundles/${room.slug}`}
             onClick={(e) => e.stopPropagation()}
-            className="rounded-xl border-2 border-[#2563EB] px-3 py-1.5 text-sm font-bold text-[#2563EB] transition-colors hover:bg-blue-50"
+            className="rounded-xl border-2 border-[#2563EB] px-3 py-1.5 text-sm font-bold text-[#2563EB] hover:bg-blue-50"
           >
             + Add
           </Link>
-          <button
-            onClick={() => setOpen((v) => !v)}
-            className={`text-gray-300 transition-transform duration-200 text-sm ${open ? "rotate-90" : ""}`}
-          >
-            ▶
-          </button>
+          <button onClick={() => setOpen((v) => !v)} className={`text-gray-300 transition-transform duration-200 text-sm ${open ? "rotate-90" : ""}`}>▶</button>
         </div>
       </div>
 
-      {/* Expanded content */}
+      {/* Expanded */}
       {open && (
         <div className="border-t border-gray-100 px-5 py-5">
-          {/* Tabs */}
           <div className="flex gap-1 mb-6 rounded-xl bg-gray-100 p-1">
             {(["bundles", "items"] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
-                className={`flex-1 rounded-lg py-2.5 text-base font-bold transition-colors ${
-                  tab === t
-                    ? "bg-white text-gray-900 shadow-sm"
-                    : "text-gray-400 hover:text-gray-600"
-                }`}
+                className={`flex-1 rounded-lg py-2.5 text-base font-bold transition-colors ${tab === t ? "bg-white text-gray-900 shadow-sm" : "text-gray-400 hover:text-gray-600"}`}
               >
                 {t === "bundles" ? "Packages" : "Existing Items"}
               </button>
@@ -631,9 +528,12 @@ function RoomRow({
             <BundlesTab
               room={room}
               bundles={bundles}
+              allocation={allocation}
+              onAllocationChange={(v) => onAllocationChange(room.name, v)}
               acceptedCodes={acceptedCodes}
               saving={saving}
               onAccept={onAccept}
+              isPoolFull={isPoolFull}
             />
           ) : (
             <ItemsTab items={roomItems} onUpdate={onItemUpdate} />
@@ -644,37 +544,20 @@ function RoomRow({
   );
 }
 
-// ── Art Collection Row ────────────────────────────────────────────────────────
+// ── Art Row ───────────────────────────────────────────────────────────────────
 
-function ArtRow({
-  artAdded,
-  onAdd,
-}: {
-  artAdded: boolean;
-  onAdd: () => void;
-}) {
+function ArtRow({ artAdded, onAdd }: { artAdded: boolean; onAdd: () => void }) {
   const [open, setOpen] = useState(false);
-
   return (
     <div className={`rounded-2xl border-2 transition-all ${open ? "border-gray-300 shadow-md" : "border-gray-200"}`}>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full min-h-[80px] items-center gap-3 px-5 py-4 text-left"
-      >
+      <button onClick={() => setOpen((v) => !v)} className="flex w-full min-h-[80px] items-center gap-3 px-5 py-4 text-left">
         <div className="flex-1">
           <p className="text-xl font-bold text-gray-900">🎨 Art Collection</p>
-          <p className="text-sm text-gray-400 mt-0.5">
-            {artAdded ? "✓ $300,000 placeholder added" : "Pending advisor PDF"}
-          </p>
+          <p className="text-sm text-gray-400 mt-0.5">{artAdded ? "✓ $300,000 placeholder added" : "Pending advisor PDF"}</p>
         </div>
-        <span className="text-2xl font-bold tabular-nums text-gray-400">
-          {artAdded ? formatCurrency(300_000) : "$0"}
-        </span>
-        <span className={`text-sm text-gray-300 transition-transform duration-200 ${open ? "rotate-90" : ""}`}>
-          ▶
-        </span>
+        <span className="text-2xl font-bold tabular-nums text-gray-400">{artAdded ? formatCurrency(300_000) : "$0"}</span>
+        <span className={`text-sm text-gray-300 transition-transform duration-200 ${open ? "rotate-90" : ""}`}>▶</span>
       </button>
-
       {open && (
         <div className="border-t border-gray-100 px-5 py-6">
           <p className="text-base text-gray-600 mb-1">Your art collection is being inventoried by the advisor.</p>
@@ -682,10 +565,7 @@ function ArtRow({
           {artAdded ? (
             <p className="text-base font-bold text-green-700">✓ $300,000 placeholder has been added</p>
           ) : (
-            <button
-              onClick={onAdd}
-              className="min-h-[56px] w-full rounded-2xl bg-[#16A34A] text-base font-bold text-white transition-colors hover:bg-green-700"
-            >
+            <button onClick={onAdd} className="min-h-[56px] w-full rounded-2xl bg-[#16A34A] text-base font-bold text-white hover:bg-green-700">
               ✓ Add $300,000 Placeholder
             </button>
           )}
@@ -702,92 +582,85 @@ export default function ReviewDashboard() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [sessionItems, setSessionItems] = useState<ClaimItem[]>([]);
-  const [roomTargets, setRoomTargets] = useState<Record<string, number>>({});
+  const [roomAllocations, setRoomAllocations] = useState<Record<string, number>>({});
   const [acceptedCodes, setAcceptedCodes] = useState<Set<string>>(new Set());
   const [addedByRoom, setAddedByRoom] = useState<Record<string, number>>({});
   const [savingRoom, setSavingRoom] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [artAdded, setArtAdded] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  useEffect(() => { loadData(); }, []);
 
   async function loadData() {
     const session = await loadSession();
-    if (!session?.claim_items?.length) {
-      router.replace("/");
-      return;
-    }
+    if (!session?.claim_items?.length) { router.replace("/"); return; }
 
     setSessionItems(session.claim_items);
-    setRoomTargets(session.room_budgets ?? {});
+    setRoomAllocations(session.room_budgets ?? {});
 
-    // Load accepted bundle codes — localStorage first, then Supabase
+    // Load decisions from localStorage first, then Supabase
     const local = getLocalDecisions();
-    const accepted = new Set<string>(
-      Object.entries(local)
-        .filter(([, v]) => v === "accepted" || v === "regenerated")
-        .map(([k]) => k)
-    );
-
+    const accepted = new Set<string>(Object.entries(local).filter(([, v]) => v === "accepted" || v === "regenerated").map(([k]) => k));
     try {
       const { data } = await supabase.from("bundle_decisions").select("bundle_code, action");
       for (const d of (data ?? []) as { bundle_code: string; action: string }[]) {
-        if (d.action === "accepted" || d.action === "regenerated") {
-          accepted.add(d.bundle_code);
-          local[d.bundle_code] = d.action;
-        }
+        if (d.action === "accepted" || d.action === "regenerated") { accepted.add(d.bundle_code); local[d.bundle_code] = d.action; }
       }
       localStorage.setItem(LS_DECISIONS, JSON.stringify(local));
-    } catch {
-      // localStorage fallback already loaded
-    }
+    } catch { /* localStorage fallback */ }
 
     setAcceptedCodes(accepted);
     setIsLoading(false);
   }
 
-  // ── Computed ────────────────────────────────────────────────────────────────
+  // ── Derived budget pool ──────────────────────────────────────────────────
 
   const roomTotals = useMemo(() => {
     const t: Record<string, number> = {};
-    for (const item of sessionItems) {
-      t[item.room] = (t[item.room] ?? 0) + item.unit_cost * item.qty;
-    }
+    for (const item of sessionItems) t[item.room] = (t[item.room] ?? 0) + item.unit_cost * item.qty;
     return t;
   }, [sessionItems]);
 
-  const grandTotal = Object.values(roomTotals).reduce((s, v) => s + v, 0) +
-    (artAdded ? 300_000 : 0);
-  const progress = Math.min(100, (grandTotal / TARGET) * 100);
-  const isNearTarget = grandTotal >= TARGET * 0.9;
+  const baseTotal = useMemo(
+    () => Object.values(roomTotals).reduce((s, v) => s + v, 0) + (artAdded ? 300_000 : 0),
+    [roomTotals, artAdded]
+  );
 
-  // ── Accept bundle ───────────────────────────────────────────────────────────
+  const toDistribute = Math.max(0, TARGET - baseTotal);
+  const distributed = Object.values(roomAllocations).reduce((s, v) => s + v, 0);
+  const stillToPlace = Math.max(0, toDistribute - distributed);
+  const isPoolFull = stillToPlace <= 0 && distributed > 0;
+  const poolPct = toDistribute > 0 ? Math.min(100, (distributed / toDistribute) * 100) : 0;
+  const grandTotal = baseTotal + distributed;
+
+  // ── Accept bundle ────────────────────────────────────────────────────────
 
   async function handleAccept(roomName: string, bundle: Bundle) {
     setSavingRoom(roomName);
     try {
-      // Save decision
       setLocalDecision(bundle.bundle_code, "accepted");
       try {
         await supabase.from("bundle_decisions").upsert(
           { bundle_code: bundle.bundle_code, room: bundle.room, bundle_name: bundle.name, action: "accepted", items: bundle.items, total_value: bundle.total_value },
           { onConflict: "bundle_code" }
         );
-      } catch { /* localStorage fallback already saved */ }
+      } catch { /* localStorage fallback */ }
 
-      // Add items to claim_items
       const existingKeys = new Set(sessionItems.map((i) => `${i.room}::${i.description}`));
       const newItems: ClaimItem[] = bundle.items
         .filter((bi) => !existingKeys.has(`${bundle.room}::${bi.description}`))
         .map((bi) => ({ room: bundle.room, description: bi.description, brand: bi.brand, model: "", qty: bi.qty, age_years: 0, age_months: 0, condition: "New", unit_cost: bi.unit_cost, category: bi.category }));
 
-      const updated = newItems.length > 0 ? [...sessionItems, ...newItems] : sessionItems;
       if (newItems.length > 0) {
+        const updated = [...sessionItems, ...newItems];
         await saveSession({ claim_items: updated });
         setSessionItems(updated);
       }
+
+      // Set room allocation to the accepted bundle value
+      const newAllocs = { ...roomAllocations, [roomName]: bundle.total_value };
+      setRoomAllocations(newAllocs);
+      await saveSession({ room_budgets: newAllocs });
 
       setAcceptedCodes((prev) => new Set([...prev, bundle.bundle_code]));
       setAddedByRoom((prev) => ({ ...prev, [roomName]: (prev[roomName] ?? 0) + bundle.total_value }));
@@ -797,12 +670,12 @@ export default function ReviewDashboard() {
     }
   }
 
-  // ── Item value update ───────────────────────────────────────────────────────
+  // ── Item update ──────────────────────────────────────────────────────────
 
-  async function handleItemUpdate(item: ClaimItem, newUnitCost: number) {
+  async function handleItemUpdate(item: ClaimItem, newPrice: number) {
     const updated = sessionItems.map((ci) =>
       ci.room === item.room && ci.description === item.description && ci.unit_cost === item.unit_cost
-        ? { ...ci, unit_cost: newUnitCost }
+        ? { ...ci, unit_cost: newPrice }
         : ci
     );
     await saveSession({ claim_items: updated });
@@ -810,27 +683,14 @@ export default function ReviewDashboard() {
     setToast("Value updated");
   }
 
-  // ── Room target change ──────────────────────────────────────────────────────
+  // ── Allocation change ────────────────────────────────────────────────────
 
-  async function handleTargetChange(roomName: string, newTarget: number) {
-    const otherRooms = ROOMS.filter((r) => r.name !== roomName);
-    const otherTotal = otherRooms.reduce((s, r) => s + (roomTargets[r.name] ?? 0), 0);
-    const remaining = TARGET - newTarget;
-
-    const updated: Record<string, number> = { ...roomTargets, [roomName]: newTarget };
-    if (otherTotal > 0) {
-      for (const r of otherRooms) {
-        const frac = (roomTargets[r.name] ?? 0) / otherTotal;
-        updated[r.name] = Math.round((remaining * frac) / 100) * 100;
-      }
-    }
-
-    setRoomTargets(updated);
-    await saveSession({ room_budgets: updated });
-    setToast("Targets updated across all rooms");
+  function handleAllocationChange(roomName: string, value: number) {
+    setRoomAllocations((prev) => ({ ...prev, [roomName]: value }));
+    // Debounce save to Supabase (save on bundle accept instead)
   }
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-white">
@@ -838,50 +698,48 @@ export default function ReviewDashboard() {
 
         {/* Header */}
         <header className="mb-8">
-          <p className="text-sm font-semibold uppercase tracking-widest text-gray-400 mb-1">
-            ClaimBuilder
-          </p>
+          <p className="text-sm font-semibold uppercase tracking-widest text-gray-400 mb-1">ClaimBuilder</p>
           <h1 className="text-2xl font-bold text-gray-900">Israel Claim · #7579B726D</h1>
 
+          {/* Budget Pool */}
           <div className="mt-6 rounded-2xl border border-gray-200 bg-gray-50 px-5 py-5">
-            <div className="flex items-baseline justify-between mb-3">
+            <h2 className="text-base font-bold uppercase tracking-wider text-gray-400 mb-4">Budget Pool</h2>
+            <div className="grid grid-cols-2 gap-y-4 gap-x-6 mb-5">
               <div>
-                <span className="text-sm text-gray-500">Your claim: </span>
-                <span className="text-2xl font-bold tabular-nums text-gray-900">{formatCurrency(grandTotal)}</span>
+                <p className="text-sm text-gray-500">Total goal</p>
+                <p className="text-2xl font-bold tabular-nums text-gray-900">{formatCurrency(TARGET)}</p>
               </div>
-              <div className="text-right">
-                <span className="text-sm text-gray-500">Goal: </span>
-                <span className="text-2xl font-bold tabular-nums text-gray-900">{formatCurrency(TARGET)}</span>
+              <div>
+                <p className="text-sm text-gray-500">Already have</p>
+                <p className="text-2xl font-bold tabular-nums text-gray-900">{formatCurrency(baseTotal)}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">To distribute</p>
+                <p className="text-2xl font-bold tabular-nums text-[#2563EB]">{formatCurrency(toDistribute)}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">Distributed</p>
+                <p className="text-2xl font-bold tabular-nums text-gray-900">{formatCurrency(distributed)}</p>
               </div>
             </div>
-
+            <div className="flex items-baseline justify-between mb-2">
+              <span className="text-base font-semibold text-gray-600">Still to place:</span>
+              <span className="text-2xl font-bold tabular-nums text-gray-900">{formatCurrency(stillToPlace)}</span>
+            </div>
             <div className="h-4 w-full overflow-hidden rounded-full bg-gray-200">
               <div
-                className={`h-full rounded-full transition-all duration-500 ${
-                  isNearTarget ? "bg-green-500" : "bg-[#2563EB]"
-                }`}
-                style={{ width: `${progress}%` }}
+                className={`h-full rounded-full transition-all duration-500 ${isPoolFull ? "bg-green-500" : "bg-[#2563EB]"}`}
+                style={{ width: `${poolPct}%` }}
               />
             </div>
-
-            <div className="mt-2 flex items-center justify-between">
-              <p className="text-base font-semibold text-gray-500 tabular-nums">
-                {progress.toFixed(0)}% of goal
-              </p>
-              <p className="text-base text-gray-500 tabular-nums">
-                Still needed:{" "}
-                <span className="font-bold text-gray-900">{formatCurrency(Math.max(0, TARGET - grandTotal))}</span>
-              </p>
-            </div>
+            <p className="mt-1.5 text-right text-sm text-gray-400">{poolPct.toFixed(0)}% distributed</p>
           </div>
         </header>
 
         {/* Room list */}
         {isLoading ? (
           <div className="space-y-3">
-            {[...Array(9)].map((_, i) => (
-              <div key={i} className="h-20 animate-pulse rounded-2xl bg-gray-100" />
-            ))}
+            {[...Array(9)].map((_, i) => <div key={i} className="h-20 animate-pulse rounded-2xl bg-gray-100" />)}
           </div>
         ) : (
           <div className="space-y-3">
@@ -890,23 +748,18 @@ export default function ReviewDashboard() {
                 key={room.name}
                 room={room}
                 roomTotal={roomTotals[room.name] ?? 0}
-                roomTarget={roomTargets[room.name] ?? 0}
+                allocation={roomAllocations[room.name] ?? 0}
                 sessionItems={sessionItems}
                 acceptedCodes={acceptedCodes}
                 saving={savingRoom === room.name}
+                isPoolFull={isPoolFull}
+                addedThisSession={addedByRoom[room.name] ?? 0}
                 onAccept={(bundle) => handleAccept(room.name, bundle)}
                 onItemUpdate={handleItemUpdate}
-                onTargetChange={handleTargetChange}
-                addedThisSession={addedByRoom[room.name] ?? 0}
+                onAllocationChange={handleAllocationChange}
               />
             ))}
-            <ArtRow
-              artAdded={artAdded}
-              onAdd={() => {
-                setArtAdded(true);
-                setToast("Art collection placeholder added — $300,000");
-              }}
-            />
+            <ArtRow artAdded={artAdded} onAdd={() => { setArtAdded(true); setToast("Art collection placeholder added — $300,000"); }} />
           </div>
         )}
       </div>
@@ -920,25 +773,21 @@ export default function ReviewDashboard() {
               <span className="text-xl font-bold tabular-nums text-gray-900">{formatCurrency(grandTotal)}</span>
               <span className="text-gray-400 text-sm ml-1">/ {formatCurrency(TARGET)}</span>
             </div>
-            <div className="flex items-center gap-3">
-              <a
-                href="/api/export-xact"
-                className={`min-h-[48px] flex items-center rounded-xl px-5 py-2.5 text-base font-bold transition-colors ${
-                  isNearTarget
-                    ? "bg-[#16A34A] text-white hover:bg-green-700"
-                    : "bg-gray-100 text-gray-400 cursor-not-allowed"
-                }`}
-                onClick={(e) => { if (!isNearTarget) e.preventDefault(); }}
-                title={isNearTarget ? "Download claim" : `Reach ${formatCurrency(TARGET * 0.9)} to unlock`}
-              >
-                Download Claim
-              </a>
-            </div>
+            <a
+              href="/api/export-xact"
+              className={`min-h-[48px] flex items-center rounded-xl px-5 py-2.5 text-base font-bold transition-colors ${
+                grandTotal >= TARGET * 0.9
+                  ? "bg-[#16A34A] text-white hover:bg-green-700"
+                  : "bg-gray-100 text-gray-400 pointer-events-none"
+              }`}
+              onClick={(e) => { if (grandTotal < TARGET * 0.9) e.preventDefault(); }}
+              title={grandTotal >= TARGET * 0.9 ? "Download claim" : `Reach ${compact(TARGET * 0.9)} to unlock`}
+            >
+              Download Claim
+            </a>
           </div>
-          {!isNearTarget && (
-            <p className="mt-1 text-xs text-gray-400 text-right">
-              Download unlocks at {formatCurrency(TARGET * 0.9)}
-            </p>
+          {grandTotal < TARGET * 0.9 && (
+            <p className="mt-1 text-xs text-gray-400 text-right">Unlocks at {formatCurrency(TARGET * 0.9)}</p>
           )}
         </div>
       </div>

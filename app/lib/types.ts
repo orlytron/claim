@@ -9,6 +9,8 @@ export interface ClaimItem {
   condition: string;
   unit_cost: number;
   category: string;
+  vendor_url?: string;
+  vendor_name?: string;
 }
 
 export type TierKey = "keep" | "entry" | "mid" | "premium" | "ultra";

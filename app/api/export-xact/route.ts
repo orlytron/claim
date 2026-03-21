@@ -1,19 +1,18 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { loadSession } from "../../lib/session";
-import { supabase } from "../../lib/supabase";
 import { ClaimItem } from "../../lib/types";
 
-interface BundleDecisionRow {
-  room: string;
-  items: Array<{
-    description: string;
-    brand: string;
-    qty: number;
-    unit_cost: number;
-    total: number;
-    category: string;
-  }>;
+function vendorFromUrl(url: string | undefined): string {
+  if (!url) return "";
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, "");
+    // Strip .com / .net / .co.uk etc and capitalise
+    const name = hostname.split(".")[0];
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  } catch {
+    return "";
+  }
 }
 
 export async function GET() {
@@ -23,13 +22,7 @@ export async function GET() {
     return NextResponse.json({ error: "No claim items found" }, { status: 404 });
   }
 
-  // Load accepted bundle decisions
-  const { data: decisions } = await supabase
-    .from("bundle_decisions")
-    .select("room, items")
-    .eq("action", "accepted");
-
-  // Merge original claim_items + bundle items, deduplicating by description+room
+  // Deduplicate by description + room
   const seen = new Set<string>();
   const allItems: ClaimItem[] = [];
 
@@ -41,30 +34,9 @@ export async function GET() {
     }
   }
 
-  for (const decision of (decisions as BundleDecisionRow[]) ?? []) {
-    for (const bi of decision.items ?? []) {
-      const key = `${decision.room}::${bi.description}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        allItems.push({
-          room: decision.room,
-          description: bi.description,
-          brand: bi.brand ?? "",
-          model: "",
-          qty: bi.qty,
-          age_years: 0,
-          age_months: 0,
-          condition: "New",
-          unit_cost: bi.unit_cost,
-          category: bi.category ?? "",
-        });
-      }
-    }
-  }
-
   const grandTotal = allItems.reduce((sum, item) => sum + item.qty * item.unit_cost, 0);
 
-  // ── Build worksheet rows ───────────────────────────────────────────────────
+  // ── Header rows ────────────────────────────────────────────────────────────
 
   const rows: unknown[][] = [
     ["Template Version: 4.3", "Average", "Below Avg.", "Above Avg.", "New", "", "", "", "", "", "", "", "", ""],
@@ -81,31 +53,54 @@ export async function GET() {
     ],
   ];
 
+  // ── Item rows ──────────────────────────────────────────────────────────────
+
   allItems.forEach((item, index) => {
+    // Vendor: prefer vendor_name, then parse from vendor_url, then blank
+    const vendor = item.vendor_name || vendorFromUrl(item.vendor_url) || "";
+
     rows.push([
-      index + 1,
-      item.room,
-      item.brand || "",
-      item.model || "",
-      item.description,
-      "",
-      item.qty,
-      item.age_years || 0,
-      item.age_months || 0,
-      item.condition || "Average",
-      item.unit_cost,
-      item.qty * item.unit_cost,
-      item.category || "",
-      "",
+      index + 1,                          // Item #
+      item.room,                          // Room
+      item.brand || "",                   // Brand or Manufacturer
+      item.model || "",                   // Model#
+      item.description,                   // Item Description
+      vendor,                             // Original Vendor
+      item.qty,                           // Quantity Lost
+      item.age_years ?? 0,               // Item Age (Years)
+      item.age_months ?? 0,              // Item Age (Months)
+      item.condition || "Average",        // Condition
+      item.unit_cost,                     // Cost to Replace Pre-Tax (each)
+      item.qty * item.unit_cost,         // Total Cost
+      item.category || "",               // CAT
+      "",                                 // SEL
     ]);
   });
 
-  // ── Create workbook ────────────────────────────────────────────────────────
+  // ── Workbook ───────────────────────────────────────────────────────────────
 
   const worksheet = XLSX.utils.aoa_to_sheet(rows);
+
+  // Column widths for readability
+  worksheet["!cols"] = [
+    { wch: 6 },   // Item #
+    { wch: 22 },  // Room
+    { wch: 22 },  // Brand
+    { wch: 16 },  // Model#
+    { wch: 42 },  // Description
+    { wch: 20 },  // Vendor
+    { wch: 8 },   // Qty
+    { wch: 10 },  // Age (Y)
+    { wch: 10 },  // Age (M)
+    { wch: 12 },  // Condition
+    { wch: 18 },  // Unit cost
+    { wch: 14 },  // Total
+    { wch: 14 },  // CAT
+    { wch: 6 },   // SEL
+  ];
+
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Inventory");
-
   const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xls" });
 
   return new Response(buffer, {
