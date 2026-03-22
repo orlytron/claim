@@ -51,15 +51,17 @@ export default function UpgradeRewardToast() {
 
   return (
     <div
-      className={`fixed right-4 top-4 z-50 max-w-[280px] rounded-xl border border-green-200 bg-white p-4 text-base shadow-lg transition-all duration-500 ease-out ${
-        visible ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-4 opacity-0"
+      className={`fixed right-4 top-4 z-50 max-w-[300px] rounded-2xl border border-green-200 bg-white p-4 text-base shadow-lg transition-all duration-300 ease-out ${
+        visible ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-8 opacity-0"
       }`}
       role="status"
     >
-      <p className="font-bold text-gray-900">✓ Claim updated!</p>
-      <p className="mt-1 font-bold text-green-600 tabular-nums">+{formatCurrency(payload.delta)} added</p>
-      <p className="mt-2 text-gray-600 tabular-nums">Claim: {formatCurrency(payload.claimTotal)}</p>
-      <p className="text-gray-600 tabular-nums">
+      <p className="font-bold text-gray-900">✓ Upgraded!</p>
+      <p className="mt-1 font-bold text-[#16A34A] tabular-nums">
+        +{formatCurrency(payload.delta)} added to claim
+      </p>
+      <p className="mt-2 text-sm text-[#6B7280] tabular-nums">Claim: {formatCurrency(payload.claimTotal)}</p>
+      <p className="text-sm text-[#6B7280] tabular-nums">
         Goal:{" "}
         <span className="font-semibold text-[#2563EB]">
           {payload.goalPctBefore}% → {payload.goalPctAfter}%

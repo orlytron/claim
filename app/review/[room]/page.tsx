@@ -6,14 +6,18 @@ import { useParams, useSearchParams } from "next/navigation";
 import AniGuide from "../../components/AniGuide";
 import SpeechBubble from "../../components/SpeechBubble";
 import { dispatchUpgradeReward } from "../../components/UpgradeRewardToast";
-import { BUNDLES_DATA } from "../../lib/bundles-data";
+import { BUNDLES_DATA, type BundleItem } from "../../lib/bundles-data";
 import { CLAIM_GOAL_DEFAULT, DEFAULT_ROOM_TARGETS } from "../../lib/room-targets";
 import { readRoomGoal, writeRoomGoal } from "../../lib/room-goals";
 import { loadSession, saveSession, SessionData } from "../../lib/session";
 import { supabase } from "../../lib/supabase";
+import { mergeClaimIncoming } from "../../lib/claim-item-merge";
 import { ClaimItem } from "../../lib/types";
 import { useClaimMode } from "../../lib/useClaimMode";
 import { generateItemId, slugify, formatCurrency } from "../../lib/utils";
+import { UpgradeOptionsPanel, type UpgradeOption } from "./UpgradeOptionsPanel";
+
+export type { UpgradeOption };
 import {
   SUGGESTED_ADDITIONS,
   suggestionAlreadyInClaim,
@@ -177,28 +181,7 @@ function isUpgradeCandidate(item: ClaimItem): boolean {
   return false;
 }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-export type UpgradeOption = {
-  label: string;
-  price: number;
-  title: string;
-  brand: string;
-  model: string;
-  retailer: string;
-  url: string;
-};
-
-type UpgradeProduct = {
-  title: string;
-  brand: string;
-  model: string;
-  price: number;
-  retailer: string;
-  url: string;
-};
-
-// ── UI bits ───────────────────────────────────────────────────────────────────
+// ── Page ──────────────────────────────────────────────────────────────────────
 
 function SmallSpinner() {
   return (
@@ -214,7 +197,7 @@ function LockButton({ locked, onToggle }: { locked: boolean; onToggle: () => voi
     <button
       type="button"
       onClick={onToggle}
-      className="shrink-0 rounded-lg border border-gray-200 p-2 text-lg leading-none hover:bg-gray-50"
+      className="shrink-0 rounded-lg border border-gray-200 p-2 text-lg leading-none text-[#6B7280] transition-all duration-200 hover:border-gray-300 hover:bg-gray-50"
       title={locked ? "Unlock row" : "Lock row"}
       aria-pressed={locked}
     >
@@ -222,529 +205,6 @@ function LockButton({ locked, onToggle }: { locked: boolean; onToggle: () => voi
     </button>
   );
 }
-
-// ── Right column: existing item + cache ────────────────────────────────────────
-
-const ENTRY_TITLE_PREFIX = "Entry upgrade —";
-
-type UpgradeTabId = "keep" | "A" | "B" | "C" | "custom";
-
-function ExistingUpgradePanel({
-  item,
-  locked,
-  cacheHas,
-  onApply,
-  onRevert,
-}: {
-  item: ClaimItem;
-  locked: boolean;
-  cacheHas: boolean;
-  onApply: (option: UpgradeOption) => Promise<void>;
-  onRevert?: () => void | Promise<void>;
-}) {
-  const [loading, setLoading] = useState(false);
-  const [data, setData] = useState<{ mid: UpgradeProduct; premium: UpgradeProduct | null } | null>(null);
-  const [customPrice, setCustomPrice] = useState("");
-  const [customDesc, setCustomDesc] = useState("");
-  const [applying, setApplying] = useState(false);
-  const [activeTab, setActiveTab] = useState<UpgradeTabId>("keep");
-
-  const baseUnit =
-    item.source === "upgrade" && item.pre_upgrade_item ? item.pre_upgrade_item.unit_cost : item.unit_cost;
-  const lineOriginal = baseUnit * item.qty;
-  const isUpgradedLine = item.source === "upgrade" && !!item.pre_upgrade_item;
-  const origDesc = item.pre_upgrade_item?.description ?? item.description;
-  const origBrand = item.pre_upgrade_item ? item.pre_upgrade_item.brand || item.brand : item.brand;
-
-  useEffect(() => {
-    setCustomDesc(item.description);
-  }, [item.description]);
-
-  useEffect(() => {
-    if (!cacheHas || locked) return;
-    let cancelled = false;
-    const descForApi =
-      item.source === "upgrade" ? item.description : item.pre_upgrade_item?.description ?? item.description;
-    const priceForApi =
-      item.source === "upgrade" ? item.unit_cost : item.pre_upgrade_item?.unit_cost ?? item.unit_cost;
-    (async () => {
-      setLoading(true);
-      try {
-        const res = await fetch("/api/search-upgrade", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            item_description: descForApi,
-            brand: item.brand || "",
-            current_price: priceForApi,
-            category: item.category || "",
-          }),
-        });
-        if (!res.ok) throw new Error("fetch");
-        const j = (await res.json()) as {
-          mid?: UpgradeProduct;
-          premium?: UpgradeProduct | null;
-        };
-        if (!cancelled && j.mid) {
-          const prem = j.premium && typeof j.premium === "object" && j.premium.price > 0 ? j.premium : null;
-          setData({ mid: j.mid, premium: prem });
-        } else if (!cancelled) setData(null);
-      } catch {
-        if (!cancelled) setData(null);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    cacheHas,
-    locked,
-    item.brand,
-    item.category,
-    item.description,
-    item.unit_cost,
-    item.source,
-    item.pre_upgrade_item?.description,
-    item.pre_upgrade_item?.unit_cost,
-  ]);
-
-  const customOk = parseFloat(customPrice) > 0;
-
-  const entryUnitPrice = data?.mid ? Math.round(data.mid.price * 0.7) : 0;
-  const showEntry = !!data?.mid && entryUnitPrice > baseUnit * 1.15;
-  const showPremium = !!data?.mid && !!data.premium && data.premium.price > data.mid.price;
-
-  const entrySelected = isUpgradedLine && item.description.startsWith(ENTRY_TITLE_PREFIX);
-  const midSelected =
-    isUpgradedLine &&
-    !entrySelected &&
-    !!data &&
-    Math.abs(item.unit_cost - data.mid.price) < 0.01 &&
-    item.description === data.mid.title;
-  const premSelected =
-    isUpgradedLine &&
-    !!data?.premium &&
-    Math.abs(item.unit_cost - data.premium.price) < 0.01 &&
-    item.description === data.premium.title;
-  const customSelected = isUpgradedLine && !entrySelected && !midSelected && !premSelected;
-  const keepSelected = !isUpgradedLine;
-
-  useEffect(() => {
-    if (keepSelected) setActiveTab("keep");
-    else if (entrySelected) setActiveTab("A");
-    else if (midSelected) setActiveTab("B");
-    else if (premSelected) setActiveTab("C");
-    else setActiveTab("custom");
-  }, [keepSelected, entrySelected, midSelected, premSelected, customSelected]);
-
-  useEffect(() => {
-    if (activeTab === "A" && !showEntry) setActiveTab("keep");
-    if (activeTab === "B" && !data?.mid) setActiveTab("keep");
-    if (activeTab === "C" && !showPremium) setActiveTab("keep");
-  }, [activeTab, showEntry, showPremium, data?.mid]);
-
-  function tabBtn(id: UpgradeTabId, label: string, disabled: boolean, isActive: boolean) {
-    return (
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => !disabled && setActiveTab(id)}
-        className={`flex h-8 w-10 shrink-0 items-center justify-center rounded border text-xs font-semibold transition-colors ${
-          isActive
-            ? "border-[#2563EB] bg-[#2563EB] text-white"
-            : "border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
-        } ${disabled ? "cursor-not-allowed opacity-40" : ""}`}
-      >
-        {label}
-      </button>
-    );
-  }
-
-  if (locked) {
-    return (
-      <div className="max-h-[160px] rounded-lg border border-blue-100 bg-[#EFF6FF] px-2 py-1 text-xs text-gray-600">
-        Locked — unlock to change upgrades.
-      </div>
-    );
-  }
-
-  if (!cacheHas) return null;
-
-  const contentScroll = "max-h-[128px] min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5 py-1 text-xs";
-
-  function applyEntry() {
-    if (!data?.mid || applying) return;
-    setApplying(true);
-    void onApply({
-      label: "Entry",
-      price: entryUnitPrice,
-      title: `${ENTRY_TITLE_PREFIX} ${origDesc}`.slice(0, 240),
-      brand: data.mid.brand || item.brand,
-      model: "",
-      retailer: "",
-      url: "",
-    }).finally(() => setApplying(false));
-  }
-
-  function applyMid() {
-    if (!data?.mid || applying) return;
-    setApplying(true);
-    void onApply({
-      label: "Mid",
-      price: data.mid.price,
-      title: data.mid.title,
-      brand: data.mid.brand,
-      model: data.mid.model,
-      retailer: data.mid.retailer,
-      url: data.mid.url,
-    }).finally(() => setApplying(false));
-  }
-
-  function applyPremium() {
-    if (!data?.premium || applying) return;
-    setApplying(true);
-    void onApply({
-      label: "Premium",
-      price: data.premium.price,
-      title: data.premium.title,
-      brand: data.premium.brand,
-      model: data.premium.model,
-      retailer: data.premium.retailer,
-      url: data.premium.url,
-    }).finally(() => setApplying(false));
-  }
-
-  function applyCustom() {
-    if (!customOk || applying) return;
-    setApplying(true);
-    const title = customDesc.trim() || `Custom — ${origDesc.slice(0, 120)}`;
-    void onApply({
-      label: "Custom",
-      price: parseFloat(customPrice),
-      title,
-      brand: item.brand,
-      model: "",
-      retailer: "",
-      url: "",
-    }).finally(() => setApplying(false));
-  }
-
-  const retailerLinkLabel = (r: string) => (r.trim() ? `View at ${r} ↗` : "View at retailer ↗");
-
-  return (
-    <div className="flex max-h-[160px] flex-col overflow-hidden rounded-lg border border-gray-200 bg-[#F0F7FF]">
-      <div className="flex h-8 shrink-0 items-center gap-0.5 border-b border-gray-200/80 bg-[#E8F2FC] px-0.5">
-        {tabBtn("keep", "Keep", false, activeTab === "keep")}
-        {tabBtn("A", "A", !showEntry, activeTab === "A")}
-        {tabBtn("B", "B", !data?.mid, activeTab === "B")}
-        {tabBtn("C", "C", !showPremium, activeTab === "C")}
-        {tabBtn("custom", "Custom", false, activeTab === "custom")}
-      </div>
-
-      {loading ? (
-        <div className={`${contentScroll} flex items-center gap-2 text-gray-500`}>
-          <SmallSpinner /> Loading…
-        </div>
-      ) : (
-        <>
-          {activeTab === "keep" && (
-            <div className={contentScroll}>
-              <p className="break-words font-medium leading-snug text-gray-900">{origDesc}</p>
-              <p className="mt-0.5 text-gray-700">
-                {origBrand ? <span>{origBrand} · </span> : null}
-                <span className="font-bold tabular-nums text-[#2563EB]">{formatCurrency(lineOriginal)}</span>
-              </p>
-              <p className="mt-1 text-[11px] text-gray-500">No change</p>
-              {isUpgradedLine ? (
-                <button
-                  type="button"
-                  disabled={applying}
-                  onClick={() => {
-                    setApplying(true);
-                    void Promise.resolve(onRevert?.()).finally(() => setApplying(false));
-                  }}
-                  className="mt-1 text-[11px] font-semibold text-[#2563EB] underline disabled:opacity-40"
-                >
-                  Revert to original line
-                </button>
-              ) : null}
-            </div>
-          )}
-
-          {activeTab === "A" && showEntry && data?.mid && (
-            <div className={contentScroll}>
-              <p className="break-words font-medium leading-snug text-gray-900">
-                {data.mid.title || `Entry upgrade (from mid)`}
-              </p>
-              <p className="mt-0.5 break-words text-gray-600">
-                {(data.mid.brand || item.brand || "—") +
-                  (data.mid.retailer ? ` · ${data.mid.retailer}` : "")}
-              </p>
-              <p className="mt-1">
-                <span className="font-bold tabular-nums text-[#2563EB]">
-                  {formatCurrency(entryUnitPrice * item.qty)}
-                </span>
-                <span className="ml-1 font-bold tabular-nums text-green-600">
-                  (+{formatCurrency((entryUnitPrice - baseUnit) * item.qty)} from original)
-                </span>
-              </p>
-              <button
-                type="button"
-                disabled={applying}
-                onClick={applyEntry}
-                className="mt-1.5 w-full rounded-md bg-[#2563EB] py-1 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-              >
-                {applying ? "…" : "✓ Apply This Upgrade"}
-              </button>
-            </div>
-          )}
-
-          {activeTab === "B" && data?.mid && (
-            <div className={contentScroll}>
-              <p className="break-words font-medium leading-snug text-gray-900">{data.mid.title}</p>
-              <p className="mt-0.5 break-words text-gray-600">
-                {(data.mid.brand || "—") + (data.mid.retailer ? ` · ${data.mid.retailer}` : "")}
-              </p>
-              <p className="mt-1">
-                <span className="font-bold tabular-nums text-[#2563EB]">
-                  {formatCurrency(data.mid.price * item.qty)}
-                </span>
-                <span className="ml-1 font-bold tabular-nums text-green-600">
-                  (+{formatCurrency((data.mid.price - baseUnit) * item.qty)} from original)
-                </span>
-              </p>
-              {data.mid.url ? (
-                <a
-                  href={data.mid.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-1 inline-block text-[11px] font-semibold text-[#2563EB] underline"
-                >
-                  {retailerLinkLabel(data.mid.retailer)}
-                </a>
-              ) : null}
-              <button
-                type="button"
-                disabled={applying}
-                onClick={applyMid}
-                className="mt-1.5 w-full rounded-md bg-[#2563EB] py-1 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-              >
-                {applying ? "…" : "✓ Apply This Upgrade"}
-              </button>
-            </div>
-          )}
-
-          {activeTab === "C" && showPremium && data?.premium && (
-            <div className={contentScroll}>
-              <p className="break-words font-medium leading-snug text-gray-900">{data.premium.title}</p>
-              <p className="mt-0.5 break-words text-gray-600">
-                {(data.premium.brand || "—") +
-                  (data.premium.retailer ? ` · ${data.premium.retailer}` : "")}
-              </p>
-              <p className="mt-1">
-                <span className="font-bold tabular-nums text-[#2563EB]">
-                  {formatCurrency(data.premium.price * item.qty)}
-                </span>
-                <span className="ml-1 font-bold tabular-nums text-green-600">
-                  (+{formatCurrency((data.premium.price - baseUnit) * item.qty)} from original)
-                </span>
-              </p>
-              {data.premium.url ? (
-                <a
-                  href={data.premium.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-1 inline-block text-[11px] font-semibold text-[#2563EB] underline"
-                >
-                  {retailerLinkLabel(data.premium.retailer)}
-                </a>
-              ) : null}
-              <button
-                type="button"
-                disabled={applying}
-                onClick={applyPremium}
-                className="mt-1.5 w-full rounded-md bg-[#2563EB] py-1 text-[11px] font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-              >
-                {applying ? "…" : "✓ Apply This Upgrade"}
-              </button>
-            </div>
-          )}
-
-          {activeTab === "custom" && (
-            <div className={contentScroll}>
-              <div className="flex items-center gap-1">
-                <span className="text-gray-500">$</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  value={customPrice}
-                  onChange={(e) => setCustomPrice(e.target.value)}
-                  className="h-7 w-full min-w-0 rounded border border-gray-300 bg-white px-1.5 text-xs tabular-nums"
-                  placeholder="Price"
-                />
-              </div>
-              <input
-                type="text"
-                value={customDesc}
-                onChange={(e) => setCustomDesc(e.target.value)}
-                className="mt-1 h-7 w-full rounded border border-gray-300 bg-white px-1.5 text-xs"
-                placeholder="Description (optional)"
-              />
-              <button
-                type="button"
-                disabled={applying || !customOk}
-                onClick={applyCustom}
-                className="mt-1.5 w-full rounded-md bg-[#16A34A] py-1 text-[11px] font-bold text-white hover:bg-green-700 disabled:opacity-40"
-              >
-                {applying ? "…" : "Apply Custom"}
-              </button>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-function NoCacheUpgradePanel({
-  locked,
-  item,
-  onAddCustom,
-}: {
-  locked: boolean;
-  item: ClaimItem;
-  onAddCustom: (price: number, title: string, brand: string) => Promise<void>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [price, setPrice] = useState("");
-  const [title, setTitle] = useState(item.description);
-  const [brand, setBrand] = useState(item.brand || "");
-  const [saving, setSaving] = useState(false);
-
-  if (locked) {
-    return (
-      <div className="rounded-xl border border-blue-100 bg-[#EFF6FF] p-4 text-base text-gray-600">
-        Locked — unlock to add a custom replacement.
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-xl border border-dashed border-gray-300 bg-[#F0F7FF] p-4 text-base text-gray-600">
-      <p className="mb-3">(no upgrade available)</p>
-      {!open ? (
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="text-[#2563EB] font-semibold underline"
-        >
-          + Add custom replacement
-        </button>
-      ) : (
-        <div className="space-y-2">
-          <input className="w-full rounded-lg border px-3 py-2" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Description" />
-          <input className="w-full rounded-lg border px-3 py-2" value={brand} onChange={(e) => setBrand(e.target.value)} placeholder="Brand (optional)" />
-          <div className="flex gap-2 items-center">
-            <span>$</span>
-            <input type="number" className="flex-1 rounded-lg border px-3 py-2" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Price" />
-          </div>
-          <button
-            type="button"
-            disabled={saving || !title.trim() || parseFloat(price) <= 0}
-            onClick={() => {
-              setSaving(true);
-              void onAddCustom(parseFloat(price), title.trim(), brand.trim()).finally(() => setSaving(false));
-            }}
-            className="rounded-lg bg-[#16A34A] px-4 py-2 font-bold text-white disabled:opacity-40"
-          >
-            Save replacement
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SuggestedAdditionPanel({
-  row,
-  locked,
-  onAdd,
-  onSkip,
-}: {
-  row: SuggestedAdditionRow;
-  locked: boolean;
-  onAdd: (option: "mid" | "premium") => Promise<void>;
-  onSkip: () => void;
-}) {
-  const [busy, setBusy] = useState<"mid" | "premium" | null>(null);
-
-  if (locked) {
-    return (
-      <div className="rounded-xl border border-blue-100 bg-[#EFF6FF] p-4 text-base text-gray-600">Locked</div>
-    );
-  }
-
-  function rowCls() {
-    return "flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white/80 px-3 py-2.5 text-base";
-  }
-
-  return (
-    <div className="space-y-3 rounded-xl border border-gray-200 bg-[#F0F7FF] p-4 text-base">
-      <div className={rowCls()}>
-        <span className="shrink-0 font-bold text-gray-700">Mid:</span>
-        <span className="min-w-0 flex-1 break-words font-medium whitespace-normal [overflow-wrap:anywhere]">
-          {row.mid.title}
-        </span>
-        <span className="shrink-0 font-bold tabular-nums">{formatCurrency(row.mid.price)}</span>
-        <span className="shrink-0 font-bold text-green-600 tabular-nums">+{formatCurrency(row.mid.price)}</span>
-        <a href={row.mid.url} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold text-blue-600 underline">
-          View ↗
-        </a>
-        <button
-          type="button"
-          disabled={busy !== null}
-          onClick={() => {
-            setBusy("mid");
-            void onAdd("mid").finally(() => setBusy(null));
-          }}
-          className="rounded-lg bg-[#2563EB] px-3 py-1.5 text-sm font-bold text-white disabled:opacity-40"
-        >
-          {busy === "mid" ? "…" : "Select ↗"}
-        </button>
-      </div>
-      <div className={rowCls()}>
-        <span className="shrink-0 font-bold text-gray-700">Premium:</span>
-        <span className="min-w-0 flex-1 break-words font-medium whitespace-normal [overflow-wrap:anywhere]">
-          {row.premium.title}
-        </span>
-        <span className="shrink-0 font-bold tabular-nums">{formatCurrency(row.premium.price)}</span>
-        <span className="shrink-0 font-bold text-green-600 tabular-nums">+{formatCurrency(row.premium.price)}</span>
-        <a href={row.premium.url} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold text-blue-600 underline">
-          View ↗
-        </a>
-        <button
-          type="button"
-          disabled={busy !== null}
-          onClick={() => {
-            setBusy("premium");
-            void onAdd("premium").finally(() => setBusy(null));
-          }}
-          className="rounded-lg bg-[#2563EB] px-3 py-1.5 text-sm font-bold text-white disabled:opacity-40"
-        >
-          {busy === "premium" ? "…" : "Select ↗"}
-        </button>
-      </div>
-      <button type="button" onClick={onSkip} className="text-sm text-gray-500 underline">
-        Skip this row
-      </button>
-    </div>
-  );
-}
-
-// ── Page ──────────────────────────────────────────────────────────────────────
 
 function CountUpMoney({ value, className = "" }: { value: number; className?: string }) {
   const [v, setV] = useState(0);
@@ -785,6 +245,11 @@ export default function RoomReviewPage() {
   const [targetInput, setTargetInput] = useState("");
   const [skippedSuggestions, setSkippedSuggestions] = useState<Set<string>>(new Set());
   const [sliderSnapIndex, setSliderSnapIndex] = useState(0);
+  const [openUpgradeKey, setOpenUpgradeKey] = useState<string | null>(null);
+  const [suggestExpand, setSuggestExpand] = useState(false);
+  const [bundleChecks, setBundleChecks] = useState<boolean[]>([]);
+  const [bundleAdding, setBundleAdding] = useState(false);
+  const [bundleAddedFlash, setBundleAddedFlash] = useState(false);
 
   const [guidedEnter, setGuidedEnter] = useState(false);
   const [guidedLoadBubble, setGuidedLoadBubble] = useState(false);
@@ -841,6 +306,10 @@ export default function RoomReviewPage() {
     const u = Array.from(new Set(vals)).sort((a, b) => a - b);
     return [0, ...u];
   }, [roomName]);
+
+  useEffect(() => {
+    setSliderSnapIndex(bundleSnapValues.length > 1 ? 1 : 0);
+  }, [roomName, bundleSnapValues.length]);
 
   useEffect(() => {
     setLockedKeys(readLocked());
@@ -919,25 +388,42 @@ export default function RoomReviewPage() {
   }, [roomName, items, skippedSuggestions]);
 
   const roomTotal = useMemo(() => items.reduce((s, i) => s + i.qty * i.unit_cost, 0), [items]);
-  const originalSub = useMemo(
+  /** Original claim lines only (excludes bundle/art adds); uses pre-upgrade unit when upgraded */
+  const originalRoomValue = useMemo(
     () =>
-      items
-        .filter((i) => !i.source || i.source === "original")
-        .reduce((s, i) => s + i.qty * i.unit_cost, 0),
+      items.reduce((s, i) => {
+        if (i.source === "bundle" || i.source === "art") return s;
+        const u = i.pre_upgrade_item?.unit_cost ?? i.unit_cost;
+        return s + i.qty * u;
+      }, 0),
     [items]
   );
-  const upgradedSub = useMemo(
-    () => items.filter((i) => i.source === "upgrade").reduce((s, i) => s + i.qty * i.unit_cost, 0),
+  const upgradeDeltaSub = useMemo(
+    () =>
+      items
+        .filter((i) => i.source === "upgrade" && i.pre_upgrade_item)
+        .reduce((s, i) => s + (i.unit_cost - i.pre_upgrade_item!.unit_cost) * i.qty, 0),
     [items]
   );
   const addedSub = useMemo(
-    () => items.filter((i) => i.source === "bundle").reduce((s, i) => s + i.qty * i.unit_cost, 0),
+    () =>
+      items
+        .filter((i) => i.source === "bundle" || i.source === "art")
+        .reduce((s, i) => s + i.qty * i.unit_cost, 0),
     [items]
   );
 
+  const suggestionByCategory = useMemo(() => {
+    const m = new Map<string, SuggestedAdditionRow[]>();
+    for (const r of missingSuggestions) {
+      const cat = r.category || "Other";
+      m.set(cat, [...(m.get(cat) ?? []), r]);
+    }
+    return Array.from(m.entries()).sort((a, b) => b[1].length - a[1].length);
+  }, [missingSuggestions]);
+
   const progressPct = roomTarget > 0 ? Math.min(100, Math.round((roomTotal / roomTarget) * 100)) : 0;
   const gapRemaining = Math.max(0, roomTarget - roomTotal);
-  const stillNeeded = Math.max(0, roomTarget - roomTotal);
 
   useEffect(() => {
     if (!guided || guidedCompleteLatchRef.current || progressPct < 100) return;
@@ -1161,6 +647,44 @@ export default function RoomReviewPage() {
     setToast(`Added ${row.label}`);
   }
 
+  const suggestionMidInClaim = useCallback(
+    (row: SuggestedAdditionRow) => {
+      const opt = row.mid;
+      return items.some(
+        (i) =>
+          i.room === roomName &&
+          i.source === "bundle" &&
+          norm(i.description) === norm(opt.title) &&
+          Math.abs(i.unit_cost - opt.price) < 0.01
+      );
+    },
+    [items, roomName]
+  );
+
+  async function handleRemoveSuggestionMid(row: SuggestedAdditionRow) {
+    if (!session?.claim_items) return;
+    setIsSaving(true);
+    const opt = row.mid;
+    const nextRoomItems = items.filter(
+      (i) =>
+        !(
+          i.room === roomName &&
+          i.source === "bundle" &&
+          norm(i.description) === norm(opt.title) &&
+          Math.abs(i.unit_cost - opt.price) < 0.01
+        )
+    );
+    await saveRoomItems(nextRoomItems);
+    setIsSaving(false);
+    setToast(`Removed ${row.label}`);
+  }
+
+  async function handleToggleSuggestionMid(row: SuggestedAdditionRow) {
+    if (isSuggestionLocked(row.id)) return;
+    if (suggestionMidInClaim(row)) await handleRemoveSuggestionMid(row);
+    else await handleAddSuggestion(row, "mid");
+  }
+
   function saveTargetFromEdit() {
     const v = parseInt(targetInput.replace(/\D/g, ""), 10);
     if (!v || v < 0) return;
@@ -1169,12 +693,85 @@ export default function RoomReviewPage() {
     setEditTarget(false);
   }
 
-  const maxSnap = bundleSnapValues[bundleSnapValues.length - 1] ?? 0;
   const sliderValue = bundleSnapValues[Math.min(sliderSnapIndex, bundleSnapValues.length - 1)] ?? 0;
   const closestBundle = useMemo(() => {
     if (!roomName || !sliderValue) return null;
     return BUNDLES_DATA.filter((b) => b.room === roomName && b.total_value === sliderValue)[0] ?? null;
   }, [roomName, sliderValue]);
+
+  useEffect(() => {
+    if (closestBundle) {
+      setBundleChecks(closestBundle.items.map(() => true));
+    } else {
+      setBundleChecks([]);
+    }
+    setBundleAddedFlash(false);
+  }, [closestBundle?.bundle_code]);
+
+  const bundleStops = useMemo(() => {
+    const vals = BUNDLES_DATA.filter((b) => b.room === roomName).map((b) => b.total_value);
+    return Array.from(new Set(vals)).sort((a, b) => a - b);
+  }, [roomName]);
+  const minBundleDisplay = bundleStops[0] ?? 0;
+  const maxBundleDisplay = bundleStops[bundleStops.length - 1] ?? 0;
+
+  const bundleSelectedTotal = useMemo(() => {
+    if (!closestBundle) return 0;
+    return closestBundle.items.reduce((s, bi, i) => (bundleChecks[i] ? s + bi.total : s), 0);
+  }, [closestBundle, bundleChecks]);
+
+  const bundleSelectedCount = useMemo(() => {
+    if (!closestBundle) return 0;
+    return bundleChecks.filter(Boolean).length;
+  }, [closestBundle, bundleChecks]);
+
+  async function handleBundleAddSelected() {
+    if (!closestBundle || !session?.claim_items) return;
+    const selected = closestBundle.items.filter((_, i) => bundleChecks[i]);
+    if (selected.length === 0) return;
+    setBundleAdding(true);
+    const beforeClaim = session.claim_items;
+    try {
+      const totalVal = selected.reduce((s, i) => s + i.total, 0);
+      const { error: accErr } = await supabase.from("bundle_decisions").upsert(
+        {
+          bundle_code: closestBundle.bundle_code,
+          room: closestBundle.room,
+          bundle_name: closestBundle.name,
+          action: "partial_accept",
+          items: selected as BundleItem[],
+          total_value: totalVal,
+          note: null,
+        },
+        { onConflict: "bundle_code" }
+      );
+      if (accErr) console.warn("bundle_decisions partial_accept blocked:", accErr.message);
+
+      const incoming: ClaimItem[] = selected.map((bi) => ({
+        room: closestBundle.room,
+        description: bi.description,
+        brand: bi.brand,
+        model: "",
+        qty: bi.qty,
+        age_years: 0,
+        age_months: 0,
+        condition: "New",
+        unit_cost: bi.unit_cost,
+        category: bi.category,
+        source: "bundle",
+      }));
+      const merged = mergeClaimIncoming(beforeClaim, incoming, "bundle");
+      await saveSession({ claim_items: merged }, sessionId);
+      setSession((prev) => (prev ? { ...prev, claim_items: merged } : prev));
+      setItems(merged.filter((i) => i.room === roomName));
+      fireUpgradeReward(beforeClaim, merged, totalVal);
+      setToast(`Added ${selected.length} item${selected.length !== 1 ? "s" : ""} from bundle`);
+      setBundleAddedFlash(true);
+      window.setTimeout(() => setBundleAddedFlash(false), 2500);
+    } finally {
+      setBundleAdding(false);
+    }
+  }
 
   if (!hydrated) {
     return (
@@ -1185,314 +782,475 @@ export default function RoomReviewPage() {
     );
   }
 
-  return (
-    <div className="min-h-screen flex flex-col bg-white pb-56">
-      <header className="border-b border-gray-200 bg-white px-4 sm:px-6 py-4">
-        <Link href="/review" className="text-base text-[#2563EB] font-medium hover:underline">
-          ← All Rooms
-        </Link>
-        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-          <h1 className="text-2xl font-bold text-gray-900">{roomName || "Room"}</h1>
-          {isSaving && <SmallSpinner />}
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-base text-gray-700">
-          <span>
-            Target: <span className="font-bold tabular-nums">{formatCurrency(roomTarget)}</span>
-          </span>
-          <span className="text-gray-300">·</span>
-          <span>
-            Current: <span className="font-bold tabular-nums">{formatCurrency(roomTotal)}</span>
-          </span>
-          <button
-            type="button"
-            className="ml-1 text-xl leading-none"
-            onClick={() => {
-              setTargetInput(String(roomTarget));
-              setEditTarget(true);
-            }}
-            aria-label="Edit target"
-          >
-            ✏️
-          </button>
-        </div>
-        {editTarget && (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <input
-              className="rounded-lg border border-gray-300 px-3 py-2 text-base min-w-[140px]"
-              value={targetInput}
-              onChange={(e) => setTargetInput(e.target.value)}
-              placeholder="350000"
-            />
-            <button type="button" onClick={saveTargetFromEdit} className="rounded-lg bg-[#2563EB] px-4 py-2 text-base font-bold text-white">
-              Save
-            </button>
-            <button type="button" onClick={() => setEditTarget(false)} className="text-base text-gray-500">
-              Cancel
-            </button>
-          </div>
-        )}
-        <div className="mt-4">
-          <p className="text-base text-gray-600 mb-1">Progress: {progressPct}%</p>
-          <div className="h-3 w-full rounded-full bg-gray-200 overflow-hidden">
-            <div
-              className="h-full bg-[#2563EB] transition-all duration-500"
-              style={{ width: `${progressPct}%` }}
-            />
-          </div>
-        </div>
-      </header>
+  const showRoomChrome =
+    !!roomName && !isLoading && (items.length > 0 || missingSuggestions.length > 0);
+  const visibleSuggestionCategories = suggestExpand ? suggestionByCategory : suggestionByCategory.slice(0, 3);
+  const hasMoreSuggestionCategories = suggestionByCategory.length > 3;
 
+  return (
+    <div className="flex min-h-screen flex-col bg-white pb-24 md:pb-20">
       {isLoading ? (
-        <div className="flex-1 flex items-center justify-center p-12">
+        <div className="flex flex-1 items-center justify-center py-24">
           <SmallSpinner />
         </div>
-      ) : !roomName || !items.length && !missingSuggestions.length ? (
-        <div className="flex-1 p-8 text-center text-base text-gray-500">
+      ) : !roomName || (!items.length && !missingSuggestions.length) ? (
+        <div className="flex flex-1 flex-col items-center justify-center p-8 text-center text-base text-[#6B7280]">
           No items for this room.
-          <Link href="/review" className="block mt-4 text-[#2563EB]">
+          <Link href="/review" className="mt-4 font-medium text-[#2563EB] hover:underline">
             ← All rooms
           </Link>
         </div>
       ) : (
         <>
-          <div className="flex-1 px-4 sm:px-6 py-6 w-full max-w-[1400px] mx-auto">
-            <div className="hidden md:grid md:grid-cols-2 border-b-2 border-gray-300 bg-gray-50">
-              <div className="text-base font-bold uppercase tracking-wide py-4 px-4 border-r border-gray-200">
-                What you have
+          <header className="w-full bg-white">
+            <div className="mx-auto w-full max-w-[1100px] px-8 py-6 transition-all duration-300">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <Link href="/review" className="text-sm font-medium text-[#2563EB] transition-colors hover:underline md:text-base">
+                  ← All Rooms
+                </Link>
+                <div className="flex items-center gap-2">
+                  {isSaving && <SmallSpinner />}
+                  {nextRoom ? (
+                    <Link
+                      href={`/review/${slugify(nextRoom)}${guided ? "?guided=true" : ""}`}
+                      className="text-sm font-medium text-[#2563EB] transition-colors hover:underline md:text-base"
+                    >
+                      Next Room →
+                    </Link>
+                  ) : null}
+                </div>
               </div>
-              <div className="text-base font-bold uppercase tracking-wide py-4 px-4 bg-[#F0F7FF]">
-                Suggested upgrade →
-              </div>
-            </div>
 
-            <div className="divide-y divide-gray-200 border-x border-b border-gray-200 rounded-b-lg">
-              {upgradeItems.map((item, idx) => {
-                const lk = lockKeyForItem(item);
-                const locked = lockedKeys.includes(lk);
-                const cacheHas =
-                  cachedDescs.has(norm(item.description)) ||
-                  cachedDescs.has(norm(item.pre_upgrade_item?.description ?? ""));
-                const upgraded = item.source === "upgrade" && item.previous_unit_cost != null;
-                const rowBg = locked ? "bg-[#EFF6FF]" : upgraded ? "bg-green-50/90" : "bg-white";
+              <h1 className="mt-6 text-2xl font-bold tracking-tight text-gray-900 md:text-3xl">{roomName}</h1>
+              <div className="mt-3 h-px w-full bg-gray-200" />
 
-                return (
-                  <div
-                    key={`${generateItemId(item)}-${idx}`}
-                    className={`flex flex-col md:grid md:grid-cols-2 ${rowBg}`}
+              <dl className="mt-6 grid gap-3 text-sm md:grid-cols-2 md:gap-x-8 md:gap-y-2 md:text-base">
+                <div className="flex justify-between gap-4 border-b border-gray-100 pb-2 md:border-0 md:pb-0">
+                  <dt className="text-[#6B7280]">Original value</dt>
+                  <dd className="font-medium tabular-nums text-gray-900">{formatCurrency(originalRoomValue)}</dd>
+                </div>
+                <div className="flex justify-between gap-4 border-b border-gray-100 pb-2 md:border-0 md:pb-0">
+                  <dt className="text-[#6B7280]">Current total</dt>
+                  <dd className="font-medium tabular-nums text-gray-900">{formatCurrency(roomTotal)}</dd>
+                </div>
+                <div className="flex justify-between gap-4 border-b border-gray-100 pb-2 md:border-0 md:pb-0">
+                  <dt className="flex items-center gap-1 text-[#6B7280]">
+                    Room goal
+                    <button
+                      type="button"
+                      className="text-base leading-none"
+                      onClick={() => {
+                        setTargetInput(String(roomTarget));
+                        setEditTarget(true);
+                      }}
+                      aria-label="Edit room goal"
+                    >
+                      ✏️
+                    </button>
+                  </dt>
+                  <dd className="font-medium tabular-nums text-gray-900">{formatCurrency(roomTarget)}</dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt className="text-[#6B7280]">Gap remaining</dt>
+                  <dd className="font-semibold tabular-nums text-gray-900">{formatCurrency(gapRemaining)}</dd>
+                </div>
+              </dl>
+
+              {editTarget && (
+                <div className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl border border-gray-200 bg-gray-50/80 p-4 shadow-sm">
+                  <input
+                    className="min-w-[140px] flex-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+                    value={targetInput}
+                    onChange={(e) => setTargetInput(e.target.value)}
+                    placeholder="350000"
+                  />
+                  <button
+                    type="button"
+                    onClick={saveTargetFromEdit}
+                    className="rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white transition-all duration-200 hover:bg-blue-700"
                   >
-                    <div className="border-b md:border-b-0 md:border-r border-gray-200 p-4 py-5 text-base min-h-[100px] md:bg-white/80 overflow-visible">
-                      <p className="md:hidden font-bold uppercase tracking-wide text-gray-500 text-sm mb-3">What you have</p>
-                      <div className="flex justify-between gap-3">
-                        <div className="min-w-0 flex-1 overflow-visible break-words whitespace-normal [overflow-wrap:anywhere]">
-                          {upgraded && item.pre_upgrade_item ? (
-                            <>
-                              <p className="break-words whitespace-normal line-through text-gray-400 [overflow-wrap:anywhere]">
-                                {item.pre_upgrade_item.description}{" "}
-                                <span className="tabular-nums">{formatCurrency(item.previous_unit_cost!)}</span>
-                              </p>
-                              <p className="text-gray-500 my-1">↓</p>
-                              <p className="break-words whitespace-normal font-bold text-gray-900 [overflow-wrap:anywhere]">
-                                {item.description}
-                              </p>
-                              <p className="text-blue-600 font-bold tabular-nums mt-1">
-                                {formatCurrency(item.unit_cost)} ✓
-                              </p>
-                              {item.previous_unit_cost != null && (
-                                <p className="mt-1 text-base font-bold text-green-600 tabular-nums">
-                                  +{formatCurrency((item.unit_cost - item.previous_unit_cost) * item.qty)} added ✓
-                                </p>
-                              )}
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                <button
-                                  type="button"
-                                  disabled={locked || isSaving}
-                                  onClick={() =>
-                                    document.getElementById(`upgrade-panel-${idx}`)?.scrollIntoView({ behavior: "smooth", block: "nearest" })
-                                  }
-                                  className="text-sm text-[#2563EB] underline disabled:opacity-40"
-                                >
-                                  change
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={locked || isSaving}
-                                  onClick={() => void handleRevert(item)}
-                                  className="text-sm text-gray-600 underline disabled:opacity-40"
-                                >
-                                  revert
-                                </button>
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <p className="font-bold text-gray-900 text-lg leading-snug break-words whitespace-normal [overflow-wrap:anywhere]">
-                                {item.description}
-                              </p>
-                              <p className="text-gray-600 mt-1">
-                                {item.brand ? <>{item.brand} · </> : null}Qty: {item.qty}
-                              </p>
-                              <p className="font-semibold tabular-nums mt-2">{formatCurrency(item.unit_cost)}</p>
-                            </>
-                          )}
-                        </div>
-                        <LockButton locked={locked} onToggle={() => toggleLock(lk)} />
-                      </div>
-                    </div>
-                    <div id={`upgrade-panel-${idx}`} className="p-2 bg-[#F0F7FF] text-sm">
-                      <p className="md:hidden font-bold uppercase tracking-wide text-gray-600 text-sm mb-3">Suggested upgrade →</p>
-                      {cacheHas ? (
-                        <ExistingUpgradePanel
-                          key={`${item.description}-${item.unit_cost}-${idx}`}
-                          item={item}
-                          locked={locked}
-                          cacheHas={cacheHas}
-                          onRevert={() => void handleRevert(item)}
-                          onApply={(opt) =>
-                            upgraded && item.pre_upgrade_item
-                              ? handleChangeUpgrade(item, opt)
-                              : handleApplyUpgrade(item, opt)
-                          }
-                        />
-                      ) : (
-                        <NoCacheUpgradePanel
-                          locked={locked}
-                          item={item}
-                          onAddCustom={async (price, title, brand) => {
-                            const opt: UpgradeOption = {
-                              label: "Custom",
-                              price,
-                              title,
-                              brand,
-                              model: "",
-                              retailer: "",
-                              url: "",
-                            };
-                            if (upgraded && item.pre_upgrade_item) await handleChangeUpgrade(item, opt);
-                            else await handleApplyUpgrade(item, opt);
-                          }}
-                        />
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+                    Save
+                  </button>
+                  <button type="button" onClick={() => setEditTarget(false)} className="text-sm text-[#6B7280] hover:text-gray-900">
+                    Cancel
+                  </button>
+                </div>
+              )}
 
-              {missingSuggestions.map((row) => {
-                const lk = lockKeyForSuggestion(row.id);
-                const locked = lockedKeys.includes(lk);
-                return (
-                  <div key={row.id} className={`flex flex-col md:grid md:grid-cols-2 ${locked ? "bg-[#EFF6FF]" : "bg-white"}`}>
-                    <div className="border-b md:border-b-0 md:border-r border-gray-200 p-4 py-5 text-base bg-gray-50/50">
-                      <p className="md:hidden font-bold uppercase tracking-wide text-gray-500 text-sm mb-3">What you have</p>
-                      <div className="flex justify-between gap-3">
-                        <div>
-                          <p className="text-gray-500 italic">(not in original claim)</p>
-                          <p className="font-bold text-gray-900 mt-1 text-lg">Suggested addition</p>
-                          <p className="text-gray-700 mt-1">{row.label}</p>
-                        </div>
-                        <LockButton locked={locked} onToggle={() => toggleLock(lk)} />
-                      </div>
-                    </div>
-                    <div className="p-4 py-5 bg-[#F0F7FF]">
-                      <p className="md:hidden font-bold uppercase tracking-wide text-gray-600 text-sm mb-3">Suggested upgrade →</p>
-                      <SuggestedAdditionPanel
-                        row={row}
-                        locked={locked}
-                        onAdd={(tier) => handleAddSuggestion(row, tier)}
-                        onSkip={() => setSkippedSuggestions((s) => new Set([...s, row.id]))}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
+              <div className="mt-8">
+                <div className="mb-2 flex justify-between text-sm">
+                  <span className="font-medium text-gray-800">{progressPct}%</span>
+                </div>
+                <div className="h-3 w-full overflow-hidden rounded-full bg-gray-200">
+                  <div
+                    className="h-full rounded-full bg-[#2563EB] transition-[width] duration-500 ease-out"
+                    style={{ width: `${progressPct}%` }}
+                  />
+                </div>
+                <p className="mt-2 text-xs leading-relaxed text-[#6B7280] md:text-sm">
+                  Upgrade existing items below, then add new items to reach your goal
+                </p>
+              </div>
             </div>
+          </header>
 
-            <p className="mt-4 px-2 text-center text-sm italic text-gray-500">
+          <main className="mx-auto w-full max-w-[1100px] flex-1 px-8 py-6">
+            <section className="rounded-2xl border border-gray-100 bg-white shadow-sm transition-all duration-300">
+              <div className="border-b border-gray-100 px-5 py-5 md:px-6">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">Upgrade what you have</h2>
+                <p className="mt-1 text-sm text-[#6B7280]">Click Upgrade on any item to see options</p>
+              </div>
+
+              {upgradeItems.length === 0 ? (
+                <p className="px-5 py-8 text-sm text-[#6B7280] md:px-6">
+                  No upgrade candidates in this room (art and small decor are handled elsewhere).
+                </p>
+              ) : (
+                <div>
+                  {upgradeItems.map((item, idx) => {
+                    const lk = lockKeyForItem(item);
+                    const locked = lockedKeys.includes(lk);
+                    const rowKey = lk;
+                    const cacheHas =
+                      cachedDescs.has(norm(item.description)) ||
+                      cachedDescs.has(norm(item.pre_upgrade_item?.description ?? ""));
+                    const upgraded = item.source === "upgrade" && !!item.pre_upgrade_item;
+                    const pre = item.pre_upgrade_item;
+                    const origUnit = pre?.unit_cost ?? item.unit_cost;
+                    const isOpen = openUpgradeKey === rowKey;
+                    const rowBg = locked
+                      ? "bg-blue-50/40"
+                      : upgraded
+                        ? "bg-emerald-50/30"
+                        : "bg-white";
+
+                    return (
+                      <div
+                        key={`${generateItemId(item)}-${idx}`}
+                        className={`border-b border-gray-100 transition-colors duration-300 last:border-b-0 ${rowBg}`}
+                      >
+                        <div className="flex min-h-[72px] flex-col gap-3 px-4 py-4 md:flex-row md:items-center md:justify-between md:px-6">
+                          <div className="min-w-0 flex-1">
+                            {upgraded && pre ? (
+                              <>
+                                <p className="text-[17px] text-[#6B7280] line-through [overflow-wrap:anywhere]">
+                                  {pre.description}{" "}
+                                  <span className="font-semibold tabular-nums">{formatCurrency(pre.unit_cost)}</span>
+                                </p>
+                                <p className="mt-2 text-[17px] font-bold text-gray-900 [overflow-wrap:anywhere]">{item.description}</p>
+                                <p className="mt-1 text-[17px] font-bold tabular-nums text-[#2563EB]">{formatCurrency(item.unit_cost)} ✓</p>
+                                <p className="mt-1 text-sm font-bold tabular-nums text-[#16A34A]">
+                                  +{formatCurrency((item.unit_cost - pre.unit_cost) * item.qty)} added
+                                </p>
+                                <div className="mt-2 flex flex-wrap gap-4">
+                                  <button
+                                    type="button"
+                                    disabled={locked || isSaving}
+                                    onClick={() => setOpenUpgradeKey(rowKey)}
+                                    className="text-sm font-medium text-[#2563EB] underline decoration-[#2563EB]/30 underline-offset-2 transition-colors hover:decoration-[#2563EB] disabled:opacity-40"
+                                  >
+                                    Change
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={locked || isSaving}
+                                    onClick={() => void handleRevert(item)}
+                                    className="text-sm font-medium text-[#6B7280] underline decoration-gray-300 underline-offset-2 disabled:opacity-40"
+                                  >
+                                    Revert
+                                  </button>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <p className="text-[17px] font-semibold text-gray-900 [overflow-wrap:anywhere]">{item.description}</p>
+                                  {item.brand ? (
+                                    <span className="shrink-0 text-sm text-[#6B7280]">{item.brand}</span>
+                                  ) : null}
+                                </div>
+                                <p className="mt-1 text-[17px] font-bold tabular-nums text-gray-900">
+                                  {formatCurrency(item.unit_cost)} · Qty {item.qty} · {item.age_years ?? 0} years old
+                                </p>
+                              </>
+                            )}
+                          </div>
+                          <div className="flex shrink-0 items-center justify-end gap-2">
+                            <LockButton locked={locked} onToggle={() => toggleLock(lk)} />
+                            {!upgraded ? (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={locked || isSaving}
+                                  onClick={() => setOpenUpgradeKey(null)}
+                                  className="inline-flex h-10 items-center justify-center rounded-lg border-2 border-gray-300 bg-white px-3 text-sm font-semibold text-gray-700 transition-all duration-200 hover:border-gray-400 hover:bg-gray-50 disabled:opacity-40"
+                                >
+                                  Keep ✓
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={locked || isSaving}
+                                  onClick={() => setOpenUpgradeKey(rowKey)}
+                                  className="inline-flex h-10 items-center justify-center gap-1 rounded-lg border-2 border-[#2563EB] bg-white px-3 text-sm font-semibold text-[#2563EB] transition-all duration-200 hover:bg-blue-50 disabled:opacity-40"
+                                >
+                                  <span aria-hidden>↑</span> Upgrade
+                                </button>
+                              </>
+                            ) : null}
+                          </div>
+                        </div>
+
+                        <div
+                          className={`overflow-hidden transition-[max-height] duration-300 ease-in-out ${
+                            isOpen ? "max-h-[2200px]" : "max-h-0"
+                          }`}
+                        >
+                          <div className="border-t border-gray-100 bg-gray-50/90 px-4 py-6 md:px-6">
+                            <UpgradeOptionsPanel
+                              key={`${item.description}-${item.unit_cost}-${idx}`}
+                              item={item}
+                              locked={locked}
+                              cacheHas={cacheHas}
+                              onApply={async (opt) => {
+                                if (upgraded && item.pre_upgrade_item) await handleChangeUpgrade(item, opt);
+                                else await handleApplyUpgrade(item, opt);
+                              }}
+                              onApplied={() => setOpenUpgradeKey(null)}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+
+            <section className="mt-12">
+              <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">Add to this room</h2>
+              <p className="mt-1 text-sm text-[#6B7280]">Add items that weren&apos;t in your original claim</p>
+
+              <div className="mt-8 grid gap-10 md:grid-cols-2 md:gap-12">
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-800">Suggested additions</h3>
+                  {missingSuggestions.length === 0 ? (
+                    <p className="mt-4 text-sm text-[#6B7280]">No suggestions for this room.</p>
+                  ) : (
+                    <div className="mt-4 space-y-8">
+                      {visibleSuggestionCategories.map(([cat, rows]) => (
+                        <div key={cat}>
+                          <p className="text-xs font-bold uppercase tracking-wide text-[#6B7280]">{cat}</p>
+                          <ul className="mt-2 divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white shadow-sm">
+                            {rows.map((row) => {
+                              const added = suggestionMidInClaim(row);
+                              const lk = lockKeyForSuggestion(row.id);
+                              const locked = isSuggestionLocked(row.id);
+                              const opt = row.mid;
+                              return (
+                                <li key={row.id} className="flex min-h-[56px] flex-wrap items-center gap-3 px-4 py-3">
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-[15px] font-medium text-gray-900 [overflow-wrap:anywhere]">{opt.title}</p>
+                                    <p className="mt-0.5 text-[13px] text-[#6B7280]">
+                                      {opt.brand ?? "—"}
+                                      {opt.url ? (
+                                        <>
+                                          {" "}
+                                          ·{" "}
+                                          <a
+                                            href={opt.url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="text-[#2563EB] underline-offset-2 hover:underline"
+                                          >
+                                            View
+                                          </a>
+                                        </>
+                                      ) : null}
+                                    </p>
+                                    <p className="mt-1 text-[15px] font-bold tabular-nums text-[#2563EB]">{formatCurrency(opt.price)}</p>
+                                  </div>
+                                  <div className="flex shrink-0 items-center gap-2">
+                                    <LockButton locked={locked} onToggle={() => toggleLock(lk)} />
+                                    <button
+                                      type="button"
+                                      disabled={locked || isSaving}
+                                      onClick={() => void handleToggleSuggestionMid(row)}
+                                      className={`flex h-8 w-8 items-center justify-center rounded-full text-lg font-bold transition-all duration-200 disabled:opacity-40 ${
+                                        added
+                                          ? "bg-[#16A34A] text-white shadow-sm"
+                                          : "border-2 border-[#2563EB] bg-white text-[#2563EB] hover:bg-blue-50"
+                                      }`}
+                                      aria-label={added ? "Remove from claim" : "Add to claim"}
+                                    >
+                                      {added ? "✓" : "+"}
+                                    </button>
+                                  </div>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      ))}
+                      {hasMoreSuggestionCategories ? (
+                        <button
+                          type="button"
+                          onClick={() => setSuggestExpand((e) => !e)}
+                          className="text-sm font-semibold text-[#2563EB] hover:underline"
+                        >
+                          {suggestExpand ? "Show fewer suggestions ▲" : "Show more suggestions ▼"}
+                        </button>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-800">Bundles</h3>
+                  {bundleStops.length === 0 ? (
+                    <p className="mt-4 text-sm text-[#6B7280]">No bundles defined for this room.</p>
+                  ) : (
+                    <div className="mt-4 space-y-4">
+                      <p className="text-center text-xs text-[#6B7280]">← drag to explore bundles →</p>
+                      <div className="flex flex-wrap items-center justify-center gap-2 text-xs tabular-nums text-[#6B7280] sm:text-sm">
+                        <span>Budget: {formatCurrency(minBundleDisplay)}</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={Math.max(0, bundleSnapValues.length - 1)}
+                          step={1}
+                          value={Math.min(sliderSnapIndex, bundleSnapValues.length - 1)}
+                          onChange={(e) => setSliderSnapIndex(Number(e.target.value))}
+                          className="mx-1 h-2 w-full max-w-[240px] flex-1 accent-[#2563EB] sm:max-w-none"
+                        />
+                        <span>{formatCurrency(maxBundleDisplay)}</span>
+                      </div>
+
+                      <div className="rounded-2xl bg-white p-6 shadow-md transition-shadow duration-200">
+                        {closestBundle &&
+                        bundleChecks.length > 0 &&
+                        bundleChecks.length === closestBundle.items.length ? (
+                          <>
+                            <div className="flex flex-wrap items-start justify-between gap-2 border-b border-gray-100 pb-4">
+                              <h4 className="text-base font-semibold text-gray-900 [overflow-wrap:anywhere]">{closestBundle.name}</h4>
+                              <span className="text-base font-bold tabular-nums text-gray-900">
+                                {formatCurrency(closestBundle.total_value)}
+                              </span>
+                            </div>
+                            <ul className="mt-2 divide-y divide-gray-100">
+                              {closestBundle.items.map((bi, i) => (
+                                <li key={`${bi.description}-${i}`} className="flex min-h-[44px] items-center gap-3 py-2">
+                                  <input
+                                    type="checkbox"
+                                    className="h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
+                                    checked={!!bundleChecks[i]}
+                                    onChange={() =>
+                                      setBundleChecks((prev) => {
+                                        const next = [...prev];
+                                        next[i] = !next[i];
+                                        return next;
+                                      })
+                                    }
+                                  />
+                                  <span className="min-w-0 flex-1 text-[15px] text-gray-900 [overflow-wrap:anywhere]">
+                                    {bi.brand ? `${bi.brand} ` : ""}
+                                    {bi.description}
+                                  </span>
+                                  <span className="shrink-0 text-[15px] font-bold tabular-nums text-gray-900">{formatCurrency(bi.total)}</span>
+                                </li>
+                              ))}
+                            </ul>
+                            <div className="mt-4 border-t border-gray-200 pt-4 text-sm font-semibold text-gray-800">
+                              Selected: {bundleSelectedCount} item{bundleSelectedCount !== 1 ? "s" : ""} ·{" "}
+                              <span className="tabular-nums">{formatCurrency(bundleSelectedTotal)}</span>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={bundleAdding || bundleSelectedCount === 0 || isSaving}
+                              onClick={() => void handleBundleAddSelected()}
+                              className={`mt-5 flex h-12 w-full items-center justify-center rounded-xl text-base font-bold transition-all duration-300 md:h-14 md:text-base ${
+                                bundleAddedFlash
+                                  ? "bg-[#16A34A] text-white"
+                                  : "bg-[#2563EB] text-white hover:bg-blue-700"
+                              } disabled:opacity-40`}
+                            >
+                              {bundleAdding ? "…" : bundleAddedFlash ? "✓ Added" : "Add Selected Items →"}
+                            </button>
+                          </>
+                        ) : (
+                          <p className="py-8 text-center text-sm text-[#6B7280]">
+                            Move the slider to select a bundle for this room.
+                          </p>
+                        )}
+                      </div>
+                      <Link
+                        href={`/review/bundles/${roomSlug}`}
+                        className="inline-block text-sm font-semibold text-[#2563EB] hover:underline"
+                      >
+                        Browse all bundles →
+                      </Link>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            <p className="mt-10 text-center text-sm text-[#6B7280]">
               Art and decorative items are managed separately in the Art Collection section.
             </p>
-
-            {/* Bundle slider */}
-            <section className="mt-10 rounded-2xl border border-gray-200 bg-gray-50 p-5">
-              <p className="text-base font-semibold text-gray-900">
-                Gap remaining for this room: <span className="tabular-nums">{formatCurrency(gapRemaining)}</span>
-              </p>
-              <p className="text-base text-gray-600 mt-2 mb-4">Add more via bundles:</p>
-              <div className="flex items-center gap-3 text-base tabular-nums text-gray-700 mb-2">
-                <span>{formatCurrency(0)}</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={Math.max(0, bundleSnapValues.length - 1)}
-                  step={1}
-                  value={Math.min(sliderSnapIndex, bundleSnapValues.length - 1)}
-                  onChange={(e) => setSliderSnapIndex(Number(e.target.value))}
-                  className="flex-1 accent-[#2563EB] h-3"
-                />
-                <span>{formatCurrency(maxSnap)}</span>
-              </div>
-              {closestBundle && (
-                <p className="text-base text-gray-700 mb-2">
-                  Closest bundle: <span className="font-semibold">{closestBundle.name}</span> ·{" "}
-                  {formatCurrency(closestBundle.total_value)}
-                </p>
-              )}
-              <Link
-                href={`/review/bundles/${roomSlug}`}
-                className="inline-flex mt-2 text-base font-bold text-[#2563EB] hover:underline"
-              >
-                Browse all bundles for this room →
-              </Link>
-            </section>
-          </div>
+          </main>
         </>
       )}
 
-      <footer className="fixed bottom-0 inset-x-0 z-30 border-t-2 border-gray-200 bg-white shadow-lg">
-        <div className="max-w-[1400px] mx-auto px-4 py-3 text-base">
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums sm:grid-cols-4">
-            <span className="text-gray-600">Original items</span>
-            <span className="text-right font-medium">{formatCurrency(originalSub)}</span>
-            <span className="text-gray-600">Upgrades</span>
-            <span className="text-right font-medium text-green-700">+{formatCurrency(upgradedSub)}</span>
-            <span className="text-gray-600">Additions</span>
-            <span className="text-right font-medium text-blue-700">+{formatCurrency(addedSub)}</span>
-            <span className="text-gray-600 col-span-2 sm:col-span-1">Room total</span>
-            <span className="text-right font-bold col-span-2 sm:col-span-1">
-              {formatCurrency(roomTotal)} / {formatCurrency(roomTarget)}
-            </span>
-          </div>
-          <p className="mt-2 text-base text-gray-600">
-            Still needed: <span className="font-bold tabular-nums text-gray-900">{formatCurrency(stillNeeded)}</span>
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2 justify-between">
-            {prevRoom ? (
+      {showRoomChrome ? (
+        <footer className="fixed bottom-0 inset-x-0 z-30 h-16 border-t border-gray-200 bg-white shadow-lg">
+          <div className="mx-auto flex h-full max-w-[1100px] items-center justify-between gap-3 px-4 md:gap-6 md:px-8">
+            <div className="hidden min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-xs tabular-nums text-[#6B7280] md:flex md:text-sm">
+              <span>
+                Original: <span className="font-medium text-gray-900">{formatCurrency(originalRoomValue)}</span>
+              </span>
+              <span>
+                Upgrades:{" "}
+                <span className="font-semibold text-[#16A34A]">+{formatCurrency(upgradeDeltaSub)}</span>
+              </span>
+              <span>
+                Added: <span className="font-semibold text-[#16A34A]">+{formatCurrency(addedSub)}</span>
+              </span>
+              <span>
+                Total:{" "}
+                <span className="font-bold text-[#2563EB]">{formatCurrency(roomTotal)}</span>
+                <span className="font-normal text-[#6B7280]"> / {formatCurrency(roomTarget)} goal</span>
+              </span>
+            </div>
+            <div className="flex min-w-0 flex-1 items-center md:hidden">
+              <span className="truncate text-sm tabular-nums">
+                <span className="text-[#6B7280]">Total </span>
+                <span className="font-bold text-[#2563EB]">{formatCurrency(roomTotal)}</span>
+                <span className="text-[#6B7280]"> / {formatCurrency(roomTarget)}</span>
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
               <Link
-                href={`/review/${slugify(prevRoom)}`}
-                className="min-h-[44px] flex items-center rounded-xl border border-gray-200 px-4 py-2 font-medium text-gray-800"
+                href={prevRoom ? `/review/${slugify(prevRoom)}${guided ? "?guided=true" : ""}` : "/review"}
+                className="hidden rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-800 transition-colors hover:bg-gray-50 sm:inline md:text-sm"
               >
-                ← Previous room
+                ← Rooms
               </Link>
-            ) : (
-              <span />
-            )}
-            <Link href="/review" className="min-h-[44px] flex items-center rounded-xl bg-gray-100 px-4 py-2 font-semibold text-gray-800">
-              All rooms
-            </Link>
-            {nextRoom ? (
-              <Link
-                href={`/review/${slugify(nextRoom)}${guided ? "?guided=true" : ""}`}
-                className="min-h-[44px] flex items-center rounded-xl bg-[#2563EB] px-4 py-2 font-bold text-white"
-              >
-                {guided ? "Next Room →" : "Next room →"}
-              </Link>
-            ) : (
-              <Link href="/review" className="min-h-[44px] flex items-center rounded-xl bg-gray-200 px-4 py-2 font-medium text-gray-700">
-                Done
-              </Link>
-            )}
+              {nextRoom ? (
+                <Link
+                  href={`/review/${slugify(nextRoom)}${guided ? "?guided=true" : ""}`}
+                  className="rounded-lg bg-[#2563EB] px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-blue-700 md:text-sm"
+                >
+                  Next Room →
+                </Link>
+              ) : (
+                <Link href="/review" className="rounded-lg bg-gray-200 px-3 py-2 text-xs font-medium text-gray-800 md:text-sm">
+                  Done
+                </Link>
+              )}
+            </div>
           </div>
-        </div>
-      </footer>
+        </footer>
+      ) : null}
 
       {/* Guided tour — character + bubbles */}
       {guided && (
