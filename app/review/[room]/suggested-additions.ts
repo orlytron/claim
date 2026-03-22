@@ -353,6 +353,30 @@ export const SUGGESTED_ADDITIONS: Record<string, SuggestedAdditionRow[]> = {
   ],
 };
 
+/** Expandable “Gaming Collection” for Garage — check items on individually. */
+export const GAMING_COLLECTION_BUNDLE = {
+  id: "gr-gaming-collection",
+  room: "Garage",
+  category: "Gaming",
+  title: "Vintage & Modern Gaming Collection",
+  description: "Multiple game systems and game catalogues",
+  items: [
+    { description: "Nintendo 64 console with controllers", brand: "Nintendo", unit_cost: 150, qty: 1 },
+    { description: "PlayStation 2 console with controllers", brand: "Sony", unit_cost: 120, qty: 1 },
+    { description: "PlayStation 3 console with controllers", brand: "Sony", unit_cost: 180, qty: 1 },
+    { description: "Xbox 360 console with controllers", brand: "Microsoft", unit_cost: 150, qty: 1 },
+    { description: "Nintendo Wii console with remotes", brand: "Nintendo", unit_cost: 120, qty: 1 },
+    { description: "Nintendo Switch console with Joy-Cons", brand: "Nintendo", unit_cost: 350, qty: 1 },
+    { description: "PlayStation 4 Pro console", brand: "Sony", unit_cost: 250, qty: 1 },
+    { description: "Nintendo 64 game catalogue 20 titles", brand: "Nintendo", unit_cost: 200, qty: 1 },
+    { description: "PlayStation 2 game catalogue 30 titles", brand: "Sony", unit_cost: 200, qty: 1 },
+    { description: "Nintendo Switch game catalogue 15 titles", brand: "Nintendo", unit_cost: 600, qty: 1 },
+    { description: "Multi-system game storage unit", brand: "", unit_cost: 180, qty: 1 },
+  ],
+} as const;
+
+export type GamingCollectionItem = (typeof GAMING_COLLECTION_BUNDLE.items)[number];
+
 export function suggestionAlreadyInClaim(items: ClaimItem[], label: string): boolean {
   const L = label.toLowerCase();
   const words = L.split(/\s+/).filter((w) => w.length > 2);

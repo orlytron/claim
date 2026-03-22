@@ -1,3 +1,5 @@
+import { AFFORDABLE_BUNDLES } from "./bundles-affordable-data";
+
 export interface BundleItem {
   description: string;
   brand: string;
@@ -20,6 +22,7 @@ export interface Bundle {
 }
 
 export const BUNDLES_DATA: Bundle[] = [
+  ...AFFORDABLE_BUNDLES,
   // ── LIVING ROOM ──────────────────────────────────────────────────────────────
   {
     room: "Living Room", bundle_code: "LR-A", name: "Warm Refresh",

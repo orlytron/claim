@@ -1,4 +1,17 @@
-export type ClaimItemSource = "original" | "bundle" | "upgrade" | "art";
+export type ClaimItemSource = "original" | "bundle" | "upgrade" | "art" | "suggestion";
+
+/** Lets the client revert scripted first-visit suggestions (see apply-suggested-upgrades). */
+export type SuggestionRevert =
+  | { kind: "rename"; prevDescription: string }
+  | { kind: "price"; prevUnitCost: number; prevQty?: number; prevDescription?: string }
+  | { kind: "qty"; prevQty: number; prevUnitCost?: number }
+  | { kind: "move"; prevRoom: string }
+  | { kind: "add" }
+  | {
+      kind: "split_part";
+      original: ClaimItem;
+      partner: { description: string; unit_cost: number; qty: number };
+    };
 
 export interface ClaimItem {
   room: string;
@@ -26,6 +39,7 @@ export interface ClaimItem {
     category: string;
     source?: ClaimItemSource;
   };
+  suggestion_revert?: SuggestionRevert;
 }
 
 export type TierKey = "keep" | "entry" | "mid" | "premium";

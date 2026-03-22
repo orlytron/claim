@@ -6,7 +6,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import AniGuide from "../../components/AniGuide";
 import SpeechBubble from "../../components/SpeechBubble";
 import { dispatchUpgradeReward } from "../../components/UpgradeRewardToast";
-import { BUNDLES_DATA, type BundleItem } from "../../lib/bundles-data";
+import { BUNDLES_DATA, type Bundle, type BundleItem } from "../../lib/bundles-data";
 import { CLAIM_GOAL_DEFAULT, DEFAULT_ROOM_TARGETS } from "../../lib/room-targets";
 import { readRoomGoal, writeRoomGoal } from "../../lib/room-goals";
 import { loadSession, saveSession, SessionData } from "../../lib/session";
@@ -25,10 +25,18 @@ import { UpgradeOptionsPanel, type UpgradeOption } from "./UpgradeOptionsPanel";
 
 export type { UpgradeOption };
 import {
+  GAMING_COLLECTION_BUNDLE,
   SUGGESTED_ADDITIONS,
   suggestionAlreadyInClaim,
+  type GamingCollectionItem,
   type SuggestedAdditionRow,
 } from "./suggested-additions";
+import { formatSuggestedUpgradePreview, SUGGESTED_UPGRADES } from "../../lib/suggested-upgrades";
+import {
+  applySuggestionRevert,
+  restoreRemovedOriginalLine,
+} from "../../lib/suggestion-revert-actions";
+import { SuggestionsBanner, type SuggestionRevertSpec } from "./SuggestionsBanner";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -296,6 +304,12 @@ function SourceTag({ source }: { source?: ClaimItem["source"] }) {
         🎨 art
       </span>
     );
+  if (source === "suggestion")
+    return (
+      <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[12px] font-medium text-amber-800">
+        suggested
+      </span>
+    );
   return null;
 }
 
@@ -357,6 +371,10 @@ export default function RoomReviewPage() {
   const [editingAgeKey, setEditingAgeKey] = useState<string | null>(null);
   const [ageDraft, setAgeDraft] = useState("");
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showSuggestionsBanner, setShowSuggestionsBanner] = useState(false);
+  const [gamingBundleOpen, setGamingBundleOpen] = useState(false);
+  const [affordableExpandedCode, setAffordableExpandedCode] = useState<string | null>(null);
+  const [affordableChecks, setAffordableChecks] = useState<boolean[]>([]);
 
   const undoHistoryRef = useRef<ClaimItem[][]>([]);
   const undoFutureRef = useRef<ClaimItem[][]>([]);
@@ -420,11 +438,24 @@ export default function RoomReviewPage() {
     setRedoAvail(false);
   }, [roomSlug]);
 
+  const roomBundlesAll = useMemo(
+    () => (roomName ? BUNDLES_DATA.filter((b) => b.room === roomName) : []),
+    [roomName]
+  );
+  const focusedBundles = useMemo(
+    () => roomBundlesAll.filter((b) => b.tier === "affordable"),
+    [roomBundlesAll]
+  );
+  const fullBundles = useMemo(
+    () => roomBundlesAll.filter((b) => b.tier !== "affordable"),
+    [roomBundlesAll]
+  );
+
   const bundleBudgetRange = useMemo(() => {
-    const vals = BUNDLES_DATA.filter((b) => b.room === roomName).map((b) => b.total_value);
+    const vals = fullBundles.map((b) => b.total_value);
     if (vals.length === 0) return { min: 17_000, max: 285_000 };
     return { min: Math.min(...vals), max: Math.max(...vals) };
-  }, [roomName]);
+  }, [fullBundles]);
 
   useEffect(() => {
     setBundleBudgetValue(bundleBudgetRange.min);
@@ -436,6 +467,28 @@ export default function RoomReviewPage() {
   useEffect(() => {
     setLockedKeys(readLocked());
   }, []);
+
+  useEffect(() => {
+    if (!roomSlug) return;
+    const key = `suggestions_shown_${roomSlug}`;
+    console.log("Suggestions shown key:", key);
+    const shown = typeof window !== "undefined" ? localStorage.getItem(key) : null;
+    console.log("Already shown:", shown);
+    if (guided) {
+      setShowSuggestionsBanner(false);
+      return;
+    }
+    if (!roomName) {
+      setShowSuggestionsBanner(false);
+      return;
+    }
+    const hasList = (SUGGESTED_UPGRADES[roomName] ?? []).length > 0;
+    if (!hasList) {
+      setShowSuggestionsBanner(false);
+      return;
+    }
+    setShowSuggestionsBanner(shown !== "shown");
+  }, [roomSlug, roomName, guided]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -548,7 +601,7 @@ export default function RoomReviewPage() {
   const originalRoomValue = useMemo(
     () =>
       items.reduce((s, i) => {
-        if (i.source === "bundle" || i.source === "art") return s;
+        if (i.source === "bundle" || i.source === "art" || i.source === "suggestion") return s;
         const u = i.pre_upgrade_item?.unit_cost ?? i.unit_cost;
         return s + i.qty * u;
       }, 0),
@@ -564,10 +617,81 @@ export default function RoomReviewPage() {
   const addedSub = useMemo(
     () =>
       items
-        .filter((i) => i.source === "bundle" || i.source === "art")
+        .filter((i) => i.source === "bundle" || i.source === "art" || i.source === "suggestion")
         .reduce((s, i) => s + i.qty * i.unit_cost, 0),
     [items]
   );
+
+  const roomSuggestionList = useMemo(() => SUGGESTED_UPGRADES[roomName] ?? [], [roomName]);
+  const suggestionPreviewLines = useMemo(
+    () => roomSuggestionList.slice(0, 4).map(formatSuggestedUpgradePreview),
+    [roomSuggestionList]
+  );
+  const suggestionMoreCount = Math.max(0, roomSuggestionList.length - suggestionPreviewLines.length);
+
+  const suggestionRevertSpecs = useMemo((): SuggestionRevertSpec[] => {
+    if (!session?.claim_items || !roomName) return [];
+    const claim = session.claim_items;
+    const out: SuggestionRevertSpec[] = [];
+    const splitKeys = new Set<string>();
+
+    for (const it of claim) {
+      if (it.room === roomName && it.suggestion_revert?.kind === "split_part") {
+        const k = [norm(it.description), norm(it.suggestion_revert.partner.description)].sort().join("|");
+        if (splitKeys.has(k)) continue;
+        splitKeys.add(k);
+        const orig = it.suggestion_revert.original.description;
+        out.push({
+          key: `split-${k}`,
+          kind: "item",
+          item: it,
+          label: `Split: ${orig} → ${it.description} + partner line`,
+        });
+      }
+    }
+
+    for (const it of claim) {
+      if (it.room !== roomName || !it.suggestion_revert || it.suggestion_revert.kind === "split_part") continue;
+      const r = it.suggestion_revert;
+      let label = it.description;
+      if (r.kind === "rename") label = `Renamed: ${r.prevDescription} → ${it.description}`;
+      else if (r.kind === "price") label = `Repriced: ${it.description}`;
+      else if (r.kind === "qty") label = `Qty update: ${it.description}`;
+      else if (r.kind === "move") label = `Moved here from ${r.prevRoom}: ${it.description}`;
+      else if (r.kind === "add") label = `Added: ${it.description}`;
+      out.push({
+        key: `line-${norm(it.description)}-${it.unit_cost}-${it.qty}-${out.length}`,
+        kind: "item",
+        item: it,
+        label,
+      });
+    }
+
+    for (const it of claim) {
+      if (it.suggestion_revert?.kind !== "move" || it.suggestion_revert.prevRoom !== roomName) continue;
+      out.push({
+        key: `moveout-${norm(it.description)}-${it.unit_cost}-${it.room}`,
+        kind: "item",
+        item: it,
+        label: `Moved out to ${it.room}: ${it.description}`,
+      });
+    }
+
+    for (const s of roomSuggestionList) {
+      if (s.type !== "REMOVE") continue;
+      const exists = claim.some((i) => i.room === roomName && norm(i.description) === norm(s.match_description));
+      if (!exists) {
+        out.push({
+          key: `restore-${norm(s.match_description)}`,
+          kind: "remove",
+          match_description: s.match_description,
+          label: `Removed: ${s.match_description}`,
+        });
+      }
+    }
+
+    return out;
+  }, [session?.claim_items, roomName, roomSuggestionList]);
 
   const suggestionByCategory = useMemo(() => {
     const m = new Map<string, SuggestedAdditionRow[]>();
@@ -645,6 +769,75 @@ export default function RoomReviewPage() {
     await saveSession({ claim_items: nextClaim }, sessionId);
     setSession((prev) => (prev ? { ...prev, claim_items: nextClaim } : prev));
     setItems(nextClaim.filter((i) => i.room === roomName));
+  }
+
+  async function handleRevertSuggestionSpec(spec: SuggestionRevertSpec) {
+    if (!session?.claim_items) return;
+    setIsSaving(true);
+    try {
+      let next: ClaimItem[] | null = null;
+      if (spec.kind === "item") {
+        next = applySuggestionRevert(session.claim_items, spec.item);
+      } else {
+        next = restoreRemovedOriginalLine(session.claim_items, roomName, spec.match_description);
+      }
+      if (next) {
+        await saveFullClaim(next);
+        setToast("Reverted change");
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  function gamingLineInClaim(gi: GamingCollectionItem): boolean {
+    return items.some(
+      (i) =>
+        i.room === roomName &&
+        i.source === "bundle" &&
+        norm(i.description) === norm(gi.description) &&
+        Math.abs(i.unit_cost - gi.unit_cost) < 0.01 &&
+        i.qty === gi.qty
+    );
+  }
+
+  async function handleToggleGamingItem(gi: GamingCollectionItem) {
+    if (!session?.claim_items || roomName !== "Garage") return;
+    if (gamingLineInClaim(gi)) {
+      const nextRoom = items.filter(
+        (i) =>
+          !(
+            i.room === roomName &&
+            i.source === "bundle" &&
+            norm(i.description) === norm(gi.description) &&
+            Math.abs(i.unit_cost - gi.unit_cost) < 0.01 &&
+            i.qty === gi.qty
+          )
+      );
+      await saveRoomItems(nextRoom);
+      setToast("Removed from claim");
+      return;
+    }
+    const line: ClaimItem = {
+      room: "Garage",
+      description: gi.description,
+      brand: gi.brand ?? "",
+      model: "",
+      qty: gi.qty,
+      age_years: 0,
+      age_months: 0,
+      condition: "Average",
+      unit_cost: gi.unit_cost,
+      category: "Gaming",
+      source: "bundle",
+    };
+    const beforeClaim = session.claim_items;
+    const nextRoom = [...items, line];
+    const rest = beforeClaim.filter((i) => i.room !== roomName);
+    const afterClaim = [...rest, ...nextRoom];
+    await saveRoomItems(nextRoom);
+    fireUpgradeReward(beforeClaim, afterClaim, gi.unit_cost * gi.qty);
+    setToast("Added to claim");
   }
 
   async function undoRoom() {
@@ -952,15 +1145,13 @@ export default function RoomReviewPage() {
   }
 
   const closestBundle = useMemo(() => {
-    if (!roomName) return null;
-    const list = BUNDLES_DATA.filter((b) => b.room === roomName);
-    if (list.length === 0) return null;
+    if (!roomName || fullBundles.length === 0) return null;
     const v =
       bundleBudgetValue > 0 ? bundleBudgetValue : (bundleBudgetRange.min + bundleBudgetRange.max) / 2;
-    return list.reduce((best, b) =>
+    return fullBundles.reduce((best, b) =>
       Math.abs(b.total_value - v) <= Math.abs(best.total_value - v) ? b : best
     );
-  }, [roomName, bundleBudgetValue, bundleBudgetRange.min, bundleBudgetRange.max]);
+  }, [roomName, fullBundles, bundleBudgetValue, bundleBudgetRange.min, bundleBudgetRange.max]);
 
   useEffect(() => {
     if (closestBundle) {
@@ -969,6 +1160,8 @@ export default function RoomReviewPage() {
       setBundleChecks([]);
     }
     setBundleAddedFlash(false);
+    setAffordableExpandedCode(null);
+    setAffordableChecks([]);
   }, [closestBundle?.bundle_code]);
 
   const minBundleDisplay = bundleBudgetRange.min;
@@ -1024,19 +1217,19 @@ export default function RoomReviewPage() {
     return roomItems.find((c) => c.room === roomName && bundleRoomSlotKey(c.description) === slot);
   }
 
-  async function handleApplyPackage() {
-    if (!closestBundle || !session?.claim_items) return;
-    const beforeClaim = session.claim_items;
-    const selectedIndices = closestBundle.items.map((_, i) => i).filter((i) => bundleChecks[i]);
+  async function handleApplyBundle(bundle: Bundle, checks: boolean[], opts?: { closeSection?: boolean }) {
+    if (!session?.claim_items) return;
+    const selectedIndices = bundle.items.map((_, i) => i).filter((i) => checks[i]);
     if (selectedIndices.length === 0) return;
     setBundleAdding(true);
     try {
+      const beforeClaim = session.claim_items;
       pushUndoSnapshot();
       let nextRoom = items.map((i) => ({ ...i }));
       let packageExtra = 0;
 
       for (const i of selectedIndices) {
-        const bi = closestBundle.items[i];
+        const bi = bundle.items[i]!;
         const existing = findExistingForBundleSlot(bi, nextRoom);
         if (existing) {
           const oldLine = existing.qty * existing.unit_cost;
@@ -1089,12 +1282,12 @@ export default function RoomReviewPage() {
       await persistRoomItemsSnapshot(nextRoom);
       fireUpgradeReward(beforeClaim, afterClaim, packageExtra);
 
-      const selectedItems = selectedIndices.map((i) => closestBundle.items[i]);
+      const selectedItems = selectedIndices.map((i) => bundle.items[i]!);
       const { error: accErr } = await supabase.from("bundle_decisions").upsert(
         {
-          bundle_code: closestBundle.bundle_code,
-          room: closestBundle.room,
-          bundle_name: closestBundle.name,
+          bundle_code: bundle.bundle_code,
+          room: bundle.room,
+          bundle_name: bundle.name,
           action: "applied",
           items: selectedItems as BundleItem[],
           total_value: selectedItems.reduce((s, bi) => s + bi.total, 0),
@@ -1107,11 +1300,71 @@ export default function RoomReviewPage() {
       setToast(`Package applied · +${formatCurrency(packageExtra)}`);
       setBundleAddedFlash(true);
       window.setTimeout(() => setBundleAddedFlash(false), 1200);
-      setBundleSectionOpen(false);
+      if (opts?.closeSection) setBundleSectionOpen(false);
     } finally {
       setBundleAdding(false);
     }
   }
+
+  function handleApplyPackage() {
+    if (!closestBundle) return;
+    void handleApplyBundle(closestBundle, bundleChecks, { closeSection: true });
+  }
+
+  function expandAffordableBundle(b: Bundle) {
+    setAffordableExpandedCode(b.bundle_code);
+    setAffordableChecks(b.items.map(() => true));
+  }
+
+  const affordableActiveBundle = useMemo(
+    () =>
+      affordableExpandedCode == null
+        ? null
+        : (focusedBundles.find((b) => b.bundle_code === affordableExpandedCode) ?? null),
+    [affordableExpandedCode, focusedBundles]
+  );
+
+  const affordableSelectedTotal = useMemo(() => {
+    if (!affordableActiveBundle) return 0;
+    return affordableActiveBundle.items.reduce((s, bi, i) => (affordableChecks[i] ? s + bi.total : s), 0);
+  }, [affordableActiveBundle, affordableChecks]);
+
+  const affordableBundleSelectedCount = useMemo(
+    () => affordableChecks.filter(Boolean).length,
+    [affordableChecks]
+  );
+
+  const affordableUpgradeDeltaSelected = useMemo(() => {
+    if (!affordableActiveBundle) return 0;
+    let d = 0;
+    affordableActiveBundle.items.forEach((bi, i) => {
+      if (!affordableChecks[i]) return;
+      const slot = bundleRoomSlotKey(bi.description);
+      if (slot == null) return;
+      const existing = items.find(
+        (c) => c.room === roomName && bundleRoomSlotKey(c.description) === slot
+      );
+      if (!existing) return;
+      d += bi.unit_cost * existing.qty - existing.unit_cost * existing.qty;
+    });
+    return d;
+  }, [affordableActiveBundle, affordableChecks, items, roomName]);
+
+  const affordableAdditionsSelected = useMemo(() => {
+    if (!affordableActiveBundle) return 0;
+    let d = 0;
+    affordableActiveBundle.items.forEach((bi, i) => {
+      if (!affordableChecks[i]) return;
+      const slot = bundleRoomSlotKey(bi.description);
+      const existing =
+        slot != null
+          ? items.find((c) => c.room === roomName && bundleRoomSlotKey(c.description) === slot)
+          : undefined;
+      if (existing) return;
+      d += bi.total;
+    });
+    return d;
+  }, [affordableActiveBundle, affordableChecks, items, roomName]);
 
   async function applyMiscSliderToAll() {
     if (!session?.claim_items || tier2Sorted.length === 0) return;
@@ -1141,8 +1394,32 @@ export default function RoomReviewPage() {
   const visibleSuggestionCategories = suggestExpand ? suggestionByCategory : suggestionByCategory.slice(0, 3);
   const hasMoreSuggestionCategories = suggestionByCategory.length > 3;
 
+  const showSuggestionsBannerVisible =
+    !guided &&
+    showSuggestionsBanner &&
+    !!roomName &&
+    !isLoading &&
+    roomSuggestionList.length > 0;
+
   return (
     <div className="flex min-h-screen flex-col bg-white pb-24 md:pb-20">
+      {showSuggestionsBannerVisible ? (
+        <SuggestionsBanner
+          roomSlug={roomSlug}
+          roomSuggestionList={roomSuggestionList}
+          suggestionPreviewLines={suggestionPreviewLines}
+          suggestionMoreCount={suggestionMoreCount}
+          suggestionRevertSpecs={suggestionRevertSpecs}
+          isSaving={isSaving}
+          onDismiss={() => {
+            if (typeof window !== "undefined" && roomSlug) {
+              localStorage.setItem(`suggestions_shown_${roomSlug}`, "shown");
+            }
+            setShowSuggestionsBanner(false);
+          }}
+          onRevert={handleRevertSuggestionSpec}
+        />
+      ) : null}
       {isLoading ? (
         <div className="flex flex-1 items-center justify-center py-24">
           <SmallSpinner />
@@ -1763,6 +2040,54 @@ export default function RoomReviewPage() {
                           {suggestExpand ? "Show fewer ▲" : "Show more ▼"}
                         </button>
                       ) : null}
+                      {roomName === "Garage" ? (
+                        <div className="mt-10">
+                          <button
+                            type="button"
+                            onClick={() => setGamingBundleOpen((o) => !o)}
+                            className="flex w-full items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 text-left shadow-sm"
+                          >
+                            <div>
+                              <p className="text-xs font-bold uppercase tracking-wide text-[#6B7280]">
+                                {GAMING_COLLECTION_BUNDLE.category}
+                              </p>
+                              <p className="mt-1 text-base font-semibold text-gray-900">{GAMING_COLLECTION_BUNDLE.title}</p>
+                              <p className="mt-1 text-sm text-[#6B7280]">{GAMING_COLLECTION_BUNDLE.description}</p>
+                            </div>
+                            <span className="shrink-0 text-gray-400">{gamingBundleOpen ? "▼" : "▶"}</span>
+                          </button>
+                          {gamingBundleOpen ? (
+                            <ul className="mt-3 divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white shadow-sm">
+                              {GAMING_COLLECTION_BUNDLE.items.map((gi, idx) => {
+                                const added = gamingLineInClaim(gi);
+                                return (
+                                  <li
+                                    key={`${gi.description}-${idx}`}
+                                    className="flex min-h-[48px] flex-wrap items-center gap-2 px-4 py-2.5"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      className="h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
+                                      checked={added}
+                                      disabled={isSaving}
+                                      onChange={() => void handleToggleGamingItem(gi)}
+                                      aria-label={added ? `Remove ${gi.description}` : `Add ${gi.description}`}
+                                    />
+                                    <span className="min-w-0 flex-1 text-[15px] font-medium text-gray-900 [overflow-wrap:anywhere]">
+                                      {gi.description}
+                                    </span>
+                                    <span className="shrink-0 text-sm text-[#6B7280]">{gi.brand || "—"}</span>
+                                    <span className="shrink-0 text-[15px] font-bold tabular-nums text-gray-900">
+                                      {formatCurrency(gi.unit_cost)}
+                                      {gi.qty > 1 ? ` ×${gi.qty}` : ""}
+                                    </span>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -1785,175 +2110,366 @@ export default function RoomReviewPage() {
               </button>
               {bundleSectionOpen ? (
                 <div className="px-5 py-6 md:px-6">
-                  {BUNDLES_DATA.filter((b) => b.room === roomName).length === 0 ? (
+                  {roomBundlesAll.length === 0 ? (
                     <p className="text-sm text-[#6B7280]">No bundles defined for this room.</p>
                   ) : (
-                    <div className="space-y-6">
-                      <div>
-                        <p className="text-center text-xs text-[#6B7280]">← drag to explore →</p>
-                        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs tabular-nums text-[#6B7280] sm:text-sm">
-                          <span className="shrink-0 font-medium">{formatCurrency(minBundleDisplay)}</span>
-                          <input
-                            type="range"
-                            min={minBundleDisplay}
-                            max={maxBundleDisplay}
-                            step={1000}
-                            value={Math.min(maxBundleDisplay, Math.max(minBundleDisplay, bundleBudgetValue))}
-                            onChange={(e) => setBundleBudgetValue(Number(e.target.value))}
-                            className="h-2 min-w-0 flex-1 accent-[#2563EB]"
-                            aria-label="Bundle budget explorer"
-                          />
-                          <span className="shrink-0 font-medium">{formatCurrency(maxBundleDisplay)}</span>
-                        </div>
-                        {closestBundle ? (
-                          <p className="mt-3 text-center text-sm font-semibold text-gray-900">
-                            {closestBundle.name}{" "}
-                            <span className="tabular-nums text-[#2563EB]">
-                              {formatCurrency(closestBundle.total_value)}
-                            </span>
+                    <div className="space-y-10">
+                      {focusedBundles.length > 0 ? (
+                        <div>
+                          <h3 className="text-xs font-bold uppercase tracking-wider text-[#2563EB]">
+                            Focused additions
+                          </h3>
+                          <p className="mt-1 text-sm font-medium text-[#6B7280]">
+                            <span className="font-semibold text-gray-800">FOCUSED ADDITIONS</span> — affordable
+                            bundles (~$5K–$40K). Add specific groups without a six-figure package.
                           </p>
-                        ) : null}
-                      </div>
-
-                      {closestBundle && bundleChecks.length === closestBundle.items.length ? (
-                        <div className="rounded-2xl border border-gray-200 bg-gray-50/50 p-4 md:p-6">
-                          <div className="flex flex-wrap items-start justify-between gap-2 border-b border-gray-200 pb-4">
-                            <h4 className="text-lg font-semibold text-gray-900 [overflow-wrap:anywhere]">
-                              {closestBundle.name}
-                            </h4>
-                            <span className="text-lg font-bold tabular-nums text-gray-900">
-                              {formatCurrency(closestBundle.total_value)}
-                            </span>
+                          <div className="mt-4 space-y-3">
+                            {focusedBundles.map((fb) => (
+                              <div
+                                key={fb.bundle_code}
+                                className={`rounded-xl border bg-white p-4 shadow-sm ${
+                                  affordableExpandedCode === fb.bundle_code
+                                    ? "border-[#2563EB] ring-1 ring-blue-100"
+                                    : "border-gray-100"
+                                }`}
+                              >
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div className="min-w-0 flex-1">
+                                    <p className="font-semibold text-gray-900 [overflow-wrap:anywhere]">{fb.name}</p>
+                                    <p className="mt-1 text-sm text-[#6B7280] [overflow-wrap:anywhere]">{fb.description}</p>
+                                  </div>
+                                  <div className="flex shrink-0 flex-col items-end gap-2">
+                                    <span className="text-base font-bold tabular-nums text-gray-900">
+                                      {formatCurrency(fb.total_value)}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => expandAffordableBundle(fb)}
+                                      className="rounded-lg border border-[#2563EB] px-3 py-1.5 text-xs font-bold text-[#2563EB] hover:bg-blue-50"
+                                    >
+                                      {affordableExpandedCode === fb.bundle_code ? "Configuring…" : "Choose items"}
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
                           </div>
 
-                          <div className="mt-4 grid grid-cols-1 gap-6 md:grid-cols-2">
-                            <div>
-                              <p className="border-b border-gray-200 pb-2 text-xs font-bold uppercase tracking-wide text-[#6B7280]">
-                                Upgrades existing
-                              </p>
-                              <ul className="mt-3 space-y-4">
-                                {closestBundle.items.map((bi, i) => {
-                                  const existing = findExistingForBundleSlot(bi, items);
-                                  if (!existing) return null;
-                                  const delta = bi.unit_cost * existing.qty - existing.unit_cost * existing.qty;
-                                  return (
-                                    <li key={`bl-${i}`} className="flex gap-2 text-sm">
-                                      <input
-                                        type="checkbox"
-                                        className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
-                                        checked={!!bundleChecks[i]}
-                                        onChange={() =>
-                                          setBundleChecks((prev) => {
-                                            const next = [...prev];
-                                            next[i] = !next[i];
-                                            return next;
-                                          })
-                                        }
-                                      />
-                                      <div className="min-w-0 flex-1">
-                                        <p className="text-[13px] text-gray-500 line-through [overflow-wrap:anywhere]">
-                                          {existing.brand ? `${existing.brand} ` : ""}
-                                          {existing.description}{" "}
-                                          <span className="tabular-nums font-semibold">
-                                            {formatCurrency(existing.unit_cost * existing.qty)}
-                                          </span>
-                                        </p>
-                                        <p className="mt-1 font-medium text-gray-900 [overflow-wrap:anywhere]">
-                                          → {bi.brand ? `${bi.brand} ` : ""}
-                                          {bi.description}
-                                        </p>
-                                        <p className="mt-1 tabular-nums text-gray-900">
-                                          {formatCurrency(bi.unit_cost * existing.qty)}
-                                          {delta > 0 ? (
-                                            <span className="ml-2 font-semibold text-[#16A34A]">
-                                              (+{formatCurrency(delta)})
-                                            </span>
-                                          ) : null}
-                                        </p>
-                                      </div>
-                                    </li>
-                                  );
-                                })}
-                              </ul>
+                          {affordableActiveBundle && affordableChecks.length === affordableActiveBundle.items.length ? (
+                            <div className="mt-6 rounded-2xl border border-gray-200 bg-gray-50/50 p-4 md:p-6">
+                              <div className="flex flex-wrap items-start justify-between gap-2 border-b border-gray-200 pb-4">
+                                <h4 className="text-lg font-semibold text-gray-900 [overflow-wrap:anywhere]">
+                                  {affordableActiveBundle.name}
+                                </h4>
+                                <span className="text-lg font-bold tabular-nums text-gray-900">
+                                  {formatCurrency(affordableActiveBundle.total_value)}
+                                </span>
+                              </div>
+
+                              <div className="mt-4 grid grid-cols-1 gap-6 md:grid-cols-2">
+                                <div>
+                                  <p className="border-b border-gray-200 pb-2 text-xs font-bold uppercase tracking-wide text-[#6B7280]">
+                                    Upgrades existing
+                                  </p>
+                                  <ul className="mt-3 space-y-4">
+                                    {affordableActiveBundle.items.map((bi, i) => {
+                                      const existing = findExistingForBundleSlot(bi, items);
+                                      if (!existing) return null;
+                                      const delta = bi.unit_cost * existing.qty - existing.unit_cost * existing.qty;
+                                      return (
+                                        <li key={`abl-${i}`} className="flex gap-2 text-sm">
+                                          <input
+                                            type="checkbox"
+                                            className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
+                                            checked={!!affordableChecks[i]}
+                                            onChange={() =>
+                                              setAffordableChecks((prev) => {
+                                                const next = [...prev];
+                                                next[i] = !next[i];
+                                                return next;
+                                              })
+                                            }
+                                          />
+                                          <div className="min-w-0 flex-1">
+                                            <p className="text-[13px] text-gray-500 line-through [overflow-wrap:anywhere]">
+                                              {existing.brand ? `${existing.brand} ` : ""}
+                                              {existing.description}{" "}
+                                              <span className="tabular-nums font-semibold">
+                                                {formatCurrency(existing.unit_cost * existing.qty)}
+                                              </span>
+                                            </p>
+                                            <p className="mt-1 font-medium text-gray-900 [overflow-wrap:anywhere]">
+                                              → {bi.brand ? `${bi.brand} ` : ""}
+                                              {bi.description}
+                                            </p>
+                                            <p className="mt-1 tabular-nums text-gray-900">
+                                              {formatCurrency(bi.unit_cost * existing.qty)}
+                                              {delta > 0 ? (
+                                                <span className="ml-2 font-semibold text-[#16A34A]">
+                                                  (+{formatCurrency(delta)})
+                                                </span>
+                                              ) : null}
+                                            </p>
+                                          </div>
+                                        </li>
+                                      );
+                                    })}
+                                  </ul>
+                                </div>
+                                <div>
+                                  <p className="border-b border-gray-200 pb-2 text-xs font-bold uppercase tracking-wide text-[#6B7280]">
+                                    Adds new
+                                  </p>
+                                  <ul className="mt-3 space-y-4">
+                                    {affordableActiveBundle.items.map((bi, i) => {
+                                      if (findExistingForBundleSlot(bi, items)) return null;
+                                      return (
+                                        <li key={`abr-${i}`} className="flex gap-2 text-sm">
+                                          <input
+                                            type="checkbox"
+                                            className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
+                                            checked={!!affordableChecks[i]}
+                                            onChange={() =>
+                                              setAffordableChecks((prev) => {
+                                                const next = [...prev];
+                                                next[i] = !next[i];
+                                                return next;
+                                              })
+                                            }
+                                          />
+                                          <div className="min-w-0 flex-1">
+                                            <p className="font-medium text-gray-900 [overflow-wrap:anywhere]">
+                                              + {bi.brand ? `${bi.brand} ` : ""}
+                                              {bi.description}
+                                            </p>
+                                            <p className="mt-1 font-bold tabular-nums text-gray-900">
+                                              {formatCurrency(bi.total)}
+                                            </p>
+                                          </div>
+                                        </li>
+                                      );
+                                    })}
+                                  </ul>
+                                </div>
+                              </div>
+
+                              <div className="mt-6 border-t border-gray-200 pt-4 text-sm text-gray-800">
+                                <p>
+                                  Upgrades:{" "}
+                                  <span className="font-semibold text-[#16A34A]">
+                                    +{formatCurrency(Math.max(0, affordableUpgradeDeltaSelected))}
+                                  </span>
+                                </p>
+                                <p className="mt-1">
+                                  Additions:{" "}
+                                  <span className="font-semibold text-[#16A34A]">
+                                    +{formatCurrency(affordableAdditionsSelected)}
+                                  </span>
+                                </p>
+                                <p className="mt-2 text-base font-bold text-gray-900">
+                                  Selected:{" "}
+                                  <span className="tabular-nums">{formatCurrency(affordableSelectedTotal)}</span> total
+                                </p>
+                              </div>
+
+                              <button
+                                type="button"
+                                disabled={
+                                  bundleAdding || affordableBundleSelectedCount === 0 || isSaving || !affordableActiveBundle
+                                }
+                                onClick={() =>
+                                  affordableActiveBundle &&
+                                  void handleApplyBundle(affordableActiveBundle, affordableChecks, { closeSection: false })
+                                }
+                                className={`mt-5 flex h-12 w-full items-center justify-center rounded-xl text-base font-bold transition md:h-14 ${
+                                  bundleAddedFlash
+                                    ? "bg-[#16A34A] text-white"
+                                    : "bg-[#2563EB] text-white hover:bg-blue-700"
+                                } disabled:opacity-40`}
+                              >
+                                {bundleAdding ? "…" : bundleAddedFlash ? "✓ Applied" : "✓ Apply focused package"}
+                              </button>
                             </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      {fullBundles.length > 0 ? (
+                        <div>
+                          <h3 className="text-xs font-bold uppercase tracking-wider text-gray-900">Full packages</h3>
+                          <p className="mt-1 text-sm font-medium text-[#6B7280]">
+                            <span className="font-semibold text-gray-800">FULL PACKAGES</span> — larger bundles. Use
+                            the slider to preview a tier (e.g. $17K–$285K+).
+                          </p>
+                          <div className="mt-4 space-y-6">
                             <div>
-                              <p className="border-b border-gray-200 pb-2 text-xs font-bold uppercase tracking-wide text-[#6B7280]">
-                                Adds new
-                              </p>
-                              <ul className="mt-3 space-y-4">
-                                {closestBundle.items.map((bi, i) => {
-                                  if (findExistingForBundleSlot(bi, items)) return null;
-                                  return (
-                                    <li key={`br-${i}`} className="flex gap-2 text-sm">
-                                      <input
-                                        type="checkbox"
-                                        className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
-                                        checked={!!bundleChecks[i]}
-                                        onChange={() =>
-                                          setBundleChecks((prev) => {
-                                            const next = [...prev];
-                                            next[i] = !next[i];
-                                            return next;
-                                          })
-                                        }
-                                      />
-                                      <div className="min-w-0 flex-1">
-                                        <p className="font-medium text-gray-900 [overflow-wrap:anywhere]">
-                                          + {bi.brand ? `${bi.brand} ` : ""}
-                                          {bi.description}
-                                        </p>
-                                        <p className="mt-1 font-bold tabular-nums text-gray-900">
-                                          {formatCurrency(bi.total)}
-                                        </p>
-                                      </div>
-                                    </li>
-                                  );
-                                })}
-                              </ul>
+                              <p className="text-center text-xs text-[#6B7280]">← drag to explore →</p>
+                              <div className="mt-2 flex flex-wrap items-center gap-3 text-xs tabular-nums text-[#6B7280] sm:text-sm">
+                                <span className="shrink-0 font-medium">{formatCurrency(minBundleDisplay)}</span>
+                                <input
+                                  type="range"
+                                  min={minBundleDisplay}
+                                  max={maxBundleDisplay}
+                                  step={1000}
+                                  value={Math.min(maxBundleDisplay, Math.max(minBundleDisplay, bundleBudgetValue))}
+                                  onChange={(e) => setBundleBudgetValue(Number(e.target.value))}
+                                  className="h-2 min-w-0 flex-1 accent-[#2563EB]"
+                                  aria-label="Bundle budget explorer"
+                                />
+                                <span className="shrink-0 font-medium">{formatCurrency(maxBundleDisplay)}</span>
+                              </div>
+                              {closestBundle ? (
+                                <p className="mt-3 text-center text-sm font-semibold text-gray-900">
+                                  {closestBundle.name}{" "}
+                                  <span className="tabular-nums text-[#2563EB]">
+                                    {formatCurrency(closestBundle.total_value)}
+                                  </span>
+                                </p>
+                              ) : null}
                             </div>
-                          </div>
 
-                          <div className="mt-6 border-t border-gray-200 pt-4 text-sm text-gray-800">
-                            <p>
-                              Upgrades:{" "}
-                              <span className="font-semibold text-[#16A34A]">
-                                +{formatCurrency(Math.max(0, bundleUpgradeDeltaSelected))}
-                              </span>
-                            </p>
-                            <p className="mt-1">
-                              Additions:{" "}
-                              <span className="font-semibold text-[#16A34A]">
-                                +{formatCurrency(bundleAdditionsSelected)}
-                              </span>
-                            </p>
-                            <p className="mt-2 text-base font-bold text-gray-900">
-                              Selected:{" "}
-                              <span className="tabular-nums">{formatCurrency(bundleSelectedTotal)}</span> total
-                            </p>
-                          </div>
+                            {closestBundle && bundleChecks.length === closestBundle.items.length ? (
+                              <div className="rounded-2xl border border-gray-200 bg-gray-50/50 p-4 md:p-6">
+                                <div className="flex flex-wrap items-start justify-between gap-2 border-b border-gray-200 pb-4">
+                                  <h4 className="text-lg font-semibold text-gray-900 [overflow-wrap:anywhere]">
+                                    {closestBundle.name}
+                                  </h4>
+                                  <span className="text-lg font-bold tabular-nums text-gray-900">
+                                    {formatCurrency(closestBundle.total_value)}
+                                  </span>
+                                </div>
 
-                          <button
-                            type="button"
-                            disabled={bundleAdding || bundleSelectedCount === 0 || isSaving}
-                            onClick={() => void handleApplyPackage()}
-                            className={`mt-5 flex h-12 w-full items-center justify-center rounded-xl text-base font-bold transition md:h-14 ${
-                              bundleAddedFlash
-                                ? "bg-[#16A34A] text-white"
-                                : "bg-[#2563EB] text-white hover:bg-blue-700"
-                            } disabled:opacity-40`}
-                          >
-                            {bundleAdding ? "…" : bundleAddedFlash ? "✓ Applied" : "✓ Apply this package"}
-                          </button>
+                                <div className="mt-4 grid grid-cols-1 gap-6 md:grid-cols-2">
+                                  <div>
+                                    <p className="border-b border-gray-200 pb-2 text-xs font-bold uppercase tracking-wide text-[#6B7280]">
+                                      Upgrades existing
+                                    </p>
+                                    <ul className="mt-3 space-y-4">
+                                      {closestBundle.items.map((bi, i) => {
+                                        const existing = findExistingForBundleSlot(bi, items);
+                                        if (!existing) return null;
+                                        const delta = bi.unit_cost * existing.qty - existing.unit_cost * existing.qty;
+                                        return (
+                                          <li key={`bl-${i}`} className="flex gap-2 text-sm">
+                                            <input
+                                              type="checkbox"
+                                              className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
+                                              checked={!!bundleChecks[i]}
+                                              onChange={() =>
+                                                setBundleChecks((prev) => {
+                                                  const next = [...prev];
+                                                  next[i] = !next[i];
+                                                  return next;
+                                                })
+                                              }
+                                            />
+                                            <div className="min-w-0 flex-1">
+                                              <p className="text-[13px] text-gray-500 line-through [overflow-wrap:anywhere]">
+                                                {existing.brand ? `${existing.brand} ` : ""}
+                                                {existing.description}{" "}
+                                                <span className="tabular-nums font-semibold">
+                                                  {formatCurrency(existing.unit_cost * existing.qty)}
+                                                </span>
+                                              </p>
+                                              <p className="mt-1 font-medium text-gray-900 [overflow-wrap:anywhere]">
+                                                → {bi.brand ? `${bi.brand} ` : ""}
+                                                {bi.description}
+                                              </p>
+                                              <p className="mt-1 tabular-nums text-gray-900">
+                                                {formatCurrency(bi.unit_cost * existing.qty)}
+                                                {delta > 0 ? (
+                                                  <span className="ml-2 font-semibold text-[#16A34A]">
+                                                    (+{formatCurrency(delta)})
+                                                  </span>
+                                                ) : null}
+                                              </p>
+                                            </div>
+                                          </li>
+                                        );
+                                      })}
+                                    </ul>
+                                  </div>
+                                  <div>
+                                    <p className="border-b border-gray-200 pb-2 text-xs font-bold uppercase tracking-wide text-[#6B7280]">
+                                      Adds new
+                                    </p>
+                                    <ul className="mt-3 space-y-4">
+                                      {closestBundle.items.map((bi, i) => {
+                                        if (findExistingForBundleSlot(bi, items)) return null;
+                                        return (
+                                          <li key={`br-${i}`} className="flex gap-2 text-sm">
+                                            <input
+                                              type="checkbox"
+                                              className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
+                                              checked={!!bundleChecks[i]}
+                                              onChange={() =>
+                                                setBundleChecks((prev) => {
+                                                  const next = [...prev];
+                                                  next[i] = !next[i];
+                                                  return next;
+                                                })
+                                              }
+                                            />
+                                            <div className="min-w-0 flex-1">
+                                              <p className="font-medium text-gray-900 [overflow-wrap:anywhere]">
+                                                + {bi.brand ? `${bi.brand} ` : ""}
+                                                {bi.description}
+                                              </p>
+                                              <p className="mt-1 font-bold tabular-nums text-gray-900">
+                                                {formatCurrency(bi.total)}
+                                              </p>
+                                            </div>
+                                          </li>
+                                        );
+                                      })}
+                                    </ul>
+                                  </div>
+                                </div>
+
+                                <div className="mt-6 border-t border-gray-200 pt-4 text-sm text-gray-800">
+                                  <p>
+                                    Upgrades:{" "}
+                                    <span className="font-semibold text-[#16A34A]">
+                                      +{formatCurrency(Math.max(0, bundleUpgradeDeltaSelected))}
+                                    </span>
+                                  </p>
+                                  <p className="mt-1">
+                                    Additions:{" "}
+                                    <span className="font-semibold text-[#16A34A]">
+                                      +{formatCurrency(bundleAdditionsSelected)}
+                                    </span>
+                                  </p>
+                                  <p className="mt-2 text-base font-bold text-gray-900">
+                                    Selected:{" "}
+                                    <span className="tabular-nums">{formatCurrency(bundleSelectedTotal)}</span> total
+                                  </p>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  disabled={bundleAdding || bundleSelectedCount === 0 || isSaving}
+                                  onClick={() => void handleApplyPackage()}
+                                  className={`mt-5 flex h-12 w-full items-center justify-center rounded-xl text-base font-bold transition md:h-14 ${
+                                    bundleAddedFlash
+                                      ? "bg-[#16A34A] text-white"
+                                      : "bg-[#2563EB] text-white hover:bg-blue-700"
+                                  } disabled:opacity-40`}
+                                >
+                                  {bundleAdding ? "…" : bundleAddedFlash ? "✓ Applied" : "✓ Apply this package"}
+                                </button>
+                              </div>
+                            ) : (
+                              <p className="text-center text-sm text-[#6B7280]">Loading package…</p>
+                            )}
+                          </div>
                           <Link
                             href={`/review/bundles/${roomSlug}`}
-                            className="mt-4 inline-block text-sm font-semibold text-[#2563EB] hover:underline"
+                            className="mt-6 inline-block text-sm font-semibold text-[#2563EB] hover:underline"
                           >
                             Browse all bundles →
                           </Link>
                         </div>
-                      ) : (
-                        <p className="text-center text-sm text-[#6B7280]">Loading package…</p>
-                      )}
+                      ) : null}
                     </div>
                   )}
                 </div>
