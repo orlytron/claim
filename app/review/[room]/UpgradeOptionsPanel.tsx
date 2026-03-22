@@ -309,7 +309,6 @@ export function UpgradeOptionsPanel({
   isPanelOpen?: boolean;
   onClose?: () => void;
 }) {
-  const emptyNotifiedRef = useRef(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -364,10 +363,6 @@ export function UpgradeOptionsPanel({
   }, [item.description]);
 
   useEffect(() => {
-    emptyNotifiedRef.current = false;
-  }, [item.description, item.unit_cost, cacheHas]);
-
-  useEffect(() => {
     if (!cacheHas || locked) return;
     let cancelled = false;
     (async () => {
@@ -391,17 +386,6 @@ export function UpgradeOptionsPanel({
       cancelled = true;
     };
   }, [cacheHas, locked, fetchPayload, applyResponseJson]);
-
-  useEffect(() => {
-    if (!cacheHas || locked || loading || refreshing) return;
-    if (displayOptions.length > 0) {
-      emptyNotifiedRef.current = false;
-      return;
-    }
-    if (emptyNotifiedRef.current) return;
-    emptyNotifiedRef.current = true;
-    onCatalogEmpty?.();
-  }, [cacheHas, locked, loading, refreshing, displayOptions.length, onCatalogEmpty]);
 
   useEffect(() => {
     if (!isPanelOpen || !onClose) return;
@@ -502,7 +486,60 @@ export function UpgradeOptionsPanel({
   }
 
   if (!loading && !refreshing && displayOptions.length === 0) {
-    return null;
+    return (
+      <div ref={panelRef} className="relative space-y-4 pt-2" role="region" aria-label="Upgrade options">
+        <button
+          type="button"
+          onClick={() => onClose?.()}
+          className="absolute right-0 top-0 z-10 rounded-lg p-2 text-lg leading-none text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+          aria-label="Close upgrade panel"
+        >
+          ✕
+        </button>
+        <div className="pr-10">
+          <p className="text-center text-sm font-medium text-[#6B7280] md:text-left">
+            Finding alternatives…
+          </p>
+          <p className="mt-1 text-center text-xs text-[#6B7280] md:text-left">
+            No retail matches passed quality checks yet. Try refresh or enter a custom replacement below.
+          </p>
+          <div className="mt-4 flex justify-center md:justify-start">
+            <button
+              type="button"
+              disabled={refreshing || applying}
+              onClick={() => void handleRefresh()}
+              className="inline-flex min-h-[48px] shrink-0 items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-xs font-semibold text-[#6B7280] transition hover:border-[#2563EB] hover:text-[#2563EB] disabled:opacity-50"
+            >
+              {refreshing ? (
+                <>
+                  <SmallSpinner />
+                  Refreshing…
+                </>
+              ) : (
+                <>↻ Refresh search</>
+              )}
+            </button>
+          </div>
+        </div>
+        <NoCacheUpgradeForm
+          item={item}
+          message="Or add your own replacement:"
+          startOpen
+          onAddCustom={async (price, title, brand) => {
+            await onApply({
+              label: "Custom",
+              price,
+              title,
+              brand,
+              model: "",
+              retailer: "",
+              url: "",
+            });
+            onApplied?.();
+          }}
+        />
+      </div>
+    );
   }
 
   return (

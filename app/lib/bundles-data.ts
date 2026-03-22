@@ -9,6 +9,27 @@ export interface BundleItem {
   category: string;
 }
 
+/** Tiered focused-addition catalog lines (before .total is attached). */
+export type TierLineSource = {
+  description: string;
+  brand: string;
+  unit_cost: number;
+  qty: number;
+  category: string;
+};
+
+export type BundleTierBlock = {
+  total: number;
+  items?: TierLineSource[];
+  adds?: TierLineSource[];
+};
+
+export type BundleTiersDef = {
+  essential: BundleTierBlock;
+  complete: BundleTierBlock;
+  full: BundleTierBlock;
+};
+
 export interface Bundle {
   room: string;
   bundle_code: string;
@@ -17,8 +38,10 @@ export interface Bundle {
   tier: string;
   total_value: number;
   sweet_spot: boolean;
-  plausibility: "green" | "yellow" | "red" | "easy";
+  plausibility: "green" | "yellow" | "red" | "easy" | "medium";
   items: BundleItem[];
+  /** When set, room page uses FocusedAdditionCard (Essential / Complete / Full). */
+  tiers?: BundleTiersDef;
 }
 
 export const BUNDLES_DATA: Bundle[] = [

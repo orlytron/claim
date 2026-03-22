@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "../../lib/supabase";
 import { BUNDLES_DATA } from "../../lib/bundles-data";
+import { getClientRoomBundles } from "../../lib/bundles-client-catalog";
 import { formatCurrency } from "../../lib/utils";
 import { useClaimMode } from "../../lib/useClaimMode";
 
@@ -95,7 +96,10 @@ export default function DebugPage() {
               ["Session ID", sessionId],
               ["claim_items count", String(state.itemCount)],
               ["claim_items total", formatCurrency(state.itemTotal)],
-              ["BUNDLES_DATA count", `${BUNDLES_DATA.length} ${BUNDLES_DATA.length === 35 ? "✓" : "⚠️ expected 35"}`],
+              [
+                "BUNDLES_DATA (admin) / client additions",
+                `${BUNDLES_DATA.length} / ${getClientRoomBundles().length}`,
+              ],
               ["bundle_decisions count", String(state.bundleDecisionCount)],
               ["Room allocations distributed", formatCurrency(distributed)],
               ["Last updated", state.updatedAt ? new Date(state.updatedAt).toLocaleString() : "—"],

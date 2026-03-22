@@ -20,15 +20,7 @@ export async function POST(req: NextRequest) {
 
   if (bdErr) console.warn("bundle_decisions delete warning:", bdErr.message);
 
-  // 2. Delete all client suggestions
-  const { error: csErr } = await supabaseAdmin
-    .from("client_suggestions")
-    .delete()
-    .neq("id", "00000000-0000-0000-0000-000000000000");
-
-  if (csErr) console.warn("client_suggestions delete warning:", csErr.message);
-
-  // 3. Reset claim_session to original data
+  // 2. Reset claim_session to original data (upgrades_cache & client_suggestions unchanged)
   const { error: sessErr } = await supabaseAdmin
     .from("claim_session")
     .upsert(

@@ -7,6 +7,8 @@ export type UpgradeRewardDetail = {
   claimTotal: number;
   goalPctBefore: number;
   goalPctAfter: number;
+  /** e.g. "✓ Added $9,800 to Living Room" */
+  label?: string;
 };
 
 function formatCurrency(value: number): string {
@@ -37,7 +39,7 @@ export default function UpgradeRewardToast() {
       hideTimer = setTimeout(() => {
         setVisible(false);
         clearTimer = setTimeout(() => setPayload(null), 100);
-      }, 1000);
+      }, 1500);
     }
     window.addEventListener("claim-upgrade-reward", onReward as EventListener);
     return () => {
@@ -51,12 +53,12 @@ export default function UpgradeRewardToast() {
 
   return (
     <div
-      className={`fixed right-4 top-4 z-50 flex h-12 max-h-[48px] min-w-[140px] items-center rounded-lg border border-green-200 bg-white px-3 py-2 text-sm font-semibold text-[#16A34A] shadow-md transition-opacity duration-100 ease-out tabular-nums ${
-        visible ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-6 opacity-0"
+      className={`fixed left-1/2 top-4 z-50 flex min-h-12 max-w-[min(100vw-2rem,28rem)] -translate-x-1/2 items-center justify-center rounded-lg border border-green-200 bg-white px-4 py-3 text-center text-sm font-semibold text-[#16A34A] shadow-lg transition-opacity duration-200 ease-out tabular-nums ${
+        visible ? "opacity-100" : "pointer-events-none opacity-0"
       }`}
       role="status"
     >
-      ✓ +{formatCurrency(payload.delta)} added
+      {payload.label ?? `✓ +${formatCurrency(payload.delta)} added`}
     </div>
   );
 }

@@ -4,19 +4,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import AniGuide from "../../components/AniGuide";
+import FocusedAdditionCard from "../../components/FocusedAdditionCard";
+import SuggestionConfirmBanner from "../../components/SuggestionConfirmBanner";
 import SpeechBubble from "../../components/SpeechBubble";
 import { dispatchUpgradeReward } from "../../components/UpgradeRewardToast";
-import { BUNDLES_DATA, type Bundle, type BundleItem } from "../../lib/bundles-data";
+import { getClientRoomBundles } from "../../lib/bundles-client-catalog";
 import { CLAIM_GOAL_DEFAULT, DEFAULT_ROOM_TARGETS } from "../../lib/room-targets";
 import { readRoomGoal, writeRoomGoal } from "../../lib/room-goals";
 import { loadSession, saveSession, SessionData } from "../../lib/session";
 import { supabase } from "../../lib/supabase";
-import { getSingletonKey as bundleRoomSlotKey } from "../../lib/bundle-room-singleton-key";
-import {
-  computeItemAtSlider,
-  computeNotches,
-  type MiscLine,
-} from "../../lib/misc-items-slider";
+import { computeMiscSegments, miscLineTotal, type MiscLine } from "../../lib/misc-items-slider";
 import { displayAgeYears, ORIGINAL_CLAIM_ITEMS } from "../../lib/original-claim-data";
 import { ClaimItem } from "../../lib/types";
 import { useClaimMode } from "../../lib/useClaimMode";
@@ -24,19 +21,7 @@ import { generateItemId, slugify, formatCurrency } from "../../lib/utils";
 import { UpgradeOptionsPanel, type UpgradeOption } from "./UpgradeOptionsPanel";
 
 export type { UpgradeOption };
-import {
-  GAMING_COLLECTION_BUNDLE,
-  SUGGESTED_ADDITIONS,
-  suggestionAlreadyInClaim,
-  type GamingCollectionItem,
-  type SuggestedAdditionRow,
-} from "./suggested-additions";
-import { formatSuggestedUpgradePreview, SUGGESTED_UPGRADES } from "../../lib/suggested-upgrades";
-import {
-  applySuggestionRevert,
-  restoreRemovedOriginalLine,
-} from "../../lib/suggestion-revert-actions";
-import { SuggestionsBanner, type SuggestionRevertSpec } from "./SuggestionsBanner";
+import { SUGGESTED_UPGRADES } from "../../lib/suggested-upgrades";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -347,7 +332,7 @@ export default function RoomReviewPage() {
 
   useEffect(() => {
     if (!toast) return;
-    const t = window.setTimeout(() => setToast(null), 1000);
+    const t = window.setTimeout(() => setToast(null), 1500);
     return () => clearTimeout(t);
   }, [toast]);
   const [cachedDescs, setCachedDescs] = useState<Set<string>>(new Set());
@@ -356,25 +341,21 @@ export default function RoomReviewPage() {
   const [claimGoal, setClaimGoal] = useState(CLAIM_GOAL_DEFAULT);
   const [editTarget, setEditTarget] = useState(false);
   const [targetInput, setTargetInput] = useState("");
-  const [skippedSuggestions, setSkippedSuggestions] = useState<Set<string>>(new Set());
-  const [sliderSnapIndex, setSliderSnapIndex] = useState(0);
   const [openUpgradeKey, setOpenUpgradeKey] = useState<string | null>(null);
-  const [suggestExpand, setSuggestExpand] = useState(false);
-  const [miscSectionOpen, setMiscSectionOpen] = useState(false);
-  const [miscMultIndex, setMiscMultIndex] = useState(0);
-  const [bundleBudgetValue, setBundleBudgetValue] = useState(0);
-  const [bundleSectionOpen, setBundleSectionOpen] = useState(true);
-  const [bundleChecks, setBundleChecks] = useState<boolean[]>([]);
-  const [bundleAdding, setBundleAdding] = useState(false);
-  const [bundleAddedFlash, setBundleAddedFlash] = useState(false);
+  const [householdSectionOpen, setHouseholdSectionOpen] = useState(false);
+  const [householdPendingMult, setHouseholdPendingMult] = useState<number | null>(null);
+  const [householdCustomOpen, setHouseholdCustomOpen] = useState(false);
+  const [householdCustomMult, setHouseholdCustomMult] = useState(4);
+  const [requestText, setRequestText] = useState("");
+  const [requestStatus, setRequestStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [qtyFlashKey, setQtyFlashKey] = useState<string | null>(null);
   const [editingAgeKey, setEditingAgeKey] = useState<string | null>(null);
   const [ageDraft, setAgeDraft] = useState("");
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showSuggestionsBanner, setShowSuggestionsBanner] = useState(false);
-  const [gamingBundleOpen, setGamingBundleOpen] = useState(false);
-  const [affordableExpandedCode, setAffordableExpandedCode] = useState<string | null>(null);
-  const [affordableChecks, setAffordableChecks] = useState<boolean[]>([]);
+  /** User clicked “View initial suggestions” — show banner even if localStorage says dismissed. */
+  const [reopenSuggestions, setReopenSuggestions] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const undoHistoryRef = useRef<ClaimItem[][]>([]);
   const undoFutureRef = useRef<ClaimItem[][]>([]);
@@ -438,31 +419,16 @@ export default function RoomReviewPage() {
     setRedoAvail(false);
   }, [roomSlug]);
 
-  const roomBundlesAll = useMemo(
-    () => (roomName ? BUNDLES_DATA.filter((b) => b.room === roomName) : []),
+  const clientRoomBundles = useMemo(
+    () => (roomName ? getClientRoomBundles().filter((b) => b.room === roomName) : []),
     [roomName]
   );
-  const focusedBundles = useMemo(
-    () => roomBundlesAll.filter((b) => b.tier === "affordable"),
-    [roomBundlesAll]
-  );
-  const fullBundles = useMemo(
-    () => roomBundlesAll.filter((b) => b.tier !== "affordable"),
-    [roomBundlesAll]
-  );
-
-  const bundleBudgetRange = useMemo(() => {
-    const vals = fullBundles.map((b) => b.total_value);
-    if (vals.length === 0) return { min: 17_000, max: 285_000 };
-    return { min: Math.min(...vals), max: Math.max(...vals) };
-  }, [fullBundles]);
 
   useEffect(() => {
-    setBundleBudgetValue(bundleBudgetRange.min);
-    setMiscMultIndex(0);
-    setMiscSectionOpen(false);
-    setBundleSectionOpen(true);
-  }, [roomName, bundleBudgetRange.min, bundleBudgetRange.max]);
+    setHouseholdPendingMult(null);
+    setHouseholdCustomOpen(false);
+    setHouseholdSectionOpen(false);
+  }, [roomName]);
 
   useEffect(() => {
     setLockedKeys(readLocked());
@@ -471,9 +437,7 @@ export default function RoomReviewPage() {
   useEffect(() => {
     if (!roomSlug) return;
     const key = `suggestions_shown_${roomSlug}`;
-    console.log("Suggestions shown key:", key);
     const shown = typeof window !== "undefined" ? localStorage.getItem(key) : null;
-    console.log("Already shown:", shown);
     if (guided) {
       setShowSuggestionsBanner(false);
       return;
@@ -487,8 +451,8 @@ export default function RoomReviewPage() {
       setShowSuggestionsBanner(false);
       return;
     }
-    setShowSuggestionsBanner(shown !== "shown");
-  }, [roomSlug, roomName, guided]);
+    setShowSuggestionsBanner(shown == null || reopenSuggestions);
+  }, [roomSlug, roomName, guided, reopenSuggestions]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -497,8 +461,16 @@ export default function RoomReviewPage() {
 
   async function bootstrap() {
     setIsLoading(true);
+    setLoadError(null);
     setItems([]);
-    const sess = await loadSession(sessionId);
+    let sess: SessionData | null = null;
+    try {
+      sess = await loadSession(sessionId);
+    } catch {
+      setLoadError("We couldn’t load your claim. Check your connection and try again.");
+      setIsLoading(false);
+      return;
+    }
     setSession(sess);
     const claimItems = sess?.claim_items ?? [];
     if (!sess) {
@@ -554,33 +526,52 @@ export default function RoomReviewPage() {
     () => [...items].filter((i) => i.unit_cost < 500).sort((a, b) => b.unit_cost - a.unit_cost),
     [items]
   );
-  const miscLines: MiscLine[] = useMemo(
-    () => tier2Sorted.map((i) => ({ description: i.description, qty: i.qty, unit_cost: i.unit_cost })),
-    [tier2Sorted]
-  );
-  const miscNotches = useMemo(() => computeNotches(miscLines), [miscLines]);
-  const miscMultiplier = miscNotches[Math.min(miscMultIndex, Math.max(0, miscNotches.length - 1))] ?? 1;
-  const miscPreviewLines = useMemo(() => {
-    return tier2Sorted.map((item) => {
-      const next = computeItemAtSlider(item, miscMultiplier);
-      const before = item.qty * item.unit_cost;
-      const after = next.qty * next.unit_cost;
-      return { item, next, before, after, delta: after - before };
-    });
-  }, [tier2Sorted, miscMultiplier]);
   const miscOriginalTotal = useMemo(
     () => tier2Sorted.reduce((s, i) => s + i.qty * i.unit_cost, 0),
     [tier2Sorted]
   );
-  const miscPreviewTotal = useMemo(() => miscPreviewLines.reduce((s, l) => s + l.after, 0), [miscPreviewLines]);
-  const miscNotchTotals = useMemo(() => {
-    return miscNotches.map((m) =>
-      tier2Sorted.reduce((s, i) => {
-        const n = computeItemAtSlider(i, m);
-        return s + n.qty * n.unit_cost;
-      }, 0)
-    );
-  }, [tier2Sorted, miscNotches]);
+
+  const householdMultDelta = useCallback(
+    (m: number) =>
+      tier2Sorted.reduce((s, item) => {
+        const line: MiscLine = {
+          description: item.description,
+          qty: item.qty,
+          unit_cost: item.unit_cost,
+        };
+        return s + (miscLineTotal(computeMiscSegments(line, m)) - item.qty * item.unit_cost);
+      }, 0),
+    [tier2Sorted]
+  );
+
+  const householdButtonDeltas = useMemo(
+    () => ({
+      same: householdMultDelta(1),
+      x2: householdMultDelta(2),
+      x3: householdMultDelta(3),
+      custom: householdMultDelta(householdCustomMult),
+    }),
+    [householdMultDelta, householdCustomMult]
+  );
+
+  const householdPreviewLines = useMemo(() => {
+    if (householdPendingMult == null) return [];
+    const m = householdPendingMult;
+    return tier2Sorted.map((item) => {
+      const line: MiscLine = {
+        description: item.description,
+        qty: item.qty,
+        unit_cost: item.unit_cost,
+      };
+      const segs = computeMiscSegments(line, m);
+      const afterTotal = miscLineTotal(segs);
+      const before = item.qty * item.unit_cost;
+      return { item, segs, before, after: afterTotal, delta: afterTotal - before };
+    });
+  }, [tier2Sorted, householdPendingMult]);
+
+  const householdPreviewTotalDelta =
+    householdPendingMult == null ? 0 : householdMultDelta(householdPendingMult);
 
   const upgradeCandidates = useMemo(() => items.filter(isUpgradeCandidate), [items]);
 
@@ -588,13 +579,6 @@ export default function RoomReviewPage() {
     () => upgradeCandidates.reduce((s, i) => s + i.qty * i.unit_cost, 0),
     [upgradeCandidates]
   );
-
-  const missingSuggestions = useMemo(() => {
-    const list = SUGGESTED_ADDITIONS[roomName] ?? [];
-    return list.filter(
-      (s) => !suggestionAlreadyInClaim(items, s.label) && !skippedSuggestions.has(s.id)
-    );
-  }, [roomName, items, skippedSuggestions]);
 
   const roomTotal = useMemo(() => items.reduce((s, i) => s + i.qty * i.unit_cost, 0), [items]);
   /** Original claim lines only (excludes bundle/art adds); uses pre-upgrade unit when upgraded */
@@ -623,84 +607,6 @@ export default function RoomReviewPage() {
   );
 
   const roomSuggestionList = useMemo(() => SUGGESTED_UPGRADES[roomName] ?? [], [roomName]);
-  const suggestionPreviewLines = useMemo(
-    () => roomSuggestionList.slice(0, 4).map(formatSuggestedUpgradePreview),
-    [roomSuggestionList]
-  );
-  const suggestionMoreCount = Math.max(0, roomSuggestionList.length - suggestionPreviewLines.length);
-
-  const suggestionRevertSpecs = useMemo((): SuggestionRevertSpec[] => {
-    if (!session?.claim_items || !roomName) return [];
-    const claim = session.claim_items;
-    const out: SuggestionRevertSpec[] = [];
-    const splitKeys = new Set<string>();
-
-    for (const it of claim) {
-      if (it.room === roomName && it.suggestion_revert?.kind === "split_part") {
-        const k = [norm(it.description), norm(it.suggestion_revert.partner.description)].sort().join("|");
-        if (splitKeys.has(k)) continue;
-        splitKeys.add(k);
-        const orig = it.suggestion_revert.original.description;
-        out.push({
-          key: `split-${k}`,
-          kind: "item",
-          item: it,
-          label: `Split: ${orig} → ${it.description} + partner line`,
-        });
-      }
-    }
-
-    for (const it of claim) {
-      if (it.room !== roomName || !it.suggestion_revert || it.suggestion_revert.kind === "split_part") continue;
-      const r = it.suggestion_revert;
-      let label = it.description;
-      if (r.kind === "rename") label = `Renamed: ${r.prevDescription} → ${it.description}`;
-      else if (r.kind === "price") label = `Repriced: ${it.description}`;
-      else if (r.kind === "qty") label = `Qty update: ${it.description}`;
-      else if (r.kind === "move") label = `Moved here from ${r.prevRoom}: ${it.description}`;
-      else if (r.kind === "add") label = `Added: ${it.description}`;
-      out.push({
-        key: `line-${norm(it.description)}-${it.unit_cost}-${it.qty}-${out.length}`,
-        kind: "item",
-        item: it,
-        label,
-      });
-    }
-
-    for (const it of claim) {
-      if (it.suggestion_revert?.kind !== "move" || it.suggestion_revert.prevRoom !== roomName) continue;
-      out.push({
-        key: `moveout-${norm(it.description)}-${it.unit_cost}-${it.room}`,
-        kind: "item",
-        item: it,
-        label: `Moved out to ${it.room}: ${it.description}`,
-      });
-    }
-
-    for (const s of roomSuggestionList) {
-      if (s.type !== "REMOVE") continue;
-      const exists = claim.some((i) => i.room === roomName && norm(i.description) === norm(s.match_description));
-      if (!exists) {
-        out.push({
-          key: `restore-${norm(s.match_description)}`,
-          kind: "remove",
-          match_description: s.match_description,
-          label: `Removed: ${s.match_description}`,
-        });
-      }
-    }
-
-    return out;
-  }, [session?.claim_items, roomName, roomSuggestionList]);
-
-  const suggestionByCategory = useMemo(() => {
-    const m = new Map<string, SuggestedAdditionRow[]>();
-    for (const r of missingSuggestions) {
-      const cat = r.category || "Other";
-      m.set(cat, [...(m.get(cat) ?? []), r]);
-    }
-    return Array.from(m.entries()).sort((a, b) => b[1].length - a[1].length);
-  }, [missingSuggestions]);
 
   const progressPct = roomTarget > 0 ? Math.min(100, Math.round((roomTotal / roomTarget) * 100)) : 0;
   const gapRemaining = Math.max(0, roomTarget - roomTotal);
@@ -769,75 +675,6 @@ export default function RoomReviewPage() {
     await saveSession({ claim_items: nextClaim }, sessionId);
     setSession((prev) => (prev ? { ...prev, claim_items: nextClaim } : prev));
     setItems(nextClaim.filter((i) => i.room === roomName));
-  }
-
-  async function handleRevertSuggestionSpec(spec: SuggestionRevertSpec) {
-    if (!session?.claim_items) return;
-    setIsSaving(true);
-    try {
-      let next: ClaimItem[] | null = null;
-      if (spec.kind === "item") {
-        next = applySuggestionRevert(session.claim_items, spec.item);
-      } else {
-        next = restoreRemovedOriginalLine(session.claim_items, roomName, spec.match_description);
-      }
-      if (next) {
-        await saveFullClaim(next);
-        setToast("Reverted change");
-      }
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  function gamingLineInClaim(gi: GamingCollectionItem): boolean {
-    return items.some(
-      (i) =>
-        i.room === roomName &&
-        i.source === "bundle" &&
-        norm(i.description) === norm(gi.description) &&
-        Math.abs(i.unit_cost - gi.unit_cost) < 0.01 &&
-        i.qty === gi.qty
-    );
-  }
-
-  async function handleToggleGamingItem(gi: GamingCollectionItem) {
-    if (!session?.claim_items || roomName !== "Garage") return;
-    if (gamingLineInClaim(gi)) {
-      const nextRoom = items.filter(
-        (i) =>
-          !(
-            i.room === roomName &&
-            i.source === "bundle" &&
-            norm(i.description) === norm(gi.description) &&
-            Math.abs(i.unit_cost - gi.unit_cost) < 0.01 &&
-            i.qty === gi.qty
-          )
-      );
-      await saveRoomItems(nextRoom);
-      setToast("Removed from claim");
-      return;
-    }
-    const line: ClaimItem = {
-      room: "Garage",
-      description: gi.description,
-      brand: gi.brand ?? "",
-      model: "",
-      qty: gi.qty,
-      age_years: 0,
-      age_months: 0,
-      condition: "Average",
-      unit_cost: gi.unit_cost,
-      category: "Gaming",
-      source: "bundle",
-    };
-    const beforeClaim = session.claim_items;
-    const nextRoom = [...items, line];
-    const rest = beforeClaim.filter((i) => i.room !== roomName);
-    const afterClaim = [...rest, ...nextRoom];
-    await saveRoomItems(nextRoom);
-    fireUpgradeReward(beforeClaim, afterClaim, gi.unit_cost * gi.qty);
-    setToast("Added to claim");
   }
 
   async function undoRoom() {
@@ -918,7 +755,7 @@ export default function RoomReviewPage() {
     return { total: t, pct: g };
   }
 
-  function fireUpgradeReward(beforeItems: ClaimItem[], afterItems: ClaimItem[], lineDelta: number) {
+  function fireUpgradeReward(beforeItems: ClaimItem[], afterItems: ClaimItem[], lineDelta: number, label?: string) {
     const before = claimTotals(beforeItems);
     const after = claimTotals(afterItems);
     dispatchUpgradeReward({
@@ -926,12 +763,14 @@ export default function RoomReviewPage() {
       claimTotal: after.total,
       goalPctBefore: before.pct,
       goalPctAfter: after.pct,
+      label: label ?? `✓ Added ${formatCurrency(lineDelta)} to ${roomName}`,
     });
   }
 
   async function handleApplyUpgrade(item: ClaimItem, option: UpgradeOption) {
     if (!session?.claim_items || isItemLocked(item)) return;
     setIsSaving(true);
+    try {
     const beforeClaim = session.claim_items;
     const lineDelta = (option.price - item.unit_cost) * item.qty;
     const stableCode = `upgrade:${roomName}:${item.description}:${item.unit_cost}`.slice(0, 180);
@@ -1000,13 +839,16 @@ export default function RoomReviewPage() {
     } catch (e) {
       console.warn(e);
     }
-    setIsSaving(false);
     setToast(`Upgraded — ${option.title}`);
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function handleChangeUpgrade(item: ClaimItem, option: UpgradeOption) {
     if (!session?.claim_items || !item.pre_upgrade_item || isItemLocked(item)) return;
     setIsSaving(true);
+    try {
     const beforeClaim = session.claim_items;
     const lineDelta = (option.price - item.unit_cost) * item.qty;
     const orig = item.pre_upgrade_item;
@@ -1034,13 +876,16 @@ export default function RoomReviewPage() {
     const afterClaim = [...rest, ...nextItems];
     await saveRoomItems(nextItems);
     fireUpgradeReward(beforeClaim, afterClaim, lineDelta);
-    setIsSaving(false);
     setToast(`Changed upgrade — ${option.title}`);
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function handleRevert(item: ClaimItem) {
     if (!item.pre_upgrade_item || isItemLocked(item)) return;
     setIsSaving(true);
+    try {
     const prev = item.pre_upgrade_item;
     const nextItems = items.map((ci) => {
       if (ci.room === item.room && ci.description === item.description && ci.unit_cost === item.unit_cost) {
@@ -1061,72 +906,103 @@ export default function RoomReviewPage() {
       return ci;
     });
     await saveRoomItems(nextItems);
-    setIsSaving(false);
     setToast("Reverted to original line");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
-  async function handleAddSuggestion(row: SuggestedAdditionRow, tier: "mid" | "premium") {
-    if (!session?.claim_items) return;
-    const opt = tier === "mid" ? row.mid : row.premium;
-    const line: ClaimItem = {
-      room: roomName,
-      description: opt.title,
-      brand: opt.brand ?? "",
-      model: "",
-      qty: 1,
-      age_years: 0,
-      age_months: 0,
-      condition: "New",
-      unit_cost: opt.price,
-      category: row.category,
-      source: "bundle",
-      vendor_url: opt.url,
-    };
-    const beforeClaim = session.claim_items;
-    const nextRoom = [...items, line];
-    const rest = beforeClaim.filter((i) => i.room !== roomName);
-    const afterClaim = [...rest, ...nextRoom];
-    const lineDelta = opt.price;
-    await saveRoomItems(nextRoom);
-    fireUpgradeReward(beforeClaim, afterClaim, lineDelta);
-    setToast(`Added ${row.label}`);
-  }
-
-  const suggestionMidInClaim = useCallback(
-    (row: SuggestedAdditionRow) => {
-      const opt = row.mid;
-      return items.some(
-        (i) =>
-          i.room === roomName &&
-          i.source === "bundle" &&
-          norm(i.description) === norm(opt.title) &&
-          Math.abs(i.unit_cost - opt.price) < 0.01
-      );
-    },
-    [items, roomName]
-  );
-
-  async function handleRemoveSuggestionMid(row: SuggestedAdditionRow) {
+  async function handleApplySuggestionsFromBanner(nextClaim: ClaimItem[]) {
     if (!session?.claim_items) return;
     setIsSaving(true);
-    const opt = row.mid;
-    const nextRoomItems = items.filter(
-      (i) =>
-        !(
-          i.room === roomName &&
-          i.source === "bundle" &&
-          norm(i.description) === norm(opt.title) &&
-          Math.abs(i.unit_cost - opt.price) < 0.01
-        )
-    );
-    await saveRoomItems(nextRoomItems);
-    setIsSaving(false);
-    setToast(`Removed ${row.label}`);
+    try {
+      await saveSession({ claim_items: nextClaim }, sessionId);
+      setSession((prev) => (prev ? { ...prev, claim_items: nextClaim } : prev));
+      setItems(nextClaim.filter((i) => i.room === roomName));
+      if (typeof window !== "undefined" && roomSlug) {
+        localStorage.setItem(`suggestions_shown_${roomSlug}`, "shown");
+      }
+      setReopenSuggestions(false);
+      setShowSuggestionsBanner(false);
+      setToast("Applied selected suggestions");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
-  async function handleToggleSuggestionMid(row: SuggestedAdditionRow) {
-    if (suggestionMidInClaim(row)) await handleRemoveSuggestionMid(row);
-    else await handleAddSuggestion(row, "mid");
+  async function handleFocusedBundleAdd(lines: ClaimItem[]) {
+    if (!session?.claim_items || lines.length === 0) return;
+    const beforeClaim = session.claim_items;
+    pushUndoSnapshot();
+    const nextRoom = [...items, ...lines.map((l) => ({ ...l, room: roomName }))];
+    const rest = beforeClaim.filter((i) => i.room !== roomName);
+    const afterClaim = [...rest, ...nextRoom];
+    await persistRoomItemsSnapshot(nextRoom);
+    const delta = lines.reduce((s, l) => s + l.qty * l.unit_cost, 0);
+    fireUpgradeReward(beforeClaim, afterClaim, delta);
+    setToast(`Added ${lines.length} line(s)`);
+  }
+
+  async function applyHouseholdMultiplier(m: number) {
+    if (!session?.claim_items || tier2Sorted.length === 0) return;
+    pushUndoSnapshot();
+    const beforeClaim = session.claim_items;
+    const nextRoom: ClaimItem[] = [];
+    for (const ci of items) {
+      if (ci.unit_cost >= 500) {
+        nextRoom.push(ci);
+        continue;
+      }
+      const line: MiscLine = {
+        description: ci.description,
+        qty: ci.qty,
+        unit_cost: ci.unit_cost,
+      };
+      const segs = computeMiscSegments(line, m);
+      const [first, ...rest] = segs;
+      if (!first) {
+        nextRoom.push(ci);
+        continue;
+      }
+      nextRoom.push({
+        ...ci,
+        qty: first.qty,
+        unit_cost: first.unit_cost,
+      });
+      for (const seg of rest) {
+        nextRoom.push({
+          ...ci,
+          qty: seg.qty,
+          unit_cost: seg.unit_cost,
+        });
+      }
+    }
+    const afterClaim = [...beforeClaim.filter((i) => i.room !== roomName), ...nextRoom];
+    await persistRoomItemsSnapshot(nextRoom);
+    const bt = beforeClaim.reduce((s, i) => s + i.qty * i.unit_cost, 0);
+    const at = afterClaim.reduce((s, i) => s + i.qty * i.unit_cost, 0);
+    fireUpgradeReward(beforeClaim, afterClaim, at - bt);
+    setHouseholdPendingMult(null);
+    setToast("Household items updated");
+  }
+
+  async function sendSpecificItemRequest() {
+    if (!requestText.trim() || !roomName) return;
+    setRequestStatus("loading");
+    try {
+      const { error } = await supabase.from("client_suggestions").insert({
+        room: roomName,
+        message: requestText.trim(),
+        status: "pending",
+      });
+      if (error) setRequestStatus("error");
+      else {
+        setRequestStatus("success");
+        setRequestText("");
+      }
+    } catch {
+      setRequestStatus("error");
+    }
   }
 
   function saveTargetFromEdit() {
@@ -1138,248 +1014,6 @@ export default function RoomReviewPage() {
     setEditTarget(false);
   }
 
-  function applyRoomGoalFromSlider(v: number) {
-    const rounded = roundRoomGoalSlider(v);
-    setRoomTarget(rounded);
-    writeRoomGoal(sessionId, roomName, rounded);
-  }
-
-  const closestBundle = useMemo(() => {
-    if (!roomName || fullBundles.length === 0) return null;
-    const v =
-      bundleBudgetValue > 0 ? bundleBudgetValue : (bundleBudgetRange.min + bundleBudgetRange.max) / 2;
-    return fullBundles.reduce((best, b) =>
-      Math.abs(b.total_value - v) <= Math.abs(best.total_value - v) ? b : best
-    );
-  }, [roomName, fullBundles, bundleBudgetValue, bundleBudgetRange.min, bundleBudgetRange.max]);
-
-  useEffect(() => {
-    if (closestBundle) {
-      setBundleChecks(closestBundle.items.map(() => true));
-    } else {
-      setBundleChecks([]);
-    }
-    setBundleAddedFlash(false);
-    setAffordableExpandedCode(null);
-    setAffordableChecks([]);
-  }, [closestBundle?.bundle_code]);
-
-  const minBundleDisplay = bundleBudgetRange.min;
-  const maxBundleDisplay = bundleBudgetRange.max;
-
-  const bundleSelectedTotal = useMemo(() => {
-    if (!closestBundle) return 0;
-    return closestBundle.items.reduce((s, bi, i) => (bundleChecks[i] ? s + bi.total : s), 0);
-  }, [closestBundle, bundleChecks]);
-
-  const bundleSelectedCount = useMemo(() => {
-    if (!closestBundle) return 0;
-    return bundleChecks.filter(Boolean).length;
-  }, [closestBundle, bundleChecks]);
-
-  const bundleUpgradeDeltaSelected = useMemo(() => {
-    if (!closestBundle) return 0;
-    let d = 0;
-    closestBundle.items.forEach((bi, i) => {
-      if (!bundleChecks[i]) return;
-      const slot = bundleRoomSlotKey(bi.description);
-      if (slot == null) return;
-      const existing = items.find(
-        (c) => c.room === roomName && bundleRoomSlotKey(c.description) === slot
-      );
-      if (!existing) return;
-      const oldT = existing.qty * existing.unit_cost;
-      const newT = bi.unit_cost * existing.qty;
-      d += newT - oldT;
-    });
-    return d;
-  }, [closestBundle, bundleChecks, items, roomName]);
-
-  const bundleAdditionsSelected = useMemo(() => {
-    if (!closestBundle) return 0;
-    let d = 0;
-    closestBundle.items.forEach((bi, i) => {
-      if (!bundleChecks[i]) return;
-      const slot = bundleRoomSlotKey(bi.description);
-      const existing =
-        slot != null
-          ? items.find((c) => c.room === roomName && bundleRoomSlotKey(c.description) === slot)
-          : undefined;
-      if (existing) return;
-      d += bi.total;
-    });
-    return d;
-  }, [closestBundle, bundleChecks, items, roomName]);
-
-  function findExistingForBundleSlot(bi: BundleItem, roomItems: ClaimItem[]): ClaimItem | undefined {
-    const slot = bundleRoomSlotKey(bi.description);
-    if (slot == null) return undefined;
-    return roomItems.find((c) => c.room === roomName && bundleRoomSlotKey(c.description) === slot);
-  }
-
-  async function handleApplyBundle(bundle: Bundle, checks: boolean[], opts?: { closeSection?: boolean }) {
-    if (!session?.claim_items) return;
-    const selectedIndices = bundle.items.map((_, i) => i).filter((i) => checks[i]);
-    if (selectedIndices.length === 0) return;
-    setBundleAdding(true);
-    try {
-      const beforeClaim = session.claim_items;
-      pushUndoSnapshot();
-      let nextRoom = items.map((i) => ({ ...i }));
-      let packageExtra = 0;
-
-      for (const i of selectedIndices) {
-        const bi = bundle.items[i]!;
-        const existing = findExistingForBundleSlot(bi, nextRoom);
-        if (existing) {
-          const oldLine = existing.qty * existing.unit_cost;
-          const newLine = bi.unit_cost * existing.qty;
-          packageExtra += newLine - oldLine;
-          const snap: ClaimItem["pre_upgrade_item"] = existing.pre_upgrade_item ?? {
-            description: existing.description,
-            brand: existing.brand,
-            model: existing.model,
-            unit_cost: existing.unit_cost,
-            category: existing.category,
-            source: existing.source ?? "original",
-          };
-          nextRoom = nextRoom.map((c) =>
-            sameClaimLine(c, existing)
-              ? {
-                  ...c,
-                  description: bi.description,
-                  brand: bi.brand || c.brand,
-                  model: c.model,
-                  unit_cost: bi.unit_cost,
-                  previous_unit_cost: existing.unit_cost,
-                  pre_upgrade_item: snap,
-                  source: "upgrade" as const,
-                  age_years: 0,
-                  age_months: 0,
-                  condition: "New" as const,
-                }
-              : c
-          );
-        } else {
-          packageExtra += bi.total;
-          nextRoom.push({
-            room: roomName,
-            description: bi.description,
-            brand: bi.brand || "",
-            model: "",
-            qty: bi.qty,
-            age_years: 0,
-            age_months: 0,
-            condition: "New",
-            unit_cost: bi.unit_cost,
-            category: bi.category,
-            source: "bundle",
-          });
-        }
-      }
-
-      const afterClaim = [...beforeClaim.filter((i) => i.room !== roomName), ...nextRoom];
-      await persistRoomItemsSnapshot(nextRoom);
-      fireUpgradeReward(beforeClaim, afterClaim, packageExtra);
-
-      const selectedItems = selectedIndices.map((i) => bundle.items[i]!);
-      const { error: accErr } = await supabase.from("bundle_decisions").upsert(
-        {
-          bundle_code: bundle.bundle_code,
-          room: bundle.room,
-          bundle_name: bundle.name,
-          action: "applied",
-          items: selectedItems as BundleItem[],
-          total_value: selectedItems.reduce((s, bi) => s + bi.total, 0),
-          note: null,
-        },
-        { onConflict: "bundle_code" }
-      );
-      if (accErr) console.warn("bundle_decisions applied blocked:", accErr.message);
-
-      setToast(`Package applied · +${formatCurrency(packageExtra)}`);
-      setBundleAddedFlash(true);
-      window.setTimeout(() => setBundleAddedFlash(false), 1200);
-      if (opts?.closeSection) setBundleSectionOpen(false);
-    } finally {
-      setBundleAdding(false);
-    }
-  }
-
-  function handleApplyPackage() {
-    if (!closestBundle) return;
-    void handleApplyBundle(closestBundle, bundleChecks, { closeSection: true });
-  }
-
-  function expandAffordableBundle(b: Bundle) {
-    setAffordableExpandedCode(b.bundle_code);
-    setAffordableChecks(b.items.map(() => true));
-  }
-
-  const affordableActiveBundle = useMemo(
-    () =>
-      affordableExpandedCode == null
-        ? null
-        : (focusedBundles.find((b) => b.bundle_code === affordableExpandedCode) ?? null),
-    [affordableExpandedCode, focusedBundles]
-  );
-
-  const affordableSelectedTotal = useMemo(() => {
-    if (!affordableActiveBundle) return 0;
-    return affordableActiveBundle.items.reduce((s, bi, i) => (affordableChecks[i] ? s + bi.total : s), 0);
-  }, [affordableActiveBundle, affordableChecks]);
-
-  const affordableBundleSelectedCount = useMemo(
-    () => affordableChecks.filter(Boolean).length,
-    [affordableChecks]
-  );
-
-  const affordableUpgradeDeltaSelected = useMemo(() => {
-    if (!affordableActiveBundle) return 0;
-    let d = 0;
-    affordableActiveBundle.items.forEach((bi, i) => {
-      if (!affordableChecks[i]) return;
-      const slot = bundleRoomSlotKey(bi.description);
-      if (slot == null) return;
-      const existing = items.find(
-        (c) => c.room === roomName && bundleRoomSlotKey(c.description) === slot
-      );
-      if (!existing) return;
-      d += bi.unit_cost * existing.qty - existing.unit_cost * existing.qty;
-    });
-    return d;
-  }, [affordableActiveBundle, affordableChecks, items, roomName]);
-
-  const affordableAdditionsSelected = useMemo(() => {
-    if (!affordableActiveBundle) return 0;
-    let d = 0;
-    affordableActiveBundle.items.forEach((bi, i) => {
-      if (!affordableChecks[i]) return;
-      const slot = bundleRoomSlotKey(bi.description);
-      const existing =
-        slot != null
-          ? items.find((c) => c.room === roomName && bundleRoomSlotKey(c.description) === slot)
-          : undefined;
-      if (existing) return;
-      d += bi.total;
-    });
-    return d;
-  }, [affordableActiveBundle, affordableChecks, items, roomName]);
-
-  async function applyMiscSliderToAll() {
-    if (!session?.claim_items || tier2Sorted.length === 0) return;
-    const m = miscMultiplier;
-    pushUndoSnapshot();
-    const nextRoom = items.map((ci) => {
-      const hit = tier2Sorted.find((t) => sameClaimLine(t, ci));
-      if (!hit) return ci;
-      const n = computeItemAtSlider(hit, m);
-      return { ...ci, qty: n.qty, unit_cost: n.unit_cost };
-    });
-    await persistRoomItemsSnapshot(nextRoom);
-    setToast("Misc items updated");
-  }
-
   if (!hydrated) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-3 text-gray-500 text-base">
@@ -1389,42 +1023,61 @@ export default function RoomReviewPage() {
     );
   }
 
-  const showRoomChrome =
-    !!roomName && !isLoading && (items.length > 0 || missingSuggestions.length > 0);
-  const visibleSuggestionCategories = suggestExpand ? suggestionByCategory : suggestionByCategory.slice(0, 3);
-  const hasMoreSuggestionCategories = suggestionByCategory.length > 3;
+  const showRoomChrome = !!roomName && !isLoading;
 
   const showSuggestionsBannerVisible =
     !guided &&
     showSuggestionsBanner &&
     !!roomName &&
     !isLoading &&
-    roomSuggestionList.length > 0;
+    roomSuggestionList.length > 0 &&
+    !!session?.claim_items;
 
   return (
     <div className="flex min-h-screen flex-col bg-white pb-24 md:pb-20">
-      {showSuggestionsBannerVisible ? (
-        <SuggestionsBanner
+      {showSuggestionsBannerVisible && session ? (
+        <SuggestionConfirmBanner
           roomSlug={roomSlug}
-          roomSuggestionList={roomSuggestionList}
-          suggestionPreviewLines={suggestionPreviewLines}
-          suggestionMoreCount={suggestionMoreCount}
-          suggestionRevertSpecs={suggestionRevertSpecs}
-          isSaving={isSaving}
-          onDismiss={() => {
+          roomName={roomName}
+          claimItems={session.claim_items ?? []}
+          list={roomSuggestionList}
+          onApply={handleApplySuggestionsFromBanner}
+          onSkip={() => {
+            setReopenSuggestions(false);
             if (typeof window !== "undefined" && roomSlug) {
               localStorage.setItem(`suggestions_shown_${roomSlug}`, "shown");
             }
             setShowSuggestionsBanner(false);
           }}
-          onRevert={handleRevertSuggestionSpec}
+          disabled={isSaving}
         />
       ) : null}
-      {isLoading ? (
-        <div className="flex flex-1 items-center justify-center py-24">
-          <SmallSpinner />
+      {loadError ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
+          <p className="max-w-md text-base text-red-700">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => void bootstrap()}
+            className="min-h-[48px] rounded-xl bg-[#2563EB] px-6 text-sm font-bold text-white hover:bg-blue-700"
+          >
+            Retry
+          </button>
+          <Link href="/review" className="text-sm text-[#2563EB] underline">
+            ← Dashboard
+          </Link>
         </div>
-      ) : !roomName || (!items.length && !missingSuggestions.length) ? (
+      ) : isLoading ? (
+        <div className="mx-auto w-full max-w-[1100px] flex-1 animate-pulse px-4 py-8 md:px-8">
+          <div className="h-4 w-32 rounded bg-gray-200" />
+          <div className="mt-6 h-10 w-2/3 max-w-md rounded bg-gray-200" />
+          <div className="mt-4 h-4 w-full max-w-xl rounded bg-gray-100" />
+          <div className="mt-8 space-y-3 rounded-2xl border border-gray-100 p-4">
+            <div className="h-24 rounded-lg bg-gray-100" />
+            <div className="h-24 rounded-lg bg-gray-100" />
+            <div className="h-24 rounded-lg bg-gray-100" />
+          </div>
+        </div>
+      ) : !roomName || (!items.length && roomSuggestionList.length === 0) ? (
         <div className="flex flex-1 flex-col items-center justify-center p-8 text-center text-base text-[#6B7280]">
           No items for this room.
           <Link href="/review" className="mt-4 font-medium text-[#2563EB] hover:underline">
@@ -1434,65 +1087,96 @@ export default function RoomReviewPage() {
       ) : (
         <>
           <header className="w-full bg-white">
-            <div className="mx-auto w-full max-w-[1100px] px-8 py-6 transition-all duration-300">
+            <div className="mx-auto w-full max-w-[1100px] px-4 py-6 transition-all duration-300 md:px-8">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <Link href="/review" className="text-sm font-medium text-[#2563EB] transition-colors hover:underline md:text-base">
-                  ← All Rooms
-                </Link>
-                <div className="flex items-center gap-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-[#6B7280]">
+                  <Link href="/review" className="font-medium text-[#2563EB] hover:underline">
+                    Home
+                  </Link>
+                  <span aria-hidden className="text-gray-300">
+                    ›
+                  </span>
+                  <span className="truncate font-semibold text-gray-900">{roomName}</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
                   {isSaving && <SmallSpinner />}
+                  {prevRoom ? (
+                    <Link
+                      href={`/review/${slugify(prevRoom)}${guided ? "?guided=true" : ""}`}
+                      className="min-h-[48px] inline-flex items-center rounded-lg px-2 text-sm font-medium text-[#2563EB] hover:underline md:text-base"
+                    >
+                      ← Prev
+                    </Link>
+                  ) : (
+                    <Link
+                      href="/review"
+                      className="min-h-[48px] inline-flex items-center rounded-lg px-2 text-sm font-medium text-[#2563EB] hover:underline md:text-base"
+                    >
+                      ← Prev
+                    </Link>
+                  )}
                   {nextRoom ? (
                     <Link
                       href={`/review/${slugify(nextRoom)}${guided ? "?guided=true" : ""}`}
-                      className="text-sm font-medium text-[#2563EB] transition-colors hover:underline md:text-base"
+                      className="min-h-[48px] inline-flex items-center rounded-lg px-2 text-sm font-medium text-[#2563EB] hover:underline md:text-base"
                     >
-                      Next Room →
+                      Next →
                     </Link>
                   ) : null}
                 </div>
               </div>
 
-              <h1 className="mt-6 text-2xl font-bold tracking-tight text-gray-900 md:text-3xl">{roomName}</h1>
+              <h1 className="mt-5 text-2xl font-bold tracking-tight text-gray-900 md:text-3xl">{roomName}</h1>
               <div className="mt-3 h-px w-full bg-gray-200" />
 
-              <dl className="mt-6 grid gap-3 text-sm md:grid-cols-2 md:gap-x-8 md:gap-y-2 md:text-base">
-                <div className="flex justify-between gap-4 border-b border-gray-100 pb-2 md:border-0 md:pb-0">
-                  <dt className="text-[#6B7280]">Original value</dt>
-                  <dd className="font-medium tabular-nums text-gray-900">{formatCurrency(originalRoomValue)}</dd>
-                </div>
-                <div className="flex justify-between gap-4 border-b border-gray-100 pb-2 md:border-0 md:pb-0">
-                  <dt className="text-[#6B7280]">Current total</dt>
-                  <dd className="font-medium tabular-nums text-gray-900">{formatCurrency(roomTotal)}</dd>
-                </div>
-                <div className="flex justify-between gap-4 border-b border-gray-100 pb-2 md:border-0 md:pb-0">
-                  <dt className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[#6B7280]">
-                    Room goal
+              <p className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-2 text-sm text-[#6B7280] md:text-base">
+                <span>
+                  Original <span className="font-semibold tabular-nums text-gray-900">{formatCurrency(originalRoomValue)}</span>
+                </span>
+                <span className="text-gray-300">·</span>
+                <span>
+                  Current <span className="font-semibold tabular-nums text-gray-900">{formatCurrency(roomTotal)}</span>
+                </span>
+                <span className="text-gray-300">·</span>
+                <span className="inline-flex flex-wrap items-center gap-1">
+                  Target{" "}
+                  <span className="font-semibold tabular-nums text-gray-900">{formatCurrency(roomTarget)}</span>
+                  <button
+                    type="button"
+                    className="text-base leading-none"
+                    onClick={() => {
+                      setTargetInput(String(roomTarget));
+                      setEditTarget(true);
+                    }}
+                    aria-label="Edit room goal"
+                  >
+                    ✏️
+                  </button>
+                </span>
+                <span className="text-gray-300">·</span>
+                <span>
+                  Gap <span className="font-semibold tabular-nums text-gray-900">{formatCurrency(gapRemaining)}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowResetConfirm(true)}
+                  className="ml-1 text-xs font-medium text-[#2563EB] underline-offset-2 hover:underline"
+                >
+                  Reset room
+                </button>
+                {roomSuggestionList.length > 0 && !guided ? (
+                  <>
+                    <span className="text-gray-300">·</span>
                     <button
                       type="button"
-                      className="text-base leading-none"
-                      onClick={() => {
-                        setTargetInput(String(roomTarget));
-                        setEditTarget(true);
-                      }}
-                      aria-label="Edit room goal"
+                      onClick={() => setReopenSuggestions(true)}
+                      className="text-xs font-semibold text-amber-800 underline-offset-2 hover:underline"
                     >
-                      ✏️
+                      View initial suggestions
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowResetConfirm(true)}
-                      className="text-xs font-medium text-[#2563EB] underline-offset-2 hover:underline"
-                    >
-                      Reset room to original
-                    </button>
-                  </dt>
-                  <dd className="font-medium tabular-nums text-gray-900">{formatCurrency(roomTarget)}</dd>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <dt className="text-[#6B7280]">Gap remaining</dt>
-                  <dd className="font-semibold tabular-nums text-gray-900">{formatCurrency(gapRemaining)}</dd>
-                </div>
-              </dl>
+                  </>
+                ) : null}
+              </p>
 
               {editTarget && (
                 <div className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl border border-gray-200 bg-gray-50/80 p-4 shadow-sm">
@@ -1530,40 +1214,22 @@ export default function RoomReviewPage() {
                 </p>
               </div>
 
-              <div className="mt-8">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm text-[#6B7280]">
-                  <span>
-                    Room target: <span className="font-semibold text-gray-900">{formatCurrency(roomTarget)}</span>
-                  </span>
-                  <span className="tabular-nums">
-                    {formatCurrency(0)} — {formatCurrency(ROOM_GOAL_SLIDER_MAX)}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={ROOM_GOAL_SLIDER_MAX}
-                  step={ROOM_GOAL_SLIDER_STEP}
-                  value={Math.min(ROOM_GOAL_SLIDER_MAX, roomTarget)}
-                  onChange={(e) => applyRoomGoalFromSlider(Number(e.target.value))}
-                  className="h-2 w-full accent-[#2563EB]"
-                  aria-label="Room goal"
-                />
-              </div>
             </div>
           </header>
 
           <main className="mx-auto w-full max-w-[1100px] flex-1 px-8 py-6">
             <section className="rounded-2xl border border-gray-100 bg-white shadow-sm transition-all duration-300">
               <div className="border-b border-gray-100 px-5 py-5 md:px-6">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">Your room inventory</h2>
+                <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">
+                  Upgrade existing items
+                </h2>
                 <p className="mt-1 text-sm text-[#6B7280]">
-                  All claim lines for this room. Use Upgrade on eligible items to see replacement options.
+                  Items $500+ with cached upgrade options. Use Upgrade to see replacements.
                 </p>
               </div>
 
-              {tier1Sorted.length === 0 && tier2Sorted.length === 0 ? (
-                <p className="px-5 py-8 text-sm text-[#6B7280] md:px-6">No items in this room.</p>
+              {tier1Sorted.length === 0 ? (
+                <p className="px-5 py-8 text-sm text-[#6B7280] md:px-6">No major items ($500+) in this room.</p>
               ) : (
                 <div>
                   {tier1Sorted.map((item, idx) => {
@@ -1811,8 +1477,9 @@ export default function RoomReviewPage() {
                                     type="button"
                                     disabled={locked || isSaving}
                                     onClick={() => setOpenUpgradeKey(null)}
-                                    className="inline-flex h-10 items-center justify-center rounded-lg border-2 border-gray-400 bg-white px-3 text-sm font-semibold text-gray-700 transition-all duration-200 hover:bg-gray-50 disabled:opacity-40"
+                                    className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-lg border-2 border-gray-400 bg-white px-3 text-sm font-semibold text-gray-700 transition-all duration-200 hover:bg-gray-50 disabled:opacity-40"
                                   >
+                                    {isSaving ? <SmallSpinner /> : null}
                                     ✕ Close
                                   </button>
                                 ) : (
@@ -1820,7 +1487,7 @@ export default function RoomReviewPage() {
                                     type="button"
                                     disabled={locked || isSaving}
                                     onClick={() => setOpenUpgradeKey(rowKey)}
-                                    className="inline-flex h-10 items-center justify-center gap-1 rounded-lg border-2 border-[#2563EB] bg-white px-3 text-sm font-semibold text-[#2563EB] transition-all duration-200 hover:bg-blue-50 disabled:opacity-40"
+                                    className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-lg border-2 border-[#2563EB] bg-white px-3 text-sm font-semibold text-[#2563EB] transition-all duration-200 hover:bg-blue-50 disabled:opacity-40"
                                   >
                                     <span aria-hidden>↑</span> Upgrade
                                   </button>
@@ -1851,7 +1518,6 @@ export default function RoomReviewPage() {
                                 }}
                                 onApplied={() => setOpenUpgradeKey(null)}
                                 onRefreshNotice={(msg) => setToast(msg)}
-                                onCatalogEmpty={() => setOpenUpgradeKey(null)}
                               />
                             </div>
                           </div>
@@ -1860,620 +1526,277 @@ export default function RoomReviewPage() {
                     );
                   })}
 
-                  {tier2Sorted.length > 0 ? (
-                    <div className="border-t-2 border-gray-200 bg-gray-50/50">
-                      <button
-                        type="button"
-                        onClick={() => setMiscSectionOpen((o) => !o)}
-                        className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left md:px-6"
-                      >
-                        <span className="text-xs font-bold uppercase tracking-wider text-gray-900">
-                          MISCELLANEOUS ITEMS ({tier2Sorted.length} items · {formatCurrency(miscOriginalTotal)}){" "}
-                          <span className="tabular-nums">{miscSectionOpen ? "▼" : "▶"}</span>
-                        </span>
-                      </button>
-                      {miscSectionOpen ? (
-                        <div className="space-y-6 border-t border-gray-200 px-4 pb-6 pt-4 md:px-6">
-                          <div>
-                            <p className="text-sm font-semibold text-gray-800">Adjust all items</p>
-                            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-[#6B7280]">
-                              <span>1.0x</span>
-                              <span className="font-semibold text-gray-900">{miscMultiplier.toFixed(2)}x</span>
-                              <span>3.0x</span>
-                            </div>
-                            <input
-                              type="range"
-                              min={0}
-                              max={Math.max(0, miscNotches.length - 1)}
-                              step={1}
-                              value={Math.min(miscMultIndex, Math.max(0, miscNotches.length - 1))}
-                              onChange={(e) => setMiscMultIndex(Number(e.target.value))}
-                              className="mt-1 h-2 w-full accent-[#2563EB]"
-                              aria-label="Adjust miscellaneous items"
-                            />
-                            <div className="mt-2 flex justify-between text-[11px] tabular-nums text-[#6B7280]">
-                              {miscNotchTotals.length > 0 ? (
-                                <>
-                                  <span>{formatCurrency(miscNotchTotals[0] ?? 0)}</span>
-                                  {miscNotchTotals.length > 3 ? (
-                                    <span>{formatCurrency(miscNotchTotals[Math.floor(miscNotchTotals.length / 2)] ?? 0)}</span>
-                                  ) : null}
-                                  {miscNotchTotals.length > 1 ? (
-                                    <span>{formatCurrency(miscNotchTotals[miscNotchTotals.length - 1] ?? 0)} max</span>
-                                  ) : null}
-                                </>
-                              ) : null}
-                            </div>
-                          </div>
-                          <div className="rounded-xl border border-gray-200 bg-white p-4 text-sm">
-                            <p className="tabular-nums text-gray-900">
-                              {formatCurrency(miscOriginalTotal)} → {formatCurrency(miscPreviewTotal)}
-                              {miscPreviewTotal - miscOriginalTotal !== 0 ? (
-                                <span className="ml-2 font-semibold text-[#16A34A]">
-                                  (+{formatCurrency(miscPreviewTotal - miscOriginalTotal)})
-                                </span>
-                              ) : null}
-                            </p>
-                            {miscPreviewLines.some(
-                              (l) =>
-                                l.item.qty !== l.next.qty ||
-                                Math.abs(l.item.unit_cost - l.next.unit_cost) > 0.01
-                            ) ? (
-                              <ul className="mt-3 space-y-2 text-[13px] text-[#6B7280]">
-                                {miscPreviewLines
-                                  .filter(
-                                    (l) =>
-                                      l.item.qty !== l.next.qty ||
-                                      Math.abs(l.item.unit_cost - l.next.unit_cost) > 0.01
-                                  )
-                                  .slice(0, 12)
-                                  .map((l, j) => (
-                                    <li key={`${l.item.description}-${j}`} className="[overflow-wrap:anywhere]">
-                                      <span className="font-medium text-gray-800">{l.item.description}</span> ×{l.item.qty}{" "}
-                                      {formatCurrency(l.item.unit_cost)} → ×{l.next.qty}{" "}
-                                      {formatCurrency(l.next.unit_cost)} (+{formatCurrency(l.delta)})
-                                    </li>
-                                  ))}
-                              </ul>
-                            ) : (
-                              <p className="mt-2 text-[13px] text-[#6B7280]">No changes at this level.</p>
-                            )}
-                            <button
-                              type="button"
-                              disabled={isSaving || tier2Sorted.length === 0}
-                              onClick={() => void applyMiscSliderToAll()}
-                              className="mt-4 w-full rounded-lg bg-[#2563EB] py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-                            >
-                              Apply to All
-                            </button>
-                          </div>
-                          <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
-                            {tier2Sorted.map((item, idx) => (
-                              <li
-                                key={`misc-${generateItemId(item)}-${idx}`}
-                                className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-sm"
-                              >
-                                <span className="min-w-0 flex-1 font-medium text-gray-900 [overflow-wrap:anywhere]">
-                                  {item.description}
-                                </span>
-                                <span className="shrink-0 tabular-nums text-[#6B7280]">
-                                  {formatCurrency(item.unit_cost)} × {item.qty} ={" "}
-                                  {formatCurrency(item.unit_cost * item.qty)}
-                                </span>
-                                <button
-                                  type="button"
-                                  disabled={isSaving}
-                                  onClick={() => void handleRemoveItemRow(item)}
-                                  className="shrink-0 rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-600 hover:border-red-400 hover:text-red-600 disabled:opacity-40"
-                                  aria-label="Remove line"
-                                >
-                                  ✕
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
                 </div>
               )}
             </section>
 
             <section className="mt-12">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">Add missing items</h2>
+              <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">
+                Add items to {roomName}
+              </h2>
               <p className="mt-1 text-sm text-[#6B7280]">
-                Items typically found in this room that aren&apos;t in your original claim
+                Focused addition sets — pick Essential, Complete, or Full, then add checked lines to your claim.
               </p>
 
-              <div className="mt-8">
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-800">Common additions</h3>
-                  {missingSuggestions.length === 0 ? (
-                    <p className="mt-4 text-sm text-[#6B7280]">No suggestions for this room.</p>
-                  ) : (
-                    <div className="mt-4 space-y-8">
-                      {visibleSuggestionCategories.map(([cat, rows]) => (
-                        <div key={cat}>
-                          <p className="text-xs font-bold uppercase tracking-wide text-[#6B7280]">{cat}</p>
-                          <ul className="mt-2 divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white shadow-sm">
-                            {rows.map((row) => {
-                              const added = suggestionMidInClaim(row);
-                              const opt = row.mid;
-                              return (
-                                <li
-                                  key={row.id}
-                                  className="flex min-h-[48px] flex-wrap items-center gap-2 px-4 py-2.5"
-                                >
-                                  <span className="min-w-0 flex-1 text-[15px] font-medium text-gray-900 [overflow-wrap:anywhere]">
-                                    {opt.title}
-                                  </span>
-                                  <span className="shrink-0 text-sm text-[#6B7280]">{opt.brand ?? "—"}</span>
-                                  <span className="shrink-0 text-[15px] font-bold tabular-nums text-gray-900">
-                                    {formatCurrency(opt.price)}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    disabled={isSaving}
-                                    onClick={() => void handleToggleSuggestionMid(row)}
-                                    className={`shrink-0 rounded-lg px-3 py-1 text-sm font-bold transition disabled:opacity-40 ${
-                                      added
-                                        ? "bg-[#16A34A] text-white"
-                                        : "border-2 border-[#2563EB] bg-white text-[#2563EB] hover:bg-blue-50"
-                                    }`}
-                                    aria-label={added ? "Added" : "Add to claim"}
-                                  >
-                                    {added ? "✓ Added" : "+"}
-                                  </button>
-                                </li>
-                              );
-                            })}
-                          </ul>
-                        </div>
-                      ))}
-                      {hasMoreSuggestionCategories ? (
-                        <button
-                          type="button"
-                          onClick={() => setSuggestExpand((e) => !e)}
-                          className="text-sm font-semibold text-[#2563EB] hover:underline"
-                        >
-                          {suggestExpand ? "Show fewer ▲" : "Show more ▼"}
-                        </button>
-                      ) : null}
-                      {roomName === "Garage" ? (
-                        <div className="mt-10">
-                          <button
-                            type="button"
-                            onClick={() => setGamingBundleOpen((o) => !o)}
-                            className="flex w-full items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 text-left shadow-sm"
-                          >
-                            <div>
-                              <p className="text-xs font-bold uppercase tracking-wide text-[#6B7280]">
-                                {GAMING_COLLECTION_BUNDLE.category}
-                              </p>
-                              <p className="mt-1 text-base font-semibold text-gray-900">{GAMING_COLLECTION_BUNDLE.title}</p>
-                              <p className="mt-1 text-sm text-[#6B7280]">{GAMING_COLLECTION_BUNDLE.description}</p>
-                            </div>
-                            <span className="shrink-0 text-gray-400">{gamingBundleOpen ? "▼" : "▶"}</span>
-                          </button>
-                          {gamingBundleOpen ? (
-                            <ul className="mt-3 divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white shadow-sm">
-                              {GAMING_COLLECTION_BUNDLE.items.map((gi, idx) => {
-                                const added = gamingLineInClaim(gi);
-                                return (
-                                  <li
-                                    key={`${gi.description}-${idx}`}
-                                    className="flex min-h-[48px] flex-wrap items-center gap-2 px-4 py-2.5"
-                                  >
-                                    <input
-                                      type="checkbox"
-                                      className="h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
-                                      checked={added}
-                                      disabled={isSaving}
-                                      onChange={() => void handleToggleGamingItem(gi)}
-                                      aria-label={added ? `Remove ${gi.description}` : `Add ${gi.description}`}
-                                    />
-                                    <span className="min-w-0 flex-1 text-[15px] font-medium text-gray-900 [overflow-wrap:anywhere]">
-                                      {gi.description}
-                                    </span>
-                                    <span className="shrink-0 text-sm text-[#6B7280]">{gi.brand || "—"}</span>
-                                    <span className="shrink-0 text-[15px] font-bold tabular-nums text-gray-900">
-                                      {formatCurrency(gi.unit_cost)}
-                                      {gi.qty > 1 ? ` ×${gi.qty}` : ""}
-                                    </span>
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  )}
-                </div>
+              <div className="mt-8 space-y-8">
+                {clientRoomBundles.length === 0 ? (
+                  <p className="text-sm text-[#6B7280]">No addition packages for this room yet.</p>
+                ) : (
+                  clientRoomBundles.map((b) => (
+                    <FocusedAdditionCard
+                      key={b.bundle_code}
+                      bundle={b}
+                      roomName={roomName}
+                      claimItems={items}
+                      disabled={isSaving}
+                      onAdd={(lines) => void handleFocusedBundleAdd(lines)}
+                    />
+                  ))
+                )}
+              </div>
+
+              <div className="mt-10 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+                <p className="text-sm font-bold uppercase tracking-wide text-gray-900">💬 Request a specific item</p>
+                <p className="mt-2 text-sm text-[#6B7280]">
+                  Don&apos;t see something? Tell us and we&apos;ll add it.
+                </p>
+                {requestStatus === "success" ? (
+                  <div className="mt-4">
+                    <p className="text-sm font-medium text-[#16A34A]">Request sent — thank you.</p>
+                    <button
+                      type="button"
+                      className="mt-3 text-sm font-semibold text-[#2563EB] underline"
+                      onClick={() => setRequestStatus("idle")}
+                    >
+                      Send another
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <textarea
+                      className="mt-4 w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder-gray-400"
+                      rows={3}
+                      placeholder="Description"
+                      value={requestText}
+                      onChange={(e) => {
+                        setRequestText(e.target.value);
+                        if (requestStatus === "error") setRequestStatus("idle");
+                      }}
+                    />
+                    {requestStatus === "error" ? (
+                      <p className="mt-2 text-xs text-red-600">Could not send — try again.</p>
+                    ) : null}
+                    <button
+                      type="button"
+                      disabled={!requestText.trim() || requestStatus === "loading"}
+                      onClick={() => void sendSpecificItemRequest()}
+                      className="mt-4 rounded-lg bg-[#2563EB] px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                    >
+                      {requestStatus === "loading" ? "Sending…" : "Send Request"}
+                    </button>
+                  </>
+                )}
               </div>
             </section>
 
             <section className="mt-12 rounded-2xl border border-gray-100 bg-white shadow-sm">
-              <button
-                type="button"
-                onClick={() => setBundleSectionOpen((o) => !o)}
-                className="flex w-full items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 text-left md:px-6"
-              >
-                <div>
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">Add by package</h2>
-                  <p className="mt-1 text-sm text-[#6B7280]">
-                    Pre-grouped items sized to fill your room budget
-                  </p>
-                </div>
-                <span className="text-gray-400">{bundleSectionOpen ? "▼" : "▶"}</span>
-              </button>
-              {bundleSectionOpen ? (
-                <div className="px-5 py-6 md:px-6">
-                  {roomBundlesAll.length === 0 ? (
-                    <p className="text-sm text-[#6B7280]">No bundles defined for this room.</p>
-                  ) : (
-                    <div className="space-y-10">
-                      {focusedBundles.length > 0 ? (
-                        <div>
-                          <h3 className="text-xs font-bold uppercase tracking-wider text-[#2563EB]">
-                            Focused additions
-                          </h3>
-                          <p className="mt-1 text-sm font-medium text-[#6B7280]">
-                            <span className="font-semibold text-gray-800">FOCUSED ADDITIONS</span> — affordable
-                            bundles (~$5K–$40K). Add specific groups without a six-figure package.
-                          </p>
-                          <div className="mt-4 space-y-3">
-                            {focusedBundles.map((fb) => (
-                              <div
-                                key={fb.bundle_code}
-                                className={`rounded-xl border bg-white p-4 shadow-sm ${
-                                  affordableExpandedCode === fb.bundle_code
-                                    ? "border-[#2563EB] ring-1 ring-blue-100"
-                                    : "border-gray-100"
-                                }`}
-                              >
-                                <div className="flex flex-wrap items-start justify-between gap-3">
-                                  <div className="min-w-0 flex-1">
-                                    <p className="font-semibold text-gray-900 [overflow-wrap:anywhere]">{fb.name}</p>
-                                    <p className="mt-1 text-sm text-[#6B7280] [overflow-wrap:anywhere]">{fb.description}</p>
-                                  </div>
-                                  <div className="flex shrink-0 flex-col items-end gap-2">
-                                    <span className="text-base font-bold tabular-nums text-gray-900">
-                                      {formatCurrency(fb.total_value)}
-                                    </span>
-                                    <button
-                                      type="button"
-                                      onClick={() => expandAffordableBundle(fb)}
-                                      className="rounded-lg border border-[#2563EB] px-3 py-1.5 text-xs font-bold text-[#2563EB] hover:bg-blue-50"
-                                    >
-                                      {affordableExpandedCode === fb.bundle_code ? "Configuring…" : "Choose items"}
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
+              {tier2Sorted.length === 0 ? (
+                <div className="px-5 py-6 text-sm text-[#6B7280] md:px-6">No household items under $500 in this room.</div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setHouseholdSectionOpen((o) => !o)}
+                    className="flex w-full items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 text-left md:px-6"
+                  >
+                    <span className="text-xs font-bold uppercase tracking-wider text-gray-900">
+                      Household items ({tier2Sorted.length} items)
+                      <span className="ml-2 tabular-nums text-gray-500">
+                        {householdSectionOpen ? "▼" : "▶"}
+                      </span>
+                    </span>
+                    <span className="text-sm tabular-nums text-[#6B7280]">{formatCurrency(miscOriginalTotal)}</span>
+                  </button>
+                  {householdSectionOpen ? (
+                    <div className="space-y-6 px-5 py-6 md:px-6">
+                      <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
+                        {tier2Sorted.map((item, idx) => (
+                          <li
+                            key={`hh-${generateItemId(item)}-${idx}`}
+                            className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-sm"
+                          >
+                            <span className="min-w-0 flex-1 font-medium text-gray-900 [overflow-wrap:anywhere]">
+                              {item.description}
+                            </span>
+                            <span className="shrink-0 tabular-nums text-[#6B7280]">
+                              {formatCurrency(item.unit_cost)} × {item.qty} ={" "}
+                              {formatCurrency(item.unit_cost * item.qty)}
+                            </span>
+                            <button
+                              type="button"
+                              disabled={isSaving}
+                              onClick={() => void handleRemoveItemRow(item)}
+                              className="shrink-0 rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-600 hover:border-red-400 hover:text-red-600 disabled:opacity-40"
+                              aria-label="Remove line"
+                            >
+                              ×
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+
+                      <div>
+                        <p className="text-sm font-semibold text-gray-800">How many did you have?</p>
+                        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHouseholdCustomOpen(false);
+                              setHouseholdPendingMult(1);
+                            }}
+                            className={`rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
+                              householdPendingMult === 1 && !householdCustomOpen
+                                ? "border-[#2563EB] bg-blue-50"
+                                : "border-gray-200 bg-white"
+                            }`}
+                          >
+                            Same
+                            <span className="mt-1 block text-xs font-normal text-[#16A34A] tabular-nums">
+                              {formatCurrency(householdButtonDeltas.same)}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHouseholdCustomOpen(false);
+                              setHouseholdPendingMult(2);
+                            }}
+                            className={`rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
+                              householdPendingMult === 2 && !householdCustomOpen
+                                ? "border-[#2563EB] bg-blue-50"
+                                : "border-gray-200 bg-white"
+                            }`}
+                          >
+                            ×2 More
+                            <span className="mt-1 block text-xs font-normal text-[#16A34A] tabular-nums">
+                              +
+                              {formatCurrency(
+                                Math.max(0, householdButtonDeltas.x2 - householdButtonDeltas.same)
+                              )}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHouseholdCustomOpen(false);
+                              setHouseholdPendingMult(3);
+                            }}
+                            className={`rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
+                              householdPendingMult === 3 && !householdCustomOpen
+                                ? "border-[#2563EB] bg-blue-50"
+                                : "border-gray-200 bg-white"
+                            }`}
+                          >
+                            ×3 More
+                            <span className="mt-1 block text-xs font-normal text-[#16A34A] tabular-nums">
+                              +
+                              {formatCurrency(
+                                Math.max(0, householdButtonDeltas.x3 - householdButtonDeltas.same)
+                              )}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHouseholdCustomOpen(true);
+                              setHouseholdPendingMult(householdCustomMult);
+                            }}
+                            className={`rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
+                              householdCustomOpen ? "border-[#2563EB] bg-blue-50" : "border-gray-200 bg-white"
+                            }`}
+                          >
+                            Custom
+                            <span className="mt-1 block text-xs font-normal text-[#16A34A] tabular-nums">
+                              +
+                              {formatCurrency(
+                                Math.max(0, householdButtonDeltas.custom - householdButtonDeltas.same)
+                              )}
+                            </span>
+                          </button>
+                        </div>
+                        {householdCustomOpen ? (
+                          <div className="mt-4 rounded-xl border border-gray-100 bg-gray-50 p-4">
+                            <label className="text-xs font-medium text-gray-700">Multiplier 1× – 5×</label>
+                            <input
+                              type="range"
+                              min={1}
+                              max={5}
+                              step={1}
+                              value={householdCustomMult}
+                              onChange={(e) => {
+                                const v = Number(e.target.value);
+                                setHouseholdCustomMult(v);
+                                setHouseholdPendingMult(v);
+                              }}
+                              className="mt-2 h-2 w-full accent-[#2563EB]"
+                            />
+                            <p className="mt-2 text-sm tabular-nums text-gray-800">
+                              {householdCustomMult}× · add{" "}
+                              <span className="font-semibold text-[#16A34A]">
+                                +
+                                {formatCurrency(
+                                  Math.max(0, householdMultDelta(householdCustomMult) - householdButtonDeltas.same)
+                                )}
+                              </span>
+                            </p>
                           </div>
+                        ) : null}
+                      </div>
 
-                          {affordableActiveBundle && affordableChecks.length === affordableActiveBundle.items.length ? (
-                            <div className="mt-6 rounded-2xl border border-gray-200 bg-gray-50/50 p-4 md:p-6">
-                              <div className="flex flex-wrap items-start justify-between gap-2 border-b border-gray-200 pb-4">
-                                <h4 className="text-lg font-semibold text-gray-900 [overflow-wrap:anywhere]">
-                                  {affordableActiveBundle.name}
-                                </h4>
-                                <span className="text-lg font-bold tabular-nums text-gray-900">
-                                  {formatCurrency(affordableActiveBundle.total_value)}
-                                </span>
-                              </div>
-
-                              <div className="mt-4 grid grid-cols-1 gap-6 md:grid-cols-2">
-                                <div>
-                                  <p className="border-b border-gray-200 pb-2 text-xs font-bold uppercase tracking-wide text-[#6B7280]">
-                                    Upgrades existing
-                                  </p>
-                                  <ul className="mt-3 space-y-4">
-                                    {affordableActiveBundle.items.map((bi, i) => {
-                                      const existing = findExistingForBundleSlot(bi, items);
-                                      if (!existing) return null;
-                                      const delta = bi.unit_cost * existing.qty - existing.unit_cost * existing.qty;
-                                      return (
-                                        <li key={`abl-${i}`} className="flex gap-2 text-sm">
-                                          <input
-                                            type="checkbox"
-                                            className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
-                                            checked={!!affordableChecks[i]}
-                                            onChange={() =>
-                                              setAffordableChecks((prev) => {
-                                                const next = [...prev];
-                                                next[i] = !next[i];
-                                                return next;
-                                              })
-                                            }
-                                          />
-                                          <div className="min-w-0 flex-1">
-                                            <p className="text-[13px] text-gray-500 line-through [overflow-wrap:anywhere]">
-                                              {existing.brand ? `${existing.brand} ` : ""}
-                                              {existing.description}{" "}
-                                              <span className="tabular-nums font-semibold">
-                                                {formatCurrency(existing.unit_cost * existing.qty)}
-                                              </span>
-                                            </p>
-                                            <p className="mt-1 font-medium text-gray-900 [overflow-wrap:anywhere]">
-                                              → {bi.brand ? `${bi.brand} ` : ""}
-                                              {bi.description}
-                                            </p>
-                                            <p className="mt-1 tabular-nums text-gray-900">
-                                              {formatCurrency(bi.unit_cost * existing.qty)}
-                                              {delta > 0 ? (
-                                                <span className="ml-2 font-semibold text-[#16A34A]">
-                                                  (+{formatCurrency(delta)})
-                                                </span>
-                                              ) : null}
-                                            </p>
-                                          </div>
-                                        </li>
-                                      );
-                                    })}
-                                  </ul>
-                                </div>
-                                <div>
-                                  <p className="border-b border-gray-200 pb-2 text-xs font-bold uppercase tracking-wide text-[#6B7280]">
-                                    Adds new
-                                  </p>
-                                  <ul className="mt-3 space-y-4">
-                                    {affordableActiveBundle.items.map((bi, i) => {
-                                      if (findExistingForBundleSlot(bi, items)) return null;
-                                      return (
-                                        <li key={`abr-${i}`} className="flex gap-2 text-sm">
-                                          <input
-                                            type="checkbox"
-                                            className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
-                                            checked={!!affordableChecks[i]}
-                                            onChange={() =>
-                                              setAffordableChecks((prev) => {
-                                                const next = [...prev];
-                                                next[i] = !next[i];
-                                                return next;
-                                              })
-                                            }
-                                          />
-                                          <div className="min-w-0 flex-1">
-                                            <p className="font-medium text-gray-900 [overflow-wrap:anywhere]">
-                                              + {bi.brand ? `${bi.brand} ` : ""}
-                                              {bi.description}
-                                            </p>
-                                            <p className="mt-1 font-bold tabular-nums text-gray-900">
-                                              {formatCurrency(bi.total)}
-                                            </p>
-                                          </div>
-                                        </li>
-                                      );
-                                    })}
-                                  </ul>
-                                </div>
-                              </div>
-
-                              <div className="mt-6 border-t border-gray-200 pt-4 text-sm text-gray-800">
-                                <p>
-                                  Upgrades:{" "}
-                                  <span className="font-semibold text-[#16A34A]">
-                                    +{formatCurrency(Math.max(0, affordableUpgradeDeltaSelected))}
-                                  </span>
-                                </p>
-                                <p className="mt-1">
-                                  Additions:{" "}
-                                  <span className="font-semibold text-[#16A34A]">
-                                    +{formatCurrency(affordableAdditionsSelected)}
-                                  </span>
-                                </p>
-                                <p className="mt-2 text-base font-bold text-gray-900">
-                                  Selected:{" "}
-                                  <span className="tabular-nums">{formatCurrency(affordableSelectedTotal)}</span> total
-                                </p>
-                              </div>
-
+                      {householdPendingMult != null ? (
+                        <div className="rounded-xl border border-gray-200 bg-white p-4 text-sm">
+                          {householdPreviewTotalDelta <= 0.005 ? (
+                            <p className="text-[#6B7280]">No dollar change at this level.</p>
+                          ) : (
+                            <>
+                              <p className="tabular-nums text-gray-900">
+                                Add{" "}
+                                <span className="font-semibold text-[#16A34A]">
+                                  +{formatCurrency(householdPreviewTotalDelta)}
+                                </span>{" "}
+                                across household lines
+                              </p>
+                              <ul className="mt-3 max-h-40 space-y-1 overflow-y-auto text-xs text-[#6B7280]">
+                                {householdPreviewLines
+                                  .filter((l) => Math.abs(l.delta) > 0.01)
+                                  .slice(0, 16)
+                                  .map((l, j) => (
+                                    <li key={`${l.item.description}-${j}`} className="[overflow-wrap:anywhere]">
+                                      <span className="font-medium text-gray-800">{l.item.description}</span>{" "}
+                                      {formatCurrency(l.before)} → {formatCurrency(l.after)} (
+                                      <span className="text-[#16A34A]">+{formatCurrency(l.delta)}</span>)
+                                    </li>
+                                  ))}
+                              </ul>
                               <button
                                 type="button"
-                                disabled={
-                                  bundleAdding || affordableBundleSelectedCount === 0 || isSaving || !affordableActiveBundle
-                                }
+                                disabled={isSaving}
                                 onClick={() =>
-                                  affordableActiveBundle &&
-                                  void handleApplyBundle(affordableActiveBundle, affordableChecks, { closeSection: false })
+                                  householdPendingMult != null &&
+                                  void applyHouseholdMultiplier(householdPendingMult)
                                 }
-                                className={`mt-5 flex h-12 w-full items-center justify-center rounded-xl text-base font-bold transition md:h-14 ${
-                                  bundleAddedFlash
-                                    ? "bg-[#16A34A] text-white"
-                                    : "bg-[#2563EB] text-white hover:bg-blue-700"
-                                } disabled:opacity-40`}
+                                className="mt-4 w-full rounded-lg bg-[#2563EB] py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
                               >
-                                {bundleAdding ? "…" : bundleAddedFlash ? "✓ Applied" : "✓ Apply focused package"}
+                                Apply +{formatCurrency(householdPreviewTotalDelta)}
                               </button>
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-
-                      {fullBundles.length > 0 ? (
-                        <div>
-                          <h3 className="text-xs font-bold uppercase tracking-wider text-gray-900">Full packages</h3>
-                          <p className="mt-1 text-sm font-medium text-[#6B7280]">
-                            <span className="font-semibold text-gray-800">FULL PACKAGES</span> — larger bundles. Use
-                            the slider to preview a tier (e.g. $17K–$285K+).
-                          </p>
-                          <div className="mt-4 space-y-6">
-                            <div>
-                              <p className="text-center text-xs text-[#6B7280]">← drag to explore →</p>
-                              <div className="mt-2 flex flex-wrap items-center gap-3 text-xs tabular-nums text-[#6B7280] sm:text-sm">
-                                <span className="shrink-0 font-medium">{formatCurrency(minBundleDisplay)}</span>
-                                <input
-                                  type="range"
-                                  min={minBundleDisplay}
-                                  max={maxBundleDisplay}
-                                  step={1000}
-                                  value={Math.min(maxBundleDisplay, Math.max(minBundleDisplay, bundleBudgetValue))}
-                                  onChange={(e) => setBundleBudgetValue(Number(e.target.value))}
-                                  className="h-2 min-w-0 flex-1 accent-[#2563EB]"
-                                  aria-label="Bundle budget explorer"
-                                />
-                                <span className="shrink-0 font-medium">{formatCurrency(maxBundleDisplay)}</span>
-                              </div>
-                              {closestBundle ? (
-                                <p className="mt-3 text-center text-sm font-semibold text-gray-900">
-                                  {closestBundle.name}{" "}
-                                  <span className="tabular-nums text-[#2563EB]">
-                                    {formatCurrency(closestBundle.total_value)}
-                                  </span>
-                                </p>
-                              ) : null}
-                            </div>
-
-                            {closestBundle && bundleChecks.length === closestBundle.items.length ? (
-                              <div className="rounded-2xl border border-gray-200 bg-gray-50/50 p-4 md:p-6">
-                                <div className="flex flex-wrap items-start justify-between gap-2 border-b border-gray-200 pb-4">
-                                  <h4 className="text-lg font-semibold text-gray-900 [overflow-wrap:anywhere]">
-                                    {closestBundle.name}
-                                  </h4>
-                                  <span className="text-lg font-bold tabular-nums text-gray-900">
-                                    {formatCurrency(closestBundle.total_value)}
-                                  </span>
-                                </div>
-
-                                <div className="mt-4 grid grid-cols-1 gap-6 md:grid-cols-2">
-                                  <div>
-                                    <p className="border-b border-gray-200 pb-2 text-xs font-bold uppercase tracking-wide text-[#6B7280]">
-                                      Upgrades existing
-                                    </p>
-                                    <ul className="mt-3 space-y-4">
-                                      {closestBundle.items.map((bi, i) => {
-                                        const existing = findExistingForBundleSlot(bi, items);
-                                        if (!existing) return null;
-                                        const delta = bi.unit_cost * existing.qty - existing.unit_cost * existing.qty;
-                                        return (
-                                          <li key={`bl-${i}`} className="flex gap-2 text-sm">
-                                            <input
-                                              type="checkbox"
-                                              className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
-                                              checked={!!bundleChecks[i]}
-                                              onChange={() =>
-                                                setBundleChecks((prev) => {
-                                                  const next = [...prev];
-                                                  next[i] = !next[i];
-                                                  return next;
-                                                })
-                                              }
-                                            />
-                                            <div className="min-w-0 flex-1">
-                                              <p className="text-[13px] text-gray-500 line-through [overflow-wrap:anywhere]">
-                                                {existing.brand ? `${existing.brand} ` : ""}
-                                                {existing.description}{" "}
-                                                <span className="tabular-nums font-semibold">
-                                                  {formatCurrency(existing.unit_cost * existing.qty)}
-                                                </span>
-                                              </p>
-                                              <p className="mt-1 font-medium text-gray-900 [overflow-wrap:anywhere]">
-                                                → {bi.brand ? `${bi.brand} ` : ""}
-                                                {bi.description}
-                                              </p>
-                                              <p className="mt-1 tabular-nums text-gray-900">
-                                                {formatCurrency(bi.unit_cost * existing.qty)}
-                                                {delta > 0 ? (
-                                                  <span className="ml-2 font-semibold text-[#16A34A]">
-                                                    (+{formatCurrency(delta)})
-                                                  </span>
-                                                ) : null}
-                                              </p>
-                                            </div>
-                                          </li>
-                                        );
-                                      })}
-                                    </ul>
-                                  </div>
-                                  <div>
-                                    <p className="border-b border-gray-200 pb-2 text-xs font-bold uppercase tracking-wide text-[#6B7280]">
-                                      Adds new
-                                    </p>
-                                    <ul className="mt-3 space-y-4">
-                                      {closestBundle.items.map((bi, i) => {
-                                        if (findExistingForBundleSlot(bi, items)) return null;
-                                        return (
-                                          <li key={`br-${i}`} className="flex gap-2 text-sm">
-                                            <input
-                                              type="checkbox"
-                                              className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
-                                              checked={!!bundleChecks[i]}
-                                              onChange={() =>
-                                                setBundleChecks((prev) => {
-                                                  const next = [...prev];
-                                                  next[i] = !next[i];
-                                                  return next;
-                                                })
-                                              }
-                                            />
-                                            <div className="min-w-0 flex-1">
-                                              <p className="font-medium text-gray-900 [overflow-wrap:anywhere]">
-                                                + {bi.brand ? `${bi.brand} ` : ""}
-                                                {bi.description}
-                                              </p>
-                                              <p className="mt-1 font-bold tabular-nums text-gray-900">
-                                                {formatCurrency(bi.total)}
-                                              </p>
-                                            </div>
-                                          </li>
-                                        );
-                                      })}
-                                    </ul>
-                                  </div>
-                                </div>
-
-                                <div className="mt-6 border-t border-gray-200 pt-4 text-sm text-gray-800">
-                                  <p>
-                                    Upgrades:{" "}
-                                    <span className="font-semibold text-[#16A34A]">
-                                      +{formatCurrency(Math.max(0, bundleUpgradeDeltaSelected))}
-                                    </span>
-                                  </p>
-                                  <p className="mt-1">
-                                    Additions:{" "}
-                                    <span className="font-semibold text-[#16A34A]">
-                                      +{formatCurrency(bundleAdditionsSelected)}
-                                    </span>
-                                  </p>
-                                  <p className="mt-2 text-base font-bold text-gray-900">
-                                    Selected:{" "}
-                                    <span className="tabular-nums">{formatCurrency(bundleSelectedTotal)}</span> total
-                                  </p>
-                                </div>
-
-                                <button
-                                  type="button"
-                                  disabled={bundleAdding || bundleSelectedCount === 0 || isSaving}
-                                  onClick={() => void handleApplyPackage()}
-                                  className={`mt-5 flex h-12 w-full items-center justify-center rounded-xl text-base font-bold transition md:h-14 ${
-                                    bundleAddedFlash
-                                      ? "bg-[#16A34A] text-white"
-                                      : "bg-[#2563EB] text-white hover:bg-blue-700"
-                                  } disabled:opacity-40`}
-                                >
-                                  {bundleAdding ? "…" : bundleAddedFlash ? "✓ Applied" : "✓ Apply this package"}
-                                </button>
-                              </div>
-                            ) : (
-                              <p className="text-center text-sm text-[#6B7280]">Loading package…</p>
-                            )}
-                          </div>
-                          <Link
-                            href={`/review/bundles/${roomSlug}`}
-                            className="mt-6 inline-block text-sm font-semibold text-[#2563EB] hover:underline"
-                          >
-                            Browse all bundles →
-                          </Link>
+                            </>
+                          )}
                         </div>
                       ) : null}
                     </div>
-                  )}
-                </div>
-              ) : null}
+                  ) : null}
+                </>
+              )}
             </section>
 
             <p className="mt-10 text-center text-sm text-[#6B7280]">
@@ -2484,8 +1807,8 @@ export default function RoomReviewPage() {
       )}
 
       {showRoomChrome ? (
-        <footer className="fixed bottom-0 inset-x-0 z-30 min-h-16 border-t border-gray-200 bg-white py-2 shadow-lg md:py-0">
-          <div className="mx-auto flex max-w-[1100px] flex-wrap items-center justify-between gap-2 px-4 md:min-h-16 md:flex-nowrap md:gap-4 md:px-8">
+        <footer className="fixed bottom-0 inset-x-0 z-30 min-h-[52px] border-t border-gray-200 bg-white py-2 shadow-lg md:py-0">
+          <div className="mx-auto flex max-w-[1100px] flex-wrap items-center justify-between gap-2 px-4 md:min-h-[56px] md:flex-nowrap md:gap-4 md:px-8">
             <div className="flex shrink-0 items-center gap-1">
               <button
                 type="button"
@@ -2493,7 +1816,7 @@ export default function RoomReviewPage() {
                 aria-label="Undo"
                 disabled={!undoAvail || isSaving}
                 onClick={() => void undoRoom()}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-gray-200 text-lg leading-none text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
+                className="flex min-h-[48px] min-w-[48px] shrink-0 items-center justify-center rounded-lg border border-gray-200 text-lg leading-none text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
               >
                 ⟲
               </button>
@@ -2503,7 +1826,7 @@ export default function RoomReviewPage() {
                 aria-label="Redo"
                 disabled={!redoAvail || isSaving}
                 onClick={() => void redoRoom()}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-gray-200 text-lg leading-none text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
+                className="flex min-h-[48px] min-w-[48px] shrink-0 items-center justify-center rounded-lg border border-gray-200 text-lg leading-none text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
               >
                 ⟳
               </button>
@@ -2535,19 +1858,22 @@ export default function RoomReviewPage() {
             <div className="flex shrink-0 items-center gap-2">
               <Link
                 href={prevRoom ? `/review/${slugify(prevRoom)}${guided ? "?guided=true" : ""}` : "/review"}
-                className="hidden rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-800 transition-colors hover:bg-gray-50 sm:inline md:text-sm"
+                className="hidden min-h-[48px] items-center rounded-lg border border-gray-200 px-3 text-xs font-medium text-gray-800 transition-colors hover:bg-gray-50 sm:inline-flex md:text-sm"
               >
                 ← Rooms
               </Link>
               {nextRoom ? (
                 <Link
                   href={`/review/${slugify(nextRoom)}${guided ? "?guided=true" : ""}`}
-                  className="rounded-lg bg-[#2563EB] px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-blue-700 md:text-sm"
+                  className="inline-flex min-h-[48px] items-center rounded-lg bg-[#2563EB] px-4 text-xs font-bold text-white transition-colors hover:bg-blue-700 md:text-sm"
                 >
                   Next Room →
                 </Link>
               ) : (
-                <Link href="/review" className="rounded-lg bg-gray-200 px-3 py-2 text-xs font-medium text-gray-800 md:text-sm">
+                <Link
+                  href="/review"
+                  className="inline-flex min-h-[48px] items-center rounded-lg bg-gray-200 px-4 text-xs font-medium text-gray-800 md:text-sm"
+                >
                   Done
                 </Link>
               )}
@@ -2714,7 +2040,7 @@ export default function RoomReviewPage() {
       )}
 
       {toast && (
-        <div className="fixed bottom-52 left-1/2 z-40 -translate-x-1/2 rounded-xl bg-gray-900 px-5 py-3 text-base text-white shadow-xl">
+        <div className="fixed left-1/2 top-20 z-40 max-w-[min(100vw-2rem,24rem)] -translate-x-1/2 rounded-xl bg-gray-900 px-5 py-3 text-center text-base text-white shadow-xl">
           {toast}
           <button type="button" className="ml-3 text-green-400" onClick={() => setToast(null)}>
             ✓

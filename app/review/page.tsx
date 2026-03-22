@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { dispatchUpgradeReward } from "../components/UpgradeRewardToast";
 import { loadSession, saveSession } from "../lib/session";
 import { ClaimItem } from "../lib/types";
 import { formatCurrency } from "../lib/utils";
@@ -28,7 +27,7 @@ const ROOMS: { name: string; slug: string; display?: string }[] = [
 
 function Toast({ message, onDismiss }: { message: string; onDismiss: () => void }) {
   return (
-    <div className="fixed bottom-24 left-1/2 z-40 max-w-sm -translate-x-1/2 rounded-xl bg-gray-900 px-5 py-3 text-base text-white shadow-xl">
+    <div className="fixed left-1/2 top-4 z-40 max-w-[min(100vw-2rem,24rem)] -translate-x-1/2 rounded-xl bg-gray-900 px-5 py-3 text-center text-base text-white shadow-xl">
       {message}
       <button type="button" className="ml-3 text-green-400" onClick={onDismiss}>
         ✓
@@ -98,13 +97,13 @@ export default function ReviewDashboard() {
   const [sessionItems, setSessionItems] = useState<ClaimItem[]>([]);
   const [claimGoal, setClaimGoal] = useState(CLAIM_GOAL_DEFAULT);
   const [toast, setToast] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
 
-  const [artDesc, setArtDesc] = useState("");
-  const [artArtist, setArtArtist] = useState("");
-  const [artMedium, setArtMedium] = useState("");
-  const [artSize, setArtSize] = useState("");
-  const [artValue, setArtValue] = useState("");
-  const [artSaving, setArtSaving] = useState(false);
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 1500);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   useEffect(() => {
     if (hydrated) loadData(sessionId, mode);
@@ -203,68 +202,66 @@ export default function ReviewDashboard() {
   const breakdown = useMemo(() => {
     let original = 0;
     let upgrade = 0;
-    let bundle = 0;
+    let additions = 0;
     for (const item of sessionItems) {
       const line = item.qty * item.unit_cost;
       const src = item.source ?? "original";
       if (src === "upgrade") upgrade += line;
-      else if (src === "bundle") bundle += line;
+      else if (src === "bundle" || src === "suggestion" || src === "art") additions += line;
       else original += line;
     }
-    return { original, upgrade, bundle };
+    return { original, upgrade, additions };
   }, [sessionItems]);
 
-  async function handleAddArt(e: React.FormEvent) {
-    e.preventDefault();
-    const v = parseFloat(artValue.replace(/[^0-9.]/g, ""));
-    if (!artDesc.trim() || Number.isNaN(v) || v <= 0) {
-      setToast("Enter a description and valid value");
-      return;
+  const additionCounts = useMemo(() => {
+    let bundle = 0;
+    let suggestion = 0;
+    let art = 0;
+    for (const item of sessionItems) {
+      const src = item.source ?? "original";
+      if (src === "bundle") bundle += 1;
+      if (src === "suggestion") suggestion += 1;
+      if (src === "art") art += 1;
     }
-    setArtSaving(true);
+    return { bundle, suggestion, art };
+  }, [sessionItems]);
+
+  async function handleExportDownload() {
+    if (exporting) return;
+    setExporting(true);
     try {
-      const line: ClaimItem = {
-        room: ART_ROOM,
-        description: artDesc.trim(),
-        brand: artArtist.trim(),
-        model: artSize.trim(),
-        qty: 1,
-        age_years: 0,
-        age_months: 0,
-        condition: "Average",
-        unit_cost: v,
-        category: artMedium.trim(),
-        source: "bundle",
-      };
-      const before = sessionItems.reduce((s, i) => s + i.qty * i.unit_cost, 0);
-      const merged = [...sessionItems, line];
-      const after = merged.reduce((s, i) => s + i.qty * i.unit_cost, 0);
-      await saveSession({ claim_items: merged }, sessionId);
-      setSessionItems(merged);
-      dispatchUpgradeReward({
-        delta: v,
-        claimTotal: after,
-        goalPctBefore: claimGoal > 0 ? Math.min(100, Math.round((before / claimGoal) * 100)) : 0,
-        goalPctAfter: claimGoal > 0 ? Math.min(100, Math.round((after / claimGoal) * 100)) : 0,
-      });
-      setArtDesc("");
-      setArtArtist("");
-      setArtMedium("");
-      setArtSize("");
-      setArtValue("");
-      setToast("Art item added to claim");
+      const res = await fetch(`/api/export-xact?sessionId=${encodeURIComponent(sessionId)}`);
+      if (!res.ok) throw new Error("export failed");
+      const blob = await res.blob();
+      const cd = res.headers.get("Content-Disposition");
+      const m = cd?.match(/filename="?([^";]+)"?/i);
+      const name = m?.[1]?.trim() || "claim.xls";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setToast("Export failed — try again");
     } finally {
-      setArtSaving(false);
+      setExporting(false);
     }
   }
 
   if (!hydrated || isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-white">
-        <div className="text-center">
-          <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-[#2563EB] border-t-transparent" />
-          <p className="text-base font-medium text-gray-500">
-            {modeSwitching ? `Switching to ${mode} mode…` : "Loading…"}
+      <div className="min-h-screen bg-white px-4 py-8">
+        <div className="mx-auto max-w-[720px] animate-pulse space-y-4">
+          <div className="h-8 w-48 rounded bg-gray-200" />
+          <div className="h-40 rounded-2xl bg-gray-100" />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="h-36 rounded-2xl bg-gray-100" />
+            <div className="h-36 rounded-2xl bg-gray-100" />
+          </div>
+          <div className="h-36 rounded-2xl bg-gray-100" />
+          <p className="text-center text-sm text-gray-500">
+            {modeSwitching ? `Switching to ${mode} mode…` : "Loading claim…"}
           </p>
         </div>
       </div>
@@ -336,8 +333,12 @@ export default function ReviewDashboard() {
                 </div>
                 <div className="flex justify-between tabular-nums">
                   <span className="text-gray-600">Additions</span>
-                  <span className="font-semibold text-gray-900">{formatCurrency(breakdown.bundle)}</span>
+                  <span className="font-semibold text-gray-900">{formatCurrency(breakdown.additions)}</span>
                 </div>
+                <p className="text-xs text-gray-400">
+                  Lines: {additionCounts.bundle} bundle · {additionCounts.suggestion} suggestion · {additionCounts.art}{" "}
+                  art
+                </p>
                 <div className="flex justify-between border-t border-gray-100 pt-2 tabular-nums">
                   <span className="font-bold text-gray-800">Total</span>
                   <span className="font-bold text-gray-900">{formatCurrency(lineItemsTotal)}</span>
@@ -355,9 +356,17 @@ export default function ReviewDashboard() {
               </div>
               <div className="mt-4 h-4 w-full overflow-hidden rounded-full bg-gray-200">
                 <div
-                  className="h-full rounded-full bg-[#2563EB] transition-all duration-500"
+                  className="h-full rounded-full bg-[#2563EB] transition-[width] duration-700 ease-out"
                   style={{ width: `${globalPct}%` }}
                 />
+              </div>
+              <div className="mt-4">
+                <Link
+                  href="/review/preview"
+                  className="inline-flex min-h-[48px] w-full items-center justify-center rounded-xl border-2 border-[#2563EB] bg-white px-4 text-sm font-bold text-[#2563EB] hover:bg-blue-50 sm:w-auto"
+                >
+                  Preview full claim
+                </Link>
               </div>
             </div>
           </header>
@@ -385,71 +394,21 @@ export default function ReviewDashboard() {
           <section className="mt-10 rounded-2xl border-2 border-dashed border-amber-200 bg-amber-50/40 px-5 py-6">
             <h2 className="text-lg font-bold text-gray-900">🎨 Art collection</h2>
             <p className="mt-2 text-base text-gray-600">
-              Art items are managed separately. Your advisor will provide the list.
+              Reserved {formatCurrency(ART_RESERVED_PLACEHOLDER)} — itemized on the art review page. Your advisor will
+              finalize the list.
             </p>
-            <p className="mt-3 text-base font-semibold text-gray-800">
-              Reserved: {formatCurrency(ART_RESERVED_PLACEHOLDER)}{" "}
-              <span className="text-sm font-normal text-gray-500">(placeholder)</span>
+            <p className="mt-3 text-lg font-bold tabular-nums text-gray-900">
+              On claim: {formatCurrency(artManualTotal)}
+              {artItems.length > 0 ? (
+                <span className="ml-2 text-sm font-normal text-gray-500">({artItems.length} items)</span>
+              ) : null}
             </p>
-            {artItems.length > 0 && (
-              <ul className="mt-4 space-y-2 border-t border-amber-200/60 pt-4 text-sm">
-                {artItems.map((it, idx) => (
-                  <li key={`${it.description}-${idx}`} className="flex justify-between gap-2 tabular-nums">
-                    <span className="min-w-0 text-gray-800">{it.description}</span>
-                    <span className="shrink-0 font-semibold">{formatCurrency(it.qty * it.unit_cost)}</span>
-                  </li>
-                ))}
-                <li className="flex justify-between border-t border-amber-200/60 pt-2 font-bold text-gray-900">
-                  <span>Manual art total</span>
-                  <span>{formatCurrency(artManualTotal)}</span>
-                </li>
-              </ul>
-            )}
-            <form onSubmit={handleAddArt} className="mt-6 space-y-3 rounded-xl border border-gray-200 bg-white p-4">
-              <p className="text-sm font-bold text-gray-700">+ Add art item manually</p>
-              <input
-                value={artDesc}
-                onChange={(e) => setArtDesc(e.target.value)}
-                placeholder="Description"
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-base"
-              />
-              <div className="grid gap-2 sm:grid-cols-2">
-                <input
-                  value={artArtist}
-                  onChange={(e) => setArtArtist(e.target.value)}
-                  placeholder="Artist (optional)"
-                  className="rounded-lg border border-gray-200 px-3 py-2 text-base"
-                />
-                <input
-                  value={artMedium}
-                  onChange={(e) => setArtMedium(e.target.value)}
-                  placeholder="Medium (optional)"
-                  className="rounded-lg border border-gray-200 px-3 py-2 text-base"
-                />
-              </div>
-              <input
-                value={artSize}
-                onChange={(e) => setArtSize(e.target.value)}
-                placeholder="Size (optional)"
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-base"
-              />
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-gray-500">$</span>
-                <input
-                  value={artValue}
-                  onChange={(e) => setArtValue(e.target.value)}
-                  placeholder="Value"
-                  className="min-w-[120px] flex-1 rounded-lg border border-gray-200 px-3 py-2 text-base tabular-nums"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={artSaving}
-                className="w-full min-h-[48px] rounded-xl bg-[#2563EB] text-base font-bold text-white hover:bg-blue-700 disabled:opacity-50"
-              >
-                {artSaving ? "Saving…" : "Add to claim"}
-              </button>
-            </form>
+            <Link
+              href="/review/art"
+              className="mt-4 inline-flex min-h-[48px] w-full items-center justify-center rounded-xl bg-amber-600 text-base font-bold text-white hover:bg-amber-700 sm:w-auto sm:px-8"
+            >
+              Open art collection →
+            </Link>
           </section>
 
           <p className="mt-8 text-center">
@@ -467,12 +426,14 @@ export default function ReviewDashboard() {
                 <span className="text-xl font-bold tabular-nums text-gray-900">{formatCurrency(grandTotal)}</span>
                 <span className="ml-1 text-sm text-gray-400">/ {formatCurrency(claimGoal)}</span>
               </div>
-              <a
-                href={`/api/export-xact?sessionId=${encodeURIComponent(sessionId)}`}
-                className="flex min-h-[48px] items-center rounded-xl bg-[#16A34A] px-5 py-2.5 text-base font-bold text-white transition-colors hover:bg-green-700"
+              <button
+                type="button"
+                disabled={exporting}
+                onClick={() => void handleExportDownload()}
+                className="flex min-h-[48px] items-center rounded-xl bg-[#16A34A] px-5 py-2.5 text-base font-bold text-white transition-colors hover:bg-green-700 disabled:opacity-60"
               >
-                Download Claim
-              </a>
+                {exporting ? "Preparing…" : "Download Claim"}
+              </button>
             </div>
           </div>
         </div>

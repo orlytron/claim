@@ -1,22 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { supabaseAdmin } from "../../lib/supabase-admin";
-import { mergeClaimIncoming } from "../../lib/claim-item-merge";
+import {
+  displayRoomForExport,
+  sortClaimItemsForExport,
+} from "../../lib/claim-export-shared";
 import type { ClaimItem } from "../../lib/types";
-
-const ROOM_ORDER = [
-  "Living Room",
-  "Kitchen",
-  "David Office / Guest Room",
-  "Bedroom Orly",
-  "Bedroom Rafe",
-  "Patio",
-  "Garage",
-  "Bathroom Master",
-  "Bathroom White",
-  "Art",
-  "Art Collection",
-];
 
 function vendorFromUrl(url: string | undefined): string {
   if (!url) return "";
@@ -29,27 +18,16 @@ function vendorFromUrl(url: string | undefined): string {
   }
 }
 
-function roomIndex(room: string): number {
-  const i = ROOM_ORDER.indexOf(room);
-  return i === -1 ? 999 : i;
-}
-
-function rawToClaimItem(row: Record<string, unknown>, room: string, source: ClaimItem["source"]): ClaimItem {
-  return {
-    room: String(row.room ?? room),
-    description: String(row.description ?? ""),
-    brand: String(row.brand ?? ""),
-    model: String(row.model ?? ""),
-    qty: Number(row.qty ?? 1),
-    age_years: Number(row.age_years ?? 0),
-    age_months: 0,
-    condition: String(row.condition ?? "Average"),
-    unit_cost: Number(row.unit_cost ?? 0),
-    category: String(row.category ?? ""),
-    vendor_url: row.vendor_url as string | undefined,
-    vendor_name: row.vendor_name as string | undefined,
-    source,
-  };
+/** Original vendor column: retailer on upgraded line, else vendor_name / URL host. */
+function originalVendorColumn(item: ClaimItem): string {
+  const direct = (item.vendor_name || "").trim();
+  if (direct) return direct;
+  const fromUrl = vendorFromUrl(item.vendor_url);
+  if (fromUrl) return fromUrl;
+  if (item.source === "upgrade" && item.pre_upgrade_item) {
+    return "";
+  }
+  return "";
 }
 
 export async function GET(req: NextRequest) {
@@ -61,50 +39,14 @@ export async function GET(req: NextRequest) {
     .eq("id", sessionId)
     .single();
 
-  if (sErr || !sessionRow?.claim_items?.length) {
-    return NextResponse.json({ error: "No claim items found" }, { status: 404 });
+  if (sErr || !sessionRow) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  const originalItems = sessionRow.claim_items as ClaimItem[];
-
-  const { data: acceptedDecisions } = await supabaseAdmin
-    .from("bundle_decisions")
-    .select("*")
-    .eq("action", "accepted");
-
-  const bundleItems: ClaimItem[] =
-    acceptedDecisions?.flatMap((d) => {
-      const room = String(d.room ?? "");
-      const items = (d.items ?? []) as Record<string, unknown>[];
-      return items.map((item) => rawToClaimItem(item, room, "bundle"));
-    }) ?? [];
-
-  const { data: upgradeDecisions } = await supabaseAdmin
-    .from("bundle_decisions")
-    .select("*")
-    .eq("action", "upgrade_applied");
-
-  const upgradeItems: ClaimItem[] =
-    upgradeDecisions?.flatMap((d) => {
-      const room = String(d.room ?? "");
-      const items = (d.items ?? []) as Record<string, unknown>[];
-      return items.map((item) => rawToClaimItem(item, room, "upgrade"));
-    }) ?? [];
-
-  let allItems: ClaimItem[] = [...originalItems];
-  if (bundleItems.length) {
-    allItems = mergeClaimIncoming(allItems, bundleItems, "bundle");
-  }
-  if (upgradeItems.length) {
-    allItems = mergeClaimIncoming(allItems, upgradeItems, "upgrade");
-  }
-
-  allItems.sort((a, b) => {
-    const ai = roomIndex(a.room);
-    const bi = roomIndex(b.room);
-    if (ai !== bi) return ai - bi;
-    return b.unit_cost - a.unit_cost;
-  });
+  // Single source of truth: session claim_items includes originals, suggestions,
+  // bundle/focused additions, upgrades (current unit_cost), and art lines.
+  const raw = (sessionRow.claim_items ?? []) as ClaimItem[];
+  const allItems = sortClaimItemsForExport(raw);
 
   const grandTotal = allItems.reduce((sum, item) => sum + item.qty * item.unit_cost, 0);
 
@@ -160,25 +102,27 @@ export async function GET(req: NextRequest) {
   };
 
   for (const item of allItems) {
-    if (lastRoom !== null && item.room !== lastRoom) {
+    const displayRoom = displayRoomForExport(item.room);
+    if (lastRoom !== null && displayRoom !== lastRoom) {
       flushRoomSubtotal(lastRoom);
     }
-    lastRoom = item.room;
+    lastRoom = displayRoom;
     itemNum += 1;
     const lineTotal = item.qty * item.unit_cost;
     roomRunSubtotal += lineTotal;
 
-    const vendor = item.vendor_name || vendorFromUrl(item.vendor_url) || "";
+    const isNew = (item.condition || "").toLowerCase() === "new" || item.source === "bundle" || item.source === "suggestion";
+    const ageYears = isNew ? 0 : item.age_years ?? 0;
 
     itemRows.push([
       itemNum,
-      item.room,
+      displayRoom,
       item.brand || "",
       item.model || "",
       item.description,
-      vendor,
+      originalVendorColumn(item),
       item.qty,
-      item.age_years ?? 0,
+      ageYears,
       0,
       item.condition || "Average",
       item.unit_cost,

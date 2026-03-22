@@ -36,8 +36,8 @@ export function computeItemAtSlider(
   const origUnit = item.unit_cost;
   const originalTotal = origQty * origUnit;
   const maxTotal = ceiling * maxQty;
-  const m = Math.min(3, Math.max(1, sliderMultiplier));
-  const sliderValue = (m - 1) / 2;
+  const m = Math.min(5, Math.max(1, sliderMultiplier));
+  const sliderValue = (Math.min(3, m) - 1) / 2;
   const targetTotal = originalTotal + (maxTotal - originalTotal) * sliderValue;
 
   for (let qty = origQty; qty <= maxQty; qty++) {
@@ -50,6 +50,31 @@ export function computeItemAtSlider(
     }
   }
   return { qty: origQty, unit_cost: origUnit };
+}
+
+/** Segment breakdown for household bulk apply (m &gt; 3 may add extra similar lines). */
+export type MiscSegment = { qty: number; unit_cost: number; isExtra?: boolean };
+
+export function computeMiscSegments(item: MiscLine, multiplier: number): MiscSegment[] {
+  const m = Math.min(5, Math.max(1, multiplier));
+  if (m <= 3) {
+    const n = computeItemAtSlider(item, m);
+    return [{ qty: n.qty, unit_cost: n.unit_cost }];
+  }
+  const at3 = computeItemAtSlider(item, 3);
+  const { ceiling, maxQty } = getItemCeiling(item.description);
+  const segs: MiscSegment[] = [{ qty: at3.qty, unit_cost: at3.unit_cost }];
+  const extraRuns = m - 3;
+  const baseQ = Math.max(1, Math.min(maxQty, item.qty));
+  for (let i = 0; i < extraRuns; i++) {
+    const u = Math.min(ceiling, Math.max(item.unit_cost, at3.unit_cost));
+    segs.push({ qty: baseQ, unit_cost: Math.round(u * 100) / 100, isExtra: true });
+  }
+  return segs;
+}
+
+export function miscLineTotal(segments: MiscSegment[]): number {
+  return segments.reduce((s, seg) => s + seg.qty * seg.unit_cost, 0);
 }
 
 /** Discrete snap positions for the misc slider (1.0x–3.0x). */

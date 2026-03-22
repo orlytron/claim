@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import ClientSuggestionForm from "../components/ClientSuggestionForm";
 import { mergeClaimIncoming } from "../lib/claim-item-merge";
 import { supabase } from "../lib/supabase";
 import type { ClaimItem } from "../lib/types";
+import { ORIGINAL_CLAIM_ITEMS, ORIGINAL_TOTAL } from "../lib/original-claim-data";
 import { formatCurrency } from "../lib/utils";
 
 export type ParsedArtItem = {
@@ -75,6 +76,7 @@ function Badge({ status }: { status: string }) {
     pending: "bg-amber-100 text-amber-700",
     rejected: "bg-gray-100 text-gray-500",
     reviewed: "bg-blue-100 text-blue-700",
+    resolved: "bg-slate-200 text-slate-700",
     noted: "bg-sky-100 text-sky-700",
   };
   return (
@@ -181,8 +183,43 @@ export default function AdminPage() {
   const [artError, setArtError] = useState<string | null>(null);
   const [artAdding, setArtAdding] = useState(false);
 
+  const [claimItems, setClaimItems] = useState<ClaimItem[]>([]);
+  const [rawSuggestions, setRawSuggestions] = useState<ClientSuggestion[]>([]);
+  const [cacheStats, setCacheStats] = useState<{
+    total_cached: number;
+    verified_serpapi: number;
+    items_three_plus_options: number;
+  } | null>(null);
+
+  const adminStats = useMemo(() => {
+    const byRoom: Record<string, { count: number; value: number }> = {};
+    let upgraded = 0;
+    let bundleLines = 0;
+    let suggestionLines = 0;
+    for (const i of claimItems) {
+      const r = i.room || "Uncategorized";
+      if (!byRoom[r]) byRoom[r] = { count: 0, value: 0 };
+      byRoom[r]!.count += 1;
+      byRoom[r]!.value += i.qty * i.unit_cost;
+      if (i.source === "upgrade") upgraded += 1;
+      if (i.source === "bundle") bundleLines += 1;
+      if (i.source === "suggestion") suggestionLines += 1;
+    }
+    return { byRoom, upgraded, bundleLines, suggestionLines, totalLines: claimItems.length };
+  }, [claimItems]);
+
   useEffect(() => {
     fetchAll();
+  }, []);
+
+  useEffect(() => {
+    void fetch("/api/admin/cache-stats")
+      .then((r) => r.json())
+      .then((j) => {
+        if (j && typeof j.total_cached === "number") setCacheStats(j);
+        else setCacheStats(null);
+      })
+      .catch(() => setCacheStats(null));
   }, []);
 
   async function fetchAll() {
@@ -195,9 +232,14 @@ export default function AdminPage() {
 
     if (session) {
       setTargetValue(session.target_value ?? 1_600_000);
-      const items = (session.claim_items ?? []) as { qty: number; unit_cost: number }[];
+      const items = (session.claim_items ?? []) as ClaimItem[];
+      setClaimItems(items);
       setClaimTotal(items.reduce((s, i) => s + i.qty * i.unit_cost, 0));
       setRoomSummary(session.room_summary ?? []);
+    } else {
+      setClaimItems([]);
+      setClaimTotal(0);
+      setRoomSummary([]);
     }
 
     // Bundle decisions
@@ -242,6 +284,11 @@ export default function AdminPage() {
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
     setFeedback(combined);
+  }
+
+  async function markSuggestionResolved(id: string) {
+    await supabase.from("client_suggestions").update({ status: "resolved" }).eq("id", id);
+    await fetchAll();
   }
 
   const updateSuggestionResponse = useCallback(
@@ -404,6 +451,13 @@ export default function AdminPage() {
         <div>
           <h1 className="text-lg font-semibold text-gray-900">Admin View — Israel Claim</h1>
           <p className="text-xs text-gray-400">Claim #7579B726D · Internal use only</p>
+          {cacheStats ? (
+            <p className="mt-1 text-xs text-gray-500">
+              Upgrades cache: <strong>{cacheStats.total_cached}</strong> total ·{" "}
+              <strong>{cacheStats.verified_serpapi}</strong> verified (SerpAPI) ·{" "}
+              <strong>{cacheStats.items_three_plus_options}</strong> with 3+ options
+            </p>
+          ) : null}
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           {/* FIX 7: Copy live to test */}
@@ -417,7 +471,9 @@ export default function AdminPage() {
             </button>
           ) : (
             <div className="flex items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2">
-              <span className="text-xs text-red-700 font-medium">Remove all bundles & restore 209 original items?</span>
+              <span className="text-xs text-red-700 font-medium">
+                Reset to original {ORIGINAL_CLAIM_ITEMS.length} items {formatCurrency(ORIGINAL_TOTAL)}?
+              </span>
               <button onClick={handleReset} disabled={resetLoading} className="rounded bg-red-700 px-3 py-1 text-xs font-bold text-white hover:bg-red-800 disabled:opacity-50">
                 {resetLoading ? "Resetting…" : "Yes, Reset"}
               </button>
@@ -552,16 +608,101 @@ export default function AdminPage() {
               />
             </div>
 
+            <div className="mt-5 space-y-2 border-t border-gray-100 pt-4 text-sm">
+              <p className="text-gray-700">
+                <span className="font-semibold text-gray-900">{adminStats.totalLines}</span> line items ·{" "}
+                <span className="font-semibold text-gray-900">{adminStats.upgraded}</span> upgraded ·{" "}
+                <span className="font-semibold text-gray-900">{adminStats.bundleLines}</span> bundle /{" "}
+                <span className="font-semibold text-gray-900">{adminStats.suggestionLines}</span> suggestion adds
+              </p>
+              <p className="text-gray-600">
+                Gap to $1.6M goal:{" "}
+                <span className="font-bold tabular-nums text-gray-900">
+                  {formatCurrency(Math.max(0, 1_600_000 - claimTotal))}
+                </span>
+              </p>
+            </div>
+
+            <div className="mt-4 border-t border-gray-100 pt-4">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
+                Items & value by room (live session)
+              </p>
+              <div className="grid max-h-64 grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2">
+                {Object.entries(adminStats.byRoom)
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .map(([room, { count, value }]) => (
+                    <div key={room} className="flex items-center justify-between gap-2 rounded-lg bg-gray-50 px-3 py-2 text-sm">
+                      <span className="truncate text-gray-700">
+                        {room}{" "}
+                        <span className="text-xs text-gray-400">({count})</span>
+                      </span>
+                      <span className="shrink-0 tabular-nums font-medium text-gray-900">{formatCurrency(value)}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+
             {roomSummary.length > 0 && (
-              <div className="mt-5 border-t border-gray-100 pt-4 grid grid-cols-2 gap-x-6 gap-y-2">
-                {roomSummary.map((r) => (
-                  <div key={r.room} className="flex items-center justify-between text-sm">
-                    <span className="text-gray-700 truncate">{r.room}</span>
-                    <span className="tabular-nums font-medium text-gray-900 ml-2 shrink-0">
-                      {formatCurrency(r.subtotal)}
-                    </span>
-                  </div>
-                ))}
+              <div className="mt-4 border-t border-gray-100 pt-4">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Stored room_summary</p>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                  {roomSummary.map((r) => (
+                    <div key={r.room} className="flex items-center justify-between text-sm">
+                      <span className="truncate text-gray-700">{r.room}</span>
+                      <span className="ml-2 shrink-0 tabular-nums font-medium text-gray-900">
+                        {formatCurrency(r.subtotal)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* ── Client suggestions (table) ───────────────────────────────────── */}
+        <section>
+          <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-gray-400">All client suggestions</h2>
+          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+            {rawSuggestions.length === 0 ? (
+              <p className="py-10 text-center text-sm text-gray-400">No suggestions yet.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[640px] text-sm">
+                  <thead className="border-b border-gray-100 bg-gray-50 text-xs font-medium uppercase tracking-wider text-gray-400">
+                    <tr>
+                      <th className="px-4 py-3 text-left">Room</th>
+                      <th className="px-4 py-3 text-left">Message</th>
+                      <th className="px-4 py-3 text-right">Date</th>
+                      <th className="px-4 py-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {rawSuggestions.map((s) => (
+                      <tr key={s.id} className="align-top hover:bg-gray-50">
+                        <td className="px-4 py-3 text-gray-700">{s.room ?? "—"}</td>
+                        <td className="max-w-md px-4 py-3 text-gray-900">{s.message}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right text-xs text-gray-400">
+                          {formatDate(s.created_at)}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex flex-col items-end gap-1">
+                            <Badge status={s.status} />
+                            {s.status !== "resolved" ? (
+                              <button
+                                type="button"
+                                onClick={() => void markSuggestionResolved(s.id)}
+                                className="min-h-[36px] rounded-lg border border-gray-200 px-3 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                              >
+                                Mark resolved
+                              </button>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>

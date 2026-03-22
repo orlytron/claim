@@ -14,5 +14,9 @@ export function getSingletonKey(desc: string): string | null {
   if (d.includes("desk")) return "desk";
   if (d.includes("chandelier") || d.includes("pendant light")) return "pendant";
   if (d.includes("lamp") && d.includes("floor")) return "floor_lamp";
+  if (d.includes("peloton")) return "peloton";
+  if (d.includes("macbook") || d.includes("mac book")) return "macbook";
+  if (d.includes("espresso") && d.includes("machine")) return "espresso_machine";
+  if (/\btv\b|television|oled|qled/.test(d)) return "tv";
   return null;
 }
