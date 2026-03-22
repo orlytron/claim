@@ -167,13 +167,70 @@ function normDesc(s: string): string {
   return s.trim().toLowerCase();
 }
 
+/** Per-field checks before price-tier logic. */
+function strictValidateClaudeOption(el: unknown): ClaudeOption | null {
+  if (el === null || typeof el !== "object") return null;
+  const o = el as Record<string, unknown>;
+  if (typeof o.title !== "string" || !o.title.trim()) return null;
+  if (typeof o.brand !== "string" || !o.brand.trim()) return null;
+  if (typeof o.retailer !== "string" || !o.retailer.trim()) return null;
+  if (typeof o.url !== "string" || !o.url.trim().toLowerCase().startsWith("http")) return null;
+  let price: number;
+  if (typeof o.price === "number" && Number.isFinite(o.price)) {
+    price = o.price;
+  } else if (typeof o.price === "string") {
+    const n = parseFloat(o.price.replace(/[^0-9.]/g, ""));
+    if (!Number.isFinite(n) || n <= 0) return null;
+    price = n;
+  } else {
+    return null;
+  }
+  if (price <= 0) return null;
+  return {
+    title: o.title.trim(),
+    brand: o.brand.trim(),
+    retailer: o.retailer.trim(),
+    url: o.url.trim(),
+    price,
+    available_since: typeof o.available_since === "string" ? o.available_since : undefined,
+    tier: typeof o.tier === "string" ? o.tier : undefined,
+  };
+}
+
+function extractJsonArraySubstring(raw: string): string | null {
+  const m = raw.match(/\[[\s\S]*\]/);
+  return m ? m[0] : null;
+}
+
+/** Parse Claude output; retry once after stripping ``` fences. */
+function parseClaudeJsonArray(text: string): unknown[] | null {
+  const tryOnce = (src: string): unknown[] | null => {
+    const slice = extractJsonArraySubstring(src);
+    if (!slice) return null;
+    try {
+      const v = JSON.parse(slice) as unknown;
+      return Array.isArray(v) ? v : null;
+    } catch {
+      return null;
+    }
+  };
+
+  let out = tryOnce(text);
+  if (out) return out;
+
+  const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+  out = tryOnce(cleaned);
+  return out;
+}
+
 function toUpgradeProduct(o: ClaudeOption): UpgradeProductJson | null {
   const title = (o.title ?? "").trim();
   const brand = (o.brand ?? "").trim();
   const retailer = (o.retailer ?? "").trim();
   const url = (o.url ?? "").trim();
   const price = Number(o.price);
-  if (!title || !brand || !retailer || !Number.isFinite(price) || price <= 0) return null;
+  if (!title || !brand || !retailer || !url.toLowerCase().startsWith("http")) return null;
+  if (!Number.isFinite(price) || price <= 0) return null;
   return {
     title,
     brand,
@@ -198,15 +255,13 @@ function isBlockedRetailer(r: string, u: string): boolean {
 /**
  * Filter by price bounds, blocked retailers, then build increasing chain with ≥25% steps.
  */
-function validateOptions(
-  raw: ClaudeOption[],
-  originalPrice: number,
-  maxPrice: number
-): UpgradeProductJson[] {
+function validateOptions(raw: unknown[], originalPrice: number, maxPrice: number): UpgradeProductJson[] {
   const minP = originalPrice * 1.2;
   const candidates: UpgradeProductJson[] = [];
   for (const r of raw) {
-    const p = toUpgradeProduct(r);
+    const strict = strictValidateClaudeOption(r);
+    if (!strict) continue;
+    const p = toUpgradeProduct(strict);
     if (!p) continue;
     if (p.price <= minP || p.price > maxPrice) continue;
     if (isBlockedRetailer(p.retailer, p.url)) continue;
@@ -257,6 +312,68 @@ function resolveOriginalPrice(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Flat cache entries — no { mid, premium } wrapper. */
+type FlatCacheOption = {
+  title: string;
+  brand: string;
+  price: number;
+  retailer: string;
+  url: string;
+  available_since: string;
+};
+
+function toFlatOption(p: UpgradeProductJson): FlatCacheOption {
+  return {
+    title: p.title,
+    brand: p.brand,
+    price: p.price,
+    retailer: p.retailer,
+    url: p.url,
+    available_since: p.available_since,
+  };
+}
+
+function flatToFullUpgradeJson(f: FlatCacheOption): UpgradeProductJson {
+  return {
+    title: f.title,
+    brand: f.brand,
+    model: "",
+    price: f.price,
+    retailer: f.retailer,
+    url: f.url,
+    thumbnail: "",
+    available_since: f.available_since,
+    age_years: 0,
+    age_months: 0,
+    condition: "New",
+  };
+}
+
+function assertFlatOptionsBeforeUpsert(options: FlatCacheOption[]): void {
+  options.forEach((opt, i) => {
+    if (typeof opt.price !== "number") {
+      throw new Error(`Option ${i} has no price`);
+    }
+    if (!opt.title) {
+      throw new Error(`Option ${i} has no title`);
+    }
+    if ("mid" in opt) {
+      throw new Error(`Option ${i} is nested — must be flat`);
+    }
+  });
+}
+
+function verifyOptionsSerializable(optionsColumn: FlatCacheOption[]): FlatCacheOption[] | null {
+  try {
+    const s = JSON.stringify(optionsColumn);
+    const reparsed = JSON.parse(s) as unknown;
+    if (!Array.isArray(reparsed)) return null;
+    return reparsed as FlatCacheOption[];
+  } catch {
+    return null;
+  }
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -357,21 +474,15 @@ Return ONLY a JSON array, no other text:
       });
       const block = response.content[0];
       const text = block.type === "text" ? block.text : "";
-      const jsonMatch = text.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {
-        console.log(`SKIP (no JSON array): ${description}`);
-        await sleep(300);
-        continue;
-      }
-      const parsed = JSON.parse(jsonMatch[0]) as ClaudeOption[];
-      if (!Array.isArray(parsed) || parsed.length === 0) {
-        console.log(`SKIP (empty array): ${description}`);
+      const parsed = parseClaudeJsonArray(text);
+      if (!parsed || parsed.length === 0) {
+        console.error(`ERROR JSON parse: ${description} — could not parse array after cleanup`);
         await sleep(300);
         continue;
       }
       validated = validateOptions(parsed, originalPrice, maxPrice);
     } catch (e) {
-      console.warn(`ERROR ${description}:`, e);
+      console.error(`ERROR ${description}:`, e);
       await sleep(300);
       continue;
     }
@@ -382,16 +493,31 @@ Return ONLY a JSON array, no other text:
       continue;
     }
 
-    const optionsColumn = validated.map((p) => ({ mid: p, premium: null as UpgradeProductJson | null }));
-    const midCol = validated[0]!;
-    const premiumCol = hasPremium && validated.length >= 2 ? validated[validated.length - 1]! : null;
+    const optionsFlat: FlatCacheOption[] = validated.map(toFlatOption);
+    try {
+      assertFlatOptionsBeforeUpsert(optionsFlat);
+    } catch (e) {
+      console.error(`ERROR flat options: ${description}`, e);
+      await sleep(300);
+      continue;
+    }
+
+    const verifiedOptions = verifyOptionsSerializable(optionsFlat);
+    if (!verifiedOptions) {
+      console.error(`ERROR verify options JSON: ${description} — stringify/parse failed`);
+      await sleep(300);
+      continue;
+    }
+
+    const midCol = flatToFullUpgradeJson(verifiedOptions[0]!);
+    const premiumCol = flatToFullUpgradeJson(verifiedOptions[verifiedOptions.length - 1]!);
 
     const { error: upErr } = await supabase
       .from("upgrades_cache")
       .update({
         mid: midCol,
         premium: premiumCol,
-        options: optionsColumn,
+        options: verifiedOptions,
         created_at: new Date().toISOString(),
       })
       .eq("id", row.id);
@@ -399,7 +525,7 @@ Return ONLY a JSON array, no other text:
     if (upErr) {
       console.error(`UPDATE failed ${description}:`, upErr.message);
     } else {
-      const priceStr = validated.map((p) => `$${p}`).join(" / ");
+      const priceStr = validated.map((p) => `$${p.price}`).join(" / ");
       if (!hasPremium) {
         console.log(`SKIP (no premium): ${description} — $${originalPrice} → ${priceStr}`);
       } else {
@@ -409,6 +535,20 @@ Return ONLY a JSON array, no other text:
 
     await sleep(300);
   }
+
+  const { data: check } = await supabase
+    .from("upgrades_cache")
+    .select("item_description, options")
+    .not("options", "eq", "[]")
+    .limit(3);
+
+  console.log("\nSample stored options:");
+  check?.forEach((row) => {
+    const opts = row.options as FlatCacheOption[] | null;
+    console.log(row.item_description);
+    console.log("  Option 1:", opts?.[0]?.title, "$" + String(opts?.[0]?.price ?? ""));
+    console.log("  Option 2:", opts?.[1]?.title, "$" + String(opts?.[1]?.price ?? ""));
+  });
 
   console.log("\nDone.");
 }

@@ -137,6 +137,48 @@ function normalizeOptionSet(raw: unknown, cleanDesc: string): UpgradeOptionSet |
   return { mid, premium };
 }
 
+/** Flat cache row: { title, brand, price, retailer, url, ... } without mid/premium wrapper */
+function isFlatProductEntry(el: unknown): boolean {
+  if (!el || typeof el !== "object") return false;
+  if ("mid" in el) return false;
+  const o = el as Record<string, unknown>;
+  return typeof o.title === "string" && typeof o.price === "number";
+}
+
+function normalizeFlatOptionToSet(el: unknown, cleanDesc: string): UpgradeOptionSet | null {
+  if (!isFlatProductEntry(el)) return null;
+  const o = el as Record<string, unknown>;
+  const titleStr = typeof o.title === "string" ? o.title : cleanDesc;
+  const mid = fillFallbacks(
+    {
+      title: titleStr,
+      brand: typeof o.brand === "string" ? o.brand : "",
+      price: Number(o.price),
+      retailer: typeof o.retailer === "string" ? o.retailer : "",
+      url: typeof o.url === "string" ? o.url : "",
+      available_since: typeof o.available_since === "string" ? o.available_since : undefined,
+    },
+    titleStr || cleanDesc
+  );
+  return { mid, premium: null };
+}
+
+/** Normalize legacy { mid, premium } rows or flat products into a flat list for appending. */
+function flattenStoredOptions(opts: unknown[]): unknown[] {
+  const flat: unknown[] = [];
+  for (const el of opts) {
+    if (!el || typeof el !== "object") continue;
+    if ("mid" in el && (el as { mid?: unknown }).mid && typeof (el as { mid: unknown }).mid === "object") {
+      flat.push((el as { mid: unknown }).mid);
+      const pr = (el as { premium?: unknown }).premium;
+      if (pr && typeof pr === "object") flat.push(pr);
+    } else if (isFlatProductEntry(el)) {
+      flat.push(el);
+    }
+  }
+  return flat;
+}
+
 function optionSetsFromRow(
   row: { mid: unknown; premium: unknown; options?: unknown },
   cleanDesc: string,
@@ -603,16 +645,19 @@ export async function POST(req: NextRequest) {
       .ilike("item_description", cleanDesc)
       .maybeSingle();
 
-    const newPair = { mid: fresh.mid, premium: fresh.premium };
-
     if (existing?.id) {
       const rawOpts: unknown[] = Array.isArray(existing.options)
         ? [...(existing.options as unknown[])]
         : [];
-      if (rawOpts.length === 0 && existing.mid) {
-        rawOpts.push({ mid: existing.mid, premium: existing.premium });
+      let flat = flattenStoredOptions(rawOpts);
+      if (flat.length === 0 && existing.mid) {
+        flat = [existing.mid, existing.premium].filter((x) => x != null && typeof x === "object");
       }
-      const serialized = [...rawOpts, newPair];
+      flat.push(fresh.mid);
+      if (fresh.premium && Math.abs(fresh.premium.price - fresh.mid.price) > 0.01) {
+        flat.push(fresh.premium);
+      }
+      const serialized = flat;
 
       const { error: upErr } = await supabaseAdmin
         .from("upgrades_cache")
@@ -634,13 +679,17 @@ export async function POST(req: NextRequest) {
           .eq("id", existing.id);
       }
     } else {
+      const initialFlat: unknown[] = [fresh.mid];
+      if (fresh.premium && Math.abs(fresh.premium.price - fresh.mid.price) > 0.01) {
+        initialFlat.push(fresh.premium);
+      }
       await supabaseAdmin.from("upgrades_cache").insert({
         item_description: cleanDesc,
         brand: brandStr,
         search_query: `${brandStr ? brandStr + " " : ""}${cleanDesc} 2024${catStr ? " " + catStr : ""}`.trim(),
         mid: fresh.mid,
         premium: fresh.premium,
-        options: [newPair],
+        options: initialFlat,
       });
     }
   } catch (e) {
