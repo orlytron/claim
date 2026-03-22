@@ -13,37 +13,39 @@ import {
 import type { ClaimItem } from "../lib/types";
 import { formatCurrency } from "../lib/utils";
 
-export type SuggestionConfirmBannerProps = {
+export type SuggestionConfirmModalProps = {
+  open: boolean;
   roomSlug: string;
   roomName: string;
   claimItems: ClaimItem[];
   list: SuggestedUpgrade[];
   onApply: (nextClaim: ClaimItem[]) => Promise<void>;
-  onSkip: () => void;
+  onDismiss: () => void;
   disabled?: boolean;
 };
 
 /**
- * First-visit banner: client confirms which scripted suggestions to apply (nothing auto-applies).
+ * Centered modal for first-visit / “view initial suggestions” — nothing auto-applies.
  */
-export default function SuggestionConfirmBanner({
+export default function SuggestionConfirmModal({
+  open,
   roomSlug,
   roomName,
   claimItems,
   list,
   onApply,
-  onSkip,
+  onDismiss,
   disabled,
-}: SuggestionConfirmBannerProps) {
+}: SuggestionConfirmModalProps) {
   const [expanded, setExpanded] = useState(false);
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    if (!open) return;
     setExpanded(false);
-    const all = new Set(list.map((_, i) => i));
-    setChecked(all);
-  }, [roomSlug, list]);
+    setChecked(new Set(list.map((_, i) => i)));
+  }, [open, roomSlug, list]);
 
   const collapsedIdx = useMemo(
     () => suggestionCollapsedRowIndices(claimItems, roomName, list),
@@ -83,25 +85,44 @@ export default function SuggestionConfirmBanner({
     }
   }
 
+  if (!open || list.length === 0) return null;
+
   return (
-    <div className="relative z-20 w-full border-b border-amber-200 bg-gradient-to-b from-amber-50 to-amber-50/40 px-4 py-5 md:px-8">
-      <div className="mx-auto max-w-[1100px] rounded-2xl border border-amber-200/80 bg-white/95 p-5 shadow-sm md:p-6">
-        <p className="text-sm font-bold uppercase tracking-wide text-amber-900">💡 Suggested changes</p>
-        <p className="mt-2 text-sm text-gray-600">
-          Select what to apply. Nothing is added until you confirm.
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="suggestion-modal-title"
+      onClick={onDismiss}
+    >
+      <div
+        className="relative max-h-[min(90vh,720px)] w-full max-w-lg overflow-y-auto rounded-2xl border border-amber-200 bg-white p-5 shadow-2xl md:max-w-xl md:p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={onDismiss}
+          disabled={busy}
+          className="absolute right-3 top-3 rounded-lg p-2 text-lg leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+          aria-label="Close"
+        >
+          ✕
+        </button>
+        <p id="suggestion-modal-title" className="pr-10 text-sm font-bold uppercase tracking-wide text-amber-900">
+          💡 Suggested changes
         </p>
+        <p className="mt-2 text-sm text-gray-600">Select what to apply. Nothing changes until you tap Apply.</p>
         <ul className="mt-4 space-y-2">
           {rowIndices.map((i) => {
             const line = formatSuggestedUpgradeLineWithClaim(claimItems, roomName, list[i]!);
             const delta = suggestionDeltaForClaim(claimItems, roomName, list[i]!);
-            const deltaLabel =
-              delta > 0 ? `+${formatCurrency(delta)}` : delta < 0 ? formatCurrency(delta) : formatCurrency(0);
+            const deltaLabel = delta > 0 ? `+${formatCurrency(delta)}` : delta < 0 ? formatCurrency(delta) : formatCurrency(0);
             const deltaClass =
               delta > 0 ? "text-[#16A34A]" : delta < 0 ? "text-red-600" : "text-[#6B7280]";
             return (
               <li
                 key={i}
-                className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-100 bg-gray-50/80 px-3 py-2 text-sm"
+                className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-100 bg-gray-50/90 px-3 py-2 text-sm"
               >
                 <input
                   type="checkbox"
@@ -130,7 +151,7 @@ export default function SuggestionConfirmBanner({
             type="button"
             disabled={busy || disabled || checked.size === 0}
             onClick={() => void apply()}
-            className="rounded-lg bg-[#2563EB] px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-40"
+            className="min-h-[48px] rounded-xl bg-[#2563EB] px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-40"
           >
             ✓ Apply selected{" "}
             {selectedTotalDelta >= 0 ? `+${formatCurrency(selectedTotalDelta)}` : formatCurrency(selectedTotalDelta)}
@@ -138,10 +159,10 @@ export default function SuggestionConfirmBanner({
           <button
             type="button"
             disabled={busy}
-            onClick={onSkip}
-            className="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+            onClick={onDismiss}
+            className="min-h-[48px] rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50"
           >
-            Skip — I&apos;ll do this manually
+            Skip for now
           </button>
         </div>
       </div>

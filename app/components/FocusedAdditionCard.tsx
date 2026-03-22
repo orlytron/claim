@@ -1,132 +1,205 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Bundle, BundleItem, BundleTiersDef, TierLineSource } from "../lib/bundles-data";
-import { getSingletonKey } from "../lib/bundle-room-singleton-key";
+import Link from "next/link";
+import type { Bundle, BundleItem, BundleTiers3, BundleTiers5, BundleTiersDef } from "../lib/bundles-data";
+import { isBundleTiers5 } from "../lib/bundles-data";
 import type { ClaimItem } from "../lib/types";
 import { formatCurrency } from "../lib/utils";
 import { supabase } from "../lib/supabase";
 
-function lineKey(l: Pick<BundleItem, "description" | "unit_cost" | "qty">, idx: number) {
-  return `${idx}|${l.description}|${l.unit_cost}|${l.qty}`;
+const SINGLETONS = [
+  "peloton",
+  "treadmill",
+  "sauna",
+  "espresso",
+  "washer",
+  "dryer",
+  "piano",
+  "refrigerator",
+  "dishwasher",
+  "oven",
+  "range",
+  "wine fridge",
+  "ice machine",
+] as const;
+
+function lineTotal(i: BundleItem): number {
+  return i.total ?? i.unit_cost * i.qty;
 }
 
-function toBI(l: TierLineSource): BundleItem {
+function ensureTotals(items: BundleItem[]): BundleItem[] {
+  return items.map((i) => ({ ...i, total: lineTotal(i) }));
+}
+
+function isSingletonDesc(desc: string): boolean {
+  const d = desc.toLowerCase();
+  return SINGLETONS.some((s) => d.includes(s));
+}
+
+function singletonInClaim(desc: string, existingItems: ClaimItem[]): boolean {
+  if (!isSingletonDesc(desc)) return false;
+  return existingItems.some((c) => isSingletonDesc(c.description));
+}
+
+function autoGenerateTiers3(bundle: Bundle): BundleTiers3 {
+  const items = ensureTotals([...bundle.items]).sort((a, b) => b.unit_cost - a.unit_cost);
+  const n = items.length;
+  const third = Math.ceil(n / 3);
+  const essentialItems = items.slice(n - third);
+  const middleStart = Math.max(0, n - third * 2);
+  const middleEnd = n - third;
+  const completeItems = items.slice(middleStart, middleEnd);
+  const fullItems = items.slice(0, middleStart);
+  const sum = (arr: BundleItem[]) => arr.reduce((s, i) => s + lineTotal(i), 0);
   return {
-    description: l.description,
-    brand: l.brand,
-    qty: l.qty,
-    unit_cost: l.unit_cost,
-    total: l.qty * l.unit_cost,
-    category: l.category,
+    essential: { total: sum(essentialItems), items: essentialItems },
+    complete: { total: sum(completeItems), items: completeItems },
+    full: { total: sum(fullItems), items: fullItems },
   };
 }
 
-function tierRows(
-  tiers: BundleTiersDef,
-  tierIdx: 0 | 1 | 2
-): { row: BundleItem; introducedAt: 0 | 1 | 2; idx: number }[] {
-  const essential: TierLineSource[] = tiers.essential.items ?? [];
-  const completeAdds: TierLineSource[] = tiers.complete.adds ?? [];
-  const fullAdds: TierLineSource[] = tiers.full.adds ?? [];
-  const out: { row: BundleItem; introducedAt: 0 | 1 | 2; idx: number }[] = [];
-  let i = 0;
-  for (const l of essential) {
-    out.push({ row: toBI(l), introducedAt: 0, idx: i++ });
+/** Top-priced slices → incremental tier blocks (5 steps). */
+function autoGenerateTiers5(bundle: Bundle): BundleTiers5 {
+  const items = ensureTotals([...bundle.items]).sort((a, b) => b.unit_cost - a.unit_cost);
+  const n = items.length;
+  const fifth = Math.max(1, Math.ceil(n / 5));
+  const b0 = items.slice(0, Math.min(n, fifth));
+  const b1 = items.slice(Math.min(n, fifth), Math.min(n, fifth * 2));
+  const b2 = items.slice(Math.min(n, fifth * 2), Math.min(n, fifth * 3));
+  const b3 = items.slice(Math.min(n, fifth * 3), Math.min(n, fifth * 4));
+  const b4 = items.slice(Math.min(n, fifth * 4), n);
+  const sum = (arr: BundleItem[]) => arr.reduce((s, i) => s + lineTotal(i), 0);
+  return {
+    essential: { total: sum(b0), items: b0 },
+    enhanced: { total: sum(b1), items: b1 },
+    complete: { total: sum(b2), items: b2 },
+    full: { total: sum(b3), items: b3 },
+    ultimate: { total: sum(b4), items: b4 },
+  };
+}
+
+function effectiveTiersDef(bundle: Bundle): BundleTiersDef {
+  if (bundle.tiers) return bundle.tiers;
+  if (bundle.items.length === 0) {
+    return {
+      essential: { total: 0, items: [] },
+      complete: { total: 0, items: [] },
+      full: { total: 0, items: [] },
+    };
   }
-  if (tierIdx >= 1) {
-    for (const l of completeAdds) {
-      out.push({ row: toBI(l), introducedAt: 1, idx: i++ });
-    }
+  return bundle.items.length >= 8 ? autoGenerateTiers5(bundle) : autoGenerateTiers3(bundle);
+}
+
+function tierBlocksList(t: BundleTiersDef): BundleItem[][] {
+  if (isBundleTiers5(t)) {
+    return [
+      t.essential.items,
+      t.enhanced.items,
+      t.complete.items,
+      t.full.items,
+      t.ultimate.items,
+    ];
   }
-  if (tierIdx >= 2) {
-    for (const l of fullAdds) {
-      out.push({ row: toBI(l), introducedAt: 2, idx: i++ });
+  return [t.essential.items, t.complete.items, t.full.items];
+}
+
+function cumulativeTotals(blocks: BundleItem[][]): number[] {
+  const out: number[] = [];
+  let s = 0;
+  for (const b of blocks) {
+    s += b.reduce((a, i) => a + lineTotal(i), 0);
+    out.push(Math.round(s * 100) / 100);
+  }
+  return out;
+}
+
+type RowMeta = { row: BundleItem; introducedAt: number; idx: number };
+
+function rowsForTier(blocks: BundleItem[][], tierIdx: number): RowMeta[] {
+  const out: RowMeta[] = [];
+  let idx = 0;
+  for (let b = 0; b <= tierIdx; b++) {
+    for (const row of blocks[b] ?? []) {
+      out.push({ row, introducedAt: b, idx: idx++ });
     }
   }
   return out;
 }
 
-function flatBundleToTiers(b: Bundle): BundleTiersDef {
-  const items: TierLineSource[] = b.items.map((bi) => ({
-    description: bi.description,
-    brand: bi.brand,
-    unit_cost: bi.unit_cost,
-    qty: bi.qty,
-    category: bi.category,
-  }));
-  const total = items.reduce((s, l) => s + l.qty * l.unit_cost, 0);
-  return {
-    essential: { total, items },
-    complete: { total, adds: [] },
-    full: { total, adds: [] },
-  };
+function lineKey(r: RowMeta) {
+  return `${r.introducedAt}-${r.idx}-${r.row.description}-${r.row.unit_cost}-${r.row.qty}`;
 }
 
 export type FocusedAdditionCardProps = {
   bundle: Bundle;
   roomName: string;
-  claimItems: ClaimItem[];
-  onAdd: (items: ClaimItem[]) => Promise<void> | void;
+  existingItems: ClaimItem[];
+  onAdd: (items: ClaimItem[]) => void | Promise<void>;
+  sessionId: string;
   disabled?: boolean;
 };
 
 export default function FocusedAdditionCard({
   bundle,
   roomName,
-  claimItems,
+  existingItems,
   onAdd,
+  sessionId: _sessionId,
   disabled,
 }: FocusedAdditionCardProps) {
-  const tiersDef = bundle.tiers ?? flatBundleToTiers(bundle);
-  const hasComplete = (tiersDef.complete.adds?.length ?? 0) > 0;
-  const hasFull = (tiersDef.full.adds?.length ?? 0) > 0;
-  const maxTierIdx = !hasComplete && !hasFull ? 0 : !hasFull ? 1 : 2;
+  void _sessionId;
 
-  const [tierIdx, setTierIdx] = useState<0 | 1 | 2>(() => {
-    if (maxTierIdx === 0) return 0;
-    return bundle.sweet_spot && maxTierIdx >= 1 ? 1 : 0;
-  });
+  const tiersDef = useMemo(() => effectiveTiersDef(bundle), [bundle]);
+  const five = isBundleTiers5(tiersDef);
+  const blocks = useMemo(() => tierBlocksList(tiersDef), [tiersDef]);
+  const maxTierIdx = Math.max(0, blocks.filter((b) => b.length > 0).length - 1);
+  const effectiveMax = blocks.every((b) => b.length === 0) ? 0 : maxTierIdx;
 
+  const [tierIdx, setTierIdx] = useState(0);
   useEffect(() => {
-    if (tierIdx > maxTierIdx) setTierIdx(maxTierIdx as 0 | 1 | 2);
-  }, [maxTierIdx, tierIdx]);
+    const def = five ? 2 : 1;
+    setTierIdx(Math.min(def, effectiveMax));
+  }, [bundle.bundle_code, five, effectiveMax]);
 
-  const effectiveTier = Math.min(tierIdx, maxTierIdx) as 0 | 1 | 2;
-  const rows = useMemo(() => tierRows(tiersDef, effectiveTier), [tiersDef, effectiveTier]);
+  const effectiveTier = Math.min(tierIdx, effectiveMax);
+  const rows = useMemo(() => rowsForTier(blocks, effectiveTier), [blocks, effectiveTier]);
+  const tierTotals = useMemo(() => cumulativeTotals(blocks), [blocks]);
 
   const [checked, setChecked] = useState<Set<string>>(new Set());
   useEffect(() => {
     const next = new Set<string>();
     for (const r of rows) {
-      const k = lineKey(r.row, r.idx);
-      const slot = getSingletonKey(r.row.description);
-      const conflict =
-        slot != null &&
-        claimItems.some(
-          (c) => c.room === roomName && getSingletonKey(c.description) === slot
-        );
-      if (!conflict) next.add(k);
+      const k = lineKey(r);
+      if (!singletonInClaim(r.row.description, existingItems)) next.add(k);
     }
     setChecked(next);
-  }, [bundle.bundle_code, effectiveTier, rows, claimItems, roomName]);
+  }, [bundle.bundle_code, effectiveTier, rows, existingItems]);
 
-  const [customOpen, setCustomOpen] = useState(false);
+  const [showCustom, setShowCustom] = useState(false);
   const [cDesc, setCDesc] = useState("");
   const [cPrice, setCPrice] = useState("");
   const [cQty, setCQty] = useState("1");
-  const [addedFlash, setAddedFlash] = useState(false);
+  const [added, setAdded] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setAdded(false);
+    setShowCustom(false);
+  }, [bundle.bundle_code]);
 
   const checkedTotal = useMemo(() => {
     let s = 0;
     for (const r of rows) {
-      if (checked.has(lineKey(r.row, r.idx))) s += r.row.total;
+      if (checked.has(lineKey(r))) s += lineTotal(r.row);
     }
-    return s;
+    return Math.round(s * 100) / 100;
   }, [rows, checked]);
 
-  const selectedCount = useMemo(() => rows.filter((r) => checked.has(lineKey(r.row, r.idx))).length, [rows, checked]);
+  const selectedCount = useMemo(
+    () => rows.filter((r) => checked.has(lineKey(r))).length,
+    [rows, checked]
+  );
 
   const toggle = useCallback((k: string) => {
     setChecked((prev) => {
@@ -138,10 +211,10 @@ export default function FocusedAdditionCard({
   }, []);
 
   const handleAddToClaim = useCallback(async () => {
-    if (disabled || busy) return;
+    if (disabled || busy || added) return;
     const toAdd: ClaimItem[] = [];
     for (const r of rows) {
-      if (!checked.has(lineKey(r.row, r.idx))) continue;
+      if (!checked.has(lineKey(r))) continue;
       const bi = r.row;
       toAdd.push({
         room: roomName,
@@ -161,12 +234,11 @@ export default function FocusedAdditionCard({
     setBusy(true);
     try {
       await onAdd(toAdd);
-      setAddedFlash(true);
-      window.setTimeout(() => setAddedFlash(false), 2200);
+      setAdded(true);
     } finally {
       setBusy(false);
     }
-  }, [disabled, busy, rows, checked, roomName, onAdd]);
+  }, [disabled, busy, added, rows, checked, roomName, onAdd]);
 
   const addCustom = useCallback(async () => {
     if (disabled || busy) return;
@@ -194,100 +266,111 @@ export default function FocusedAdditionCard({
         status: "pending",
       });
       await onAdd([line]);
-      setCustomOpen(false);
+      setShowCustom(false);
       setCDesc("");
       setCPrice("");
       setCQty("1");
-      setAddedFlash(true);
-      window.setTimeout(() => setAddedFlash(false), 2200);
     } finally {
       setBusy(false);
     }
   }, [disabled, busy, cDesc, cPrice, cQty, roomName, bundle.name, onAdd]);
 
-  const tierTotals = [tiersDef.essential.total, tiersDef.complete.total, tiersDef.full.total];
+  const labelRow = five
+    ? (["Essential", "Enhanced", "Complete ★", "Full", "Ultimate"] as const)
+    : (["Essential", "Complete ★", "Full"] as const);
 
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-lg font-semibold text-gray-900 [overflow-wrap:anywhere]">{bundle.name}</p>
-          <p className="mt-1 text-sm text-[#6B7280] [overflow-wrap:anywhere]">{bundle.description}</p>
-        </div>
+      <div className="min-w-0">
+        <p className="text-lg font-semibold text-gray-900 [overflow-wrap:anywhere]">{bundle.name}</p>
+        <p className="mt-1 text-sm text-[#6B7280] [overflow-wrap:anywhere]">{bundle.description}</p>
       </div>
 
-      {maxTierIdx > 0 ? (
+      {effectiveMax > 0 ? (
         <div className="mt-5">
-          <div className="flex justify-between text-xs font-medium text-[#6B7280]">
-            <span>Essential</span>
-            <span>
-              Complete{bundle.sweet_spot ? " ★" : ""}
-            </span>
-            <span>Full</span>
+          <div
+            className={`grid gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-[#6B7280] sm:text-[11px] ${
+              five ? "grid-cols-5" : "grid-cols-3"
+            }`}
+          >
+            {labelRow.map((lab, i) => (
+              <span
+                key={lab}
+                className={`text-center ${effectiveTier === i ? "text-[#2563EB]" : ""} ${
+                  i > effectiveMax ? "opacity-30" : ""
+                }`}
+              >
+                {lab}
+                {lab.includes("★") ? <span className="sr-only"> recommended</span> : null}
+              </span>
+            ))}
           </div>
           <input
             type="range"
             min={0}
-            max={maxTierIdx}
+            max={effectiveMax}
             step={1}
             value={effectiveTier}
-            onChange={(e) => setTierIdx(Number(e.target.value) as 0 | 1 | 2)}
-            disabled={disabled}
-            className="mt-2 h-2 w-full accent-[#2563EB]"
+            onChange={(e) => setTierIdx(Number(e.target.value))}
+            disabled={disabled || added}
+            className="mt-2 h-3 w-full accent-[#2563EB]"
             aria-label="Bundle tier"
           />
-          <div className="mt-1 flex justify-between text-xs tabular-nums text-gray-800">
-            <span>{formatCurrency(tierTotals[0] ?? 0)}</span>
-            {maxTierIdx >= 1 ? <span>{formatCurrency(tierTotals[1] ?? 0)}</span> : <span />}
-            {maxTierIdx >= 2 ? <span>{formatCurrency(tierTotals[2] ?? 0)}</span> : <span />}
+          <div
+            className={`mt-1 grid gap-0.5 px-0.5 text-[10px] font-semibold tabular-nums text-gray-900 sm:text-xs ${
+              five ? "grid-cols-5" : "grid-cols-3"
+            }`}
+          >
+            {tierTotals.map((t, i) => (
+              <span key={i} className={`text-center ${i > effectiveMax ? "opacity-30" : ""}`}>
+                {formatCurrency(t)}
+              </span>
+            ))}
           </div>
         </div>
       ) : null}
 
-      <ul className="mt-5 space-y-3">
+      <ul className="mt-5 space-y-2">
         {rows.map((r) => {
-          const k = lineKey(r.row, r.idx);
+          const k = lineKey(r);
           const isNew = r.introducedAt === effectiveTier && effectiveTier > 0;
-          const slot = getSingletonKey(r.row.description);
-          const conflict =
-            slot != null &&
-            claimItems.some(
-              (c) => c.room === roomName && getSingletonKey(c.description) === slot
-            );
+          const conflict = singletonInClaim(r.row.description, existingItems);
+          const row = r.row;
+          const ext = lineTotal(row);
           return (
-            <li key={k} className="flex gap-2 text-sm">
+            <li
+              key={k}
+              className={`flex gap-3 rounded-xl border px-3 py-2.5 text-sm ${
+                conflict ? "border-amber-200 bg-amber-50/50" : "border-gray-100 bg-white"
+              }`}
+            >
               <input
                 type="checkbox"
                 className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
                 checked={checked.has(k)}
-                disabled={disabled || busy}
+                disabled={disabled || busy || added}
                 onChange={() => toggle(k)}
               />
               <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
                   <span className="font-medium text-gray-900 [overflow-wrap:anywhere]">
-                    {r.row.description}
-                    {r.row.qty > 1 ? (
-                      <span className="text-[#6B7280]"> ×{r.row.qty}</span>
-                    ) : null}
+                    {row.description}
+                    {row.qty > 1 ? <span className="whitespace-nowrap"> ×{row.qty}</span> : null}
                     {isNew ? (
-                      <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-blue-600">
-                        New at this level
-                      </span>
+                      <span className="ml-2 whitespace-nowrap text-[11px] font-bold text-blue-600">★ New</span>
                     ) : null}
                   </span>
-                  <span className="shrink-0 tabular-nums font-semibold text-gray-900">
-                    {r.row.qty > 1 ? (
-                      <>
-                        {formatCurrency(r.row.unit_cost * r.row.qty)} total
-                      </>
-                    ) : (
-                      formatCurrency(r.row.unit_cost)
-                    )}
+                  <span className="shrink-0 text-right text-sm font-semibold tabular-nums text-gray-900">
+                    {formatCurrency(ext)}
                   </span>
                 </div>
+                {row.qty > 1 ? (
+                  <p className="mt-0.5 text-xs tabular-nums text-[#6B7280]">
+                    ({formatCurrency(row.unit_cost)} each)
+                  </p>
+                ) : null}
                 {conflict ? (
-                  <p className="mt-1 text-xs text-amber-800">⚠️ You may already have this — uncheck to skip.</p>
+                  <p className="mt-1 text-xs font-medium text-amber-900">⚠ May have this</p>
                 ) : null}
               </div>
             </li>
@@ -297,19 +380,20 @@ export default function FocusedAdditionCard({
 
       <button
         type="button"
-        onClick={() => setCustomOpen((o) => !o)}
-        className="mt-4 text-sm font-semibold text-[#2563EB] underline-offset-2 hover:underline"
+        onClick={() => setShowCustom((o) => !o)}
+        disabled={disabled || added}
+        className="mt-4 text-sm font-semibold text-[#2563EB] underline-offset-2 hover:underline disabled:opacity-40"
       >
-        ✏️ + Add a custom item
+        + Add custom item to this set
       </button>
-      {customOpen ? (
-        <div className="mt-3 rounded-xl border border-gray-100 bg-gray-50/80 p-4">
+      {showCustom && !added ? (
+        <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50 p-4">
           <label className="block text-xs font-medium text-gray-700">Description</label>
           <input
             className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
             value={cDesc}
             onChange={(e) => setCDesc(e.target.value)}
-            placeholder="e.g. Vintage lamp"
+            placeholder="Item description"
           />
           <div className="mt-3 flex flex-wrap gap-3">
             <div>
@@ -334,28 +418,40 @@ export default function FocusedAdditionCard({
           </div>
           <button
             type="button"
-            disabled={busy || disabled || !cDesc.trim()}
+            disabled={busy || !cDesc.trim()}
             onClick={() => void addCustom()}
             className="mt-3 rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-40"
           >
-            Add
+            Add to Set
           </button>
         </div>
       ) : null}
 
-      <p className="mt-4 text-sm text-gray-700">
-        Selected: <span className="font-semibold">{selectedCount}</span> items
-      </p>
-      <button
-        type="button"
-        disabled={disabled || busy || selectedCount === 0}
-        onClick={() => void handleAddToClaim()}
-        className={`mt-3 flex h-12 w-full items-center justify-center rounded-xl text-base font-bold transition ${
-          addedFlash ? "bg-[#16A34A] text-white" : "bg-[#2563EB] text-white hover:bg-blue-700"
-        } disabled:opacity-40`}
-      >
-        {addedFlash ? "✓ Added  ·  View in claim" : `+ Add to Claim  +${formatCurrency(checkedTotal)}`}
-      </button>
+      <div className="mt-4 border-t border-gray-100 pt-4 text-sm text-gray-800">
+        <span className="font-semibold">{selectedCount}</span> items selected ·{" "}
+        <span className="tabular-nums font-bold text-gray-900">{formatCurrency(checkedTotal)}</span>
+      </div>
+
+      {added ? (
+        <div className="mt-3 flex min-h-[48px] items-center justify-center gap-3 rounded-xl bg-[#16A34A] px-4 py-3 text-base font-bold text-white">
+          <span>✓ Added</span>
+          <Link
+            href="#claim-items-anchor"
+            className="rounded-lg bg-white/20 px-3 py-1 text-sm font-semibold hover:bg-white/30"
+          >
+            View in claim
+          </Link>
+        </div>
+      ) : (
+        <button
+          type="button"
+          disabled={disabled || busy || selectedCount === 0}
+          onClick={() => void handleAddToClaim()}
+          className="mt-3 flex min-h-[48px] w-full items-center justify-center rounded-xl bg-[#2563EB] text-base font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
+        >
+          + Add to Claim +{formatCurrency(checkedTotal)}
+        </button>
+      )}
     </div>
   );
 }

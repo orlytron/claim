@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { loadSession, saveSession } from "../lib/session";
@@ -21,7 +21,7 @@ const ROOMS: { name: string; slug: string; display?: string }[] = [
   { name: "Bedroom Rafe", slug: "bedroom-rafe" },
   { name: "Patio", slug: "patio" },
   { name: "Garage", slug: "garage" },
-  { name: "Bathroom Master", slug: "bathroom-master" },
+  { name: "Bathroom Master", slug: "bathroom-master", display: "Master Bedroom" },
   { name: "Bathroom White", slug: "bathroom-white" },
 ];
 
@@ -98,6 +98,7 @@ export default function ReviewDashboard() {
   const [claimGoal, setClaimGoal] = useState(CLAIM_GOAL_DEFAULT);
   const [toast, setToast] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const exportBusyRef = useRef(false);
 
   useEffect(() => {
     if (!toast) return;
@@ -227,7 +228,8 @@ export default function ReviewDashboard() {
   }, [sessionItems]);
 
   async function handleExportDownload() {
-    if (exporting) return;
+    if (exportBusyRef.current) return;
+    exportBusyRef.current = true;
     setExporting(true);
     try {
       const res = await fetch(`/api/export-xact?sessionId=${encodeURIComponent(sessionId)}`);
@@ -245,6 +247,7 @@ export default function ReviewDashboard() {
     } catch {
       setToast("Export failed — try again");
     } finally {
+      exportBusyRef.current = false;
       setExporting(false);
     }
   }
@@ -428,9 +431,8 @@ export default function ReviewDashboard() {
               </div>
               <button
                 type="button"
-                disabled={exporting}
                 onClick={() => void handleExportDownload()}
-                className="flex min-h-[48px] items-center rounded-xl bg-[#16A34A] px-5 py-2.5 text-base font-bold text-white transition-colors hover:bg-green-700 disabled:opacity-60"
+                className="flex min-h-[48px] items-center rounded-xl bg-[#16A34A] px-5 py-2.5 text-base font-bold text-white transition-colors hover:bg-green-700"
               >
                 {exporting ? "Preparing…" : "Download Claim"}
               </button>

@@ -2,6 +2,8 @@
  * First-visit suggested upgrades (applied to claim via scripts/apply-suggested-upgrades.ts).
  */
 
+import type { ClaimItem } from "./types";
+
 export type SuggestedAddItem = {
   description: string;
   brand: string;
@@ -1121,6 +1123,49 @@ export const SUGGESTED_UPGRADES: Record<string, SuggestedUpgrade[]> = {
 
 function fmtMoney(n: number): string {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+}
+
+function normLine(s: string): string {
+  return s.trim().toLowerCase();
+}
+
+function findClaimLine(claim: ClaimItem[], room: string, matchDescription: string): ClaimItem | undefined {
+  const m = normLine(matchDescription);
+  return claim.find((i) => i.room === room && normLine(i.description) === m);
+}
+
+/** Rich one-liner for modal/banner (uses current claim for before → after). */
+export function formatSuggestedUpgradeLineWithClaim(claim: ClaimItem[], room: string, s: SuggestedUpgrade): string {
+  switch (s.type) {
+    case "RENAME":
+      return `☑ ${s.match_description} → ${s.new_description}`;
+    case "MOVE":
+      return `☑ ${s.match_description} → ${s.new_room}`;
+    case "PRICE": {
+      const orig = findClaimLine(claim, room, s.match_description);
+      const from = orig != null ? fmtMoney(orig.unit_cost) : "—";
+      const to = fmtMoney(s.new_unit_cost);
+      const qtyNote =
+        orig != null && orig.qty > 1 ? ` ×${orig.qty}` : s.new_qty != null ? ` ×${s.new_qty}` : "";
+      return `☑ ${s.match_description}${qtyNote} ${from} → ${to}`;
+    }
+    case "QTY": {
+      const orig = findClaimLine(claim, room, s.match_description);
+      const uOld = orig != null ? fmtMoney(orig.unit_cost) : "—";
+      const uNew = s.new_unit_cost != null ? fmtMoney(s.new_unit_cost) : uOld;
+      const qOld = orig?.qty ?? "—";
+      return `☑ ${s.match_description} ${qOld}×${uOld} → ${s.new_qty}×${uNew}`;
+    }
+    case "ADD": {
+      const it = s.item;
+      const x = it.qty > 1 ? ` ×${it.qty}` : "";
+      return `☑ Added: ${it.description}${x}`;
+    }
+    case "SPLIT":
+      return `☑ Split: ${s.match_description} → ${s.item_a.description} + ${s.item_b.description}`;
+    case "REMOVE":
+      return `☑ Removed: ${s.match_description}`;
+  }
 }
 
 /** One-line summary for first-visit banner bullets. */

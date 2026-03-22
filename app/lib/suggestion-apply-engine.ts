@@ -18,6 +18,16 @@ function findIndex(claim: ClaimItem[], room: string, matchDescription: string): 
   return claim.findIndex((i) => i.room === room && norm(i.description) === m);
 }
 
+/** Case-insensitive description match within a room (for deltas + display). */
+export function findClaimLineInRoom(
+  claim: ClaimItem[],
+  room: string,
+  matchDescription: string
+): ClaimItem | undefined {
+  const m = norm(matchDescription);
+  return claim.find((i) => i.room === room && norm(i.description) === m);
+}
+
 function addItemFromSuggestion(p: SuggestedAddItem): ClaimItem {
   return {
     room: p.room,
@@ -173,10 +183,117 @@ export function applyOneSuggestionImmutable(
   return next;
 }
 
+/**
+ * Dollar delta if this suggestion were applied — from explicit formulas + session lines
+ * (does not depend on apply succeeding; RENAME/MOVE = 0).
+ */
 export function suggestionDeltaForClaim(claim: ClaimItem[], room: string, s: SuggestedUpgrade): number {
-  const applied = applyOneSuggestionImmutable(claim, room, s);
-  if (!applied) return 0;
-  return Math.round((claimSum(applied) - claimSum(claim)) * 100) / 100;
+  let delta = 0;
+  switch (s.type) {
+    case "RENAME":
+    case "MOVE":
+      delta = 0;
+      break;
+    case "PRICE": {
+      const orig = findClaimLineInRoom(claim, room, s.match_description);
+      if (!orig) {
+        delta = 0;
+        break;
+      }
+      const newQty = s.new_qty ?? orig.qty;
+      const newUnit = s.new_unit_cost;
+      delta = newQty * newUnit - orig.qty * orig.unit_cost;
+      break;
+    }
+    case "QTY": {
+      const orig = findClaimLineInRoom(claim, room, s.match_description);
+      if (!orig) {
+        delta = 0;
+        break;
+      }
+      const unit = s.new_unit_cost ?? orig.unit_cost;
+      delta = s.new_qty * unit - orig.qty * orig.unit_cost;
+      break;
+    }
+    case "ADD":
+      if (addAlreadyPresent(claim, s.item)) delta = 0;
+      else delta = s.item.qty * s.item.unit_cost;
+      break;
+    case "SPLIT": {
+      const orig = findClaimLineInRoom(claim, room, s.match_description);
+      if (!orig) {
+        delta = 0;
+        break;
+      }
+      delta =
+        s.item_a.unit_cost * s.item_a.qty +
+        s.item_b.unit_cost * s.item_b.qty -
+        orig.qty * orig.unit_cost;
+      break;
+    }
+    case "REMOVE": {
+      const orig = findClaimLineInRoom(claim, room, s.match_description);
+      if (!orig) {
+        delta = 0;
+        break;
+      }
+      delta = -(orig.qty * orig.unit_cost);
+      break;
+    }
+    default:
+      delta = 0;
+  }
+  return Math.round(delta * 100) / 100;
+}
+
+/** Sum of per-suggestion deltas for checked indices (matches banner/modal “Apply selected” total). */
+export function suggestionSelectedDeltaSum(
+  claim: ClaimItem[],
+  room: string,
+  list: SuggestedUpgrade[],
+  checked: Set<number>
+): number {
+  let t = 0;
+  for (const i of [...checked].sort((a, b) => a - b)) {
+    if (i < 0 || i >= list.length) continue;
+    t += suggestionDeltaForClaim(claim, room, list[i]!);
+  }
+  return Math.round(t * 100) / 100;
+}
+
+export function suggestionNonZeroDeltaIndices(
+  claim: ClaimItem[],
+  room: string,
+  list: SuggestedUpgrade[]
+): number[] {
+  return list
+    .map((_, i) => i)
+    .filter((i) => suggestionDeltaForClaim(claim, room, list[i]!) !== 0);
+}
+
+export function suggestionIsRenameOrMove(s: SuggestedUpgrade): boolean {
+  return s.type === "RENAME" || s.type === "MOVE";
+}
+
+/** Collapsed preview: first 4 non-zero-delta indices. Expanded: full list order. */
+export function suggestionCollapsedRowIndices(
+  claim: ClaimItem[],
+  room: string,
+  list: SuggestedUpgrade[]
+): number[] {
+  const nz = suggestionNonZeroDeltaIndices(claim, room, list);
+  return nz.slice(0, 4);
+}
+
+export function suggestionCollapsedHiddenCount(
+  claim: ClaimItem[],
+  room: string,
+  list: SuggestedUpgrade[]
+): number {
+  const nz = suggestionNonZeroDeltaIndices(claim, room, list);
+  const hiddenNz = Math.max(0, nz.length - 4);
+  const renameMove = list.filter(suggestionIsRenameOrMove).length;
+  return hiddenNz + renameMove;
 }
 
 export function applySuggestionIndices(

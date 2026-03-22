@@ -2,13 +2,19 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import AniGuide from "../../components/AniGuide";
 import FocusedAdditionCard from "../../components/FocusedAdditionCard";
-import SuggestionConfirmBanner from "../../components/SuggestionConfirmBanner";
+import SuggestionConfirmModal from "../../components/SuggestionConfirmModal";
 import SpeechBubble from "../../components/SpeechBubble";
 import { dispatchUpgradeReward } from "../../components/UpgradeRewardToast";
-import { getClientRoomBundles } from "../../lib/bundles-client-catalog";
+import type { Bundle } from "../../lib/bundles-data";
+import {
+  getAdminOnlyBundlesForRoom,
+  getConsumableBundlesForRoom,
+  getFocusedBundlesForRoom,
+} from "../../lib/bundles-client-catalog";
+import { mergeClaimIncoming } from "../../lib/claim-item-merge";
 import { CLAIM_GOAL_DEFAULT, DEFAULT_ROOM_TARGETS } from "../../lib/room-targets";
 import { readRoomGoal, writeRoomGoal } from "../../lib/room-goals";
 import { loadSession, saveSession, SessionData } from "../../lib/session";
@@ -22,6 +28,7 @@ import { UpgradeOptionsPanel, type UpgradeOption } from "./UpgradeOptionsPanel";
 
 export type { UpgradeOption };
 import { SUGGESTED_UPGRADES } from "../../lib/suggested-upgrades";
+import { ROOM_ORDER } from "../../lib/room-order";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -37,6 +44,10 @@ const SLUG_TO_ROOM: Record<string, string> = {
   "david-office-guest-room": "David Office / Guest Room",
   art: "Art",
 };
+
+function displayRoomTitle(room: string) {
+  return room === "Bathroom Master" ? "Master Bedroom" : room;
+}
 
 /** Persisted array of stable row keys — see lockKeyForItem */
 const LS_LOCKED = "lockedItems";
@@ -318,6 +329,7 @@ function CountUpMoney({ value, className = "" }: { value: number; className?: st
 export default function RoomReviewPage() {
   const params = useParams<{ room: string }>();
   const roomSlug = params.room;
+  const router = useRouter();
   const searchParams = useSearchParams();
   const guided = searchParams.get("guided") === "true";
   const { sessionId, hydrated } = useClaimMode();
@@ -326,7 +338,6 @@ export default function RoomReviewPage() {
   const [roomName, setRoomName] = useState("");
   const [items, setItems] = useState<ClaimItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [allRooms, setAllRooms] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -345,16 +356,17 @@ export default function RoomReviewPage() {
   const [householdSectionOpen, setHouseholdSectionOpen] = useState(false);
   const [householdPendingMult, setHouseholdPendingMult] = useState<number | null>(null);
   const [householdCustomOpen, setHouseholdCustomOpen] = useState(false);
-  const [householdCustomMult, setHouseholdCustomMult] = useState(4);
+  const [householdCustomMult, setHouseholdCustomMult] = useState(6);
   const [requestText, setRequestText] = useState("");
   const [requestStatus, setRequestStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [qtyFlashKey, setQtyFlashKey] = useState<string | null>(null);
   const [editingAgeKey, setEditingAgeKey] = useState<string | null>(null);
   const [ageDraft, setAgeDraft] = useState("");
   const [showResetConfirm, setShowResetConfirm] = useState(false);
-  const [showSuggestionsBanner, setShowSuggestionsBanner] = useState(false);
-  /** User clicked “View initial suggestions” — show banner even if localStorage says dismissed. */
+  const [suggestionsModalOpen, setSuggestionsModalOpen] = useState(false);
+  /** User clicked “View initial suggestions” — reopen modal even if localStorage says dismissed. */
   const [reopenSuggestions, setReopenSuggestions] = useState(false);
+  const [isAdminUser, setIsAdminUser] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const undoHistoryRef = useRef<ClaimItem[][]>([]);
@@ -419,8 +431,16 @@ export default function RoomReviewPage() {
     setRedoAvail(false);
   }, [roomSlug]);
 
-  const clientRoomBundles = useMemo(
-    () => (roomName ? getClientRoomBundles().filter((b) => b.room === roomName) : []),
+  const focusedBundles = useMemo(
+    () => (roomName ? getFocusedBundlesForRoom(roomName) : []),
+    [roomName]
+  );
+  const adminOnlyBundles = useMemo(
+    () => (roomName ? getAdminOnlyBundlesForRoom(roomName) : []),
+    [roomName]
+  );
+  const consumableBundles = useMemo(
+    () => (roomName ? getConsumableBundlesForRoom(roomName) : []),
     [roomName]
   );
 
@@ -428,6 +448,7 @@ export default function RoomReviewPage() {
     setHouseholdPendingMult(null);
     setHouseholdCustomOpen(false);
     setHouseholdSectionOpen(false);
+    setHouseholdCustomMult(6);
   }, [roomName]);
 
   useEffect(() => {
@@ -435,23 +456,28 @@ export default function RoomReviewPage() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    setIsAdminUser(window.localStorage.getItem("isAdmin") === "true");
+  }, []);
+
+  useEffect(() => {
     if (!roomSlug) return;
     const key = `suggestions_shown_${roomSlug}`;
     const shown = typeof window !== "undefined" ? localStorage.getItem(key) : null;
     if (guided) {
-      setShowSuggestionsBanner(false);
+      setSuggestionsModalOpen(false);
       return;
     }
     if (!roomName) {
-      setShowSuggestionsBanner(false);
+      setSuggestionsModalOpen(false);
       return;
     }
     const hasList = (SUGGESTED_UPGRADES[roomName] ?? []).length > 0;
     if (!hasList) {
-      setShowSuggestionsBanner(false);
+      setSuggestionsModalOpen(false);
       return;
     }
-    setShowSuggestionsBanner(shown == null || reopenSuggestions);
+    setSuggestionsModalOpen(shown == null || reopenSuggestions);
   }, [roomSlug, roomName, guided, reopenSuggestions]);
 
   useEffect(() => {
@@ -487,7 +513,6 @@ export default function RoomReviewPage() {
     }
     setClaimGoal(sess.target_value ?? CLAIM_GOAL_DEFAULT);
     const rooms = sess.room_summary?.map((r) => r.room) ?? [...new Set(claimItems.map((i) => i.room))];
-    setAllRooms(rooms);
     const name = SLUG_TO_ROOM[roomSlug] ?? rooms.find((r) => slugify(r) === roomSlug) ?? "";
     setRoomName(name);
     if (!name) {
@@ -617,9 +642,10 @@ export default function RoomReviewPage() {
     setShowGuidedComplete(true);
   }, [guided, progressPct]);
 
-  const roomIdx = allRooms.indexOf(roomName);
-  const prevRoom = roomIdx > 0 ? allRooms[roomIdx - 1] : null;
-  const nextRoom = roomIdx < allRooms.length - 1 ? allRooms[roomIdx + 1] : null;
+  const roomNavIndex = useMemo(() => ROOM_ORDER.findIndex((r) => r.slug === roomSlug), [roomSlug]);
+  const navPrev = roomNavIndex > 0 ? ROOM_ORDER[roomNavIndex - 1]! : null;
+  const navNext =
+    roomNavIndex >= 0 && roomNavIndex < ROOM_ORDER.length - 1 ? ROOM_ORDER[roomNavIndex + 1]! : null;
 
   const lockKeyForItem = useCallback(
     (item: ClaimItem) =>
@@ -923,7 +949,7 @@ export default function RoomReviewPage() {
         localStorage.setItem(`suggestions_shown_${roomSlug}`, "shown");
       }
       setReopenSuggestions(false);
-      setShowSuggestionsBanner(false);
+      setSuggestionsModalOpen(false);
       setToast("Applied selected suggestions");
     } finally {
       setIsSaving(false);
@@ -931,16 +957,43 @@ export default function RoomReviewPage() {
   }
 
   async function handleFocusedBundleAdd(lines: ClaimItem[]) {
-    if (!session?.claim_items || lines.length === 0) return;
+    if (!session?.claim_items || lines.length === 0 || !roomName) return;
     const beforeClaim = session.claim_items;
     pushUndoSnapshot();
-    const nextRoom = [...items, ...lines.map((l) => ({ ...l, room: roomName }))];
-    const rest = beforeClaim.filter((i) => i.room !== roomName);
-    const afterClaim = [...rest, ...nextRoom];
-    await persistRoomItemsSnapshot(nextRoom);
+    const withRoom = lines.map((l) => ({ ...l, room: roomName }));
+    const merged = mergeClaimIncoming(beforeClaim, withRoom, "bundle");
+    await saveSession({ claim_items: merged }, sessionId);
+    setSession((prev) => (prev ? { ...prev, claim_items: merged } : prev));
+    setItems(merged.filter((i) => i.room === roomName));
+    const delta = withRoom.reduce((s, l) => s + l.qty * l.unit_cost, 0);
+    fireUpgradeReward(beforeClaim, merged, delta);
+    setToast(`✓ Added ${formatCurrency(delta)}`);
+  }
+
+  async function handleConsumableBundleAdd(b: Bundle) {
+    if (!session?.claim_items || !roomName) return;
+    pushUndoSnapshot();
+    const beforeClaim = session.claim_items;
+    const lines: ClaimItem[] = b.items.map((bi) => ({
+      room: roomName,
+      description: bi.description,
+      brand: bi.brand || "",
+      model: "",
+      qty: bi.qty,
+      age_years: 0,
+      age_months: 0,
+      condition: "New",
+      unit_cost: bi.unit_cost,
+      category: bi.category,
+      source: "bundle",
+    }));
+    const merged = mergeClaimIncoming(beforeClaim, lines, "bundle");
+    await saveSession({ claim_items: merged }, sessionId);
+    setSession((prev) => (prev ? { ...prev, claim_items: merged } : prev));
+    setItems(merged.filter((i) => i.room === roomName));
     const delta = lines.reduce((s, l) => s + l.qty * l.unit_cost, 0);
-    fireUpgradeReward(beforeClaim, afterClaim, delta);
-    setToast(`Added ${lines.length} line(s)`);
+    fireUpgradeReward(beforeClaim, merged, delta);
+    setToast(`✓ Added ${formatCurrency(delta)}`);
   }
 
   async function applyHouseholdMultiplier(m: number) {
@@ -1025,9 +1078,9 @@ export default function RoomReviewPage() {
 
   const showRoomChrome = !!roomName && !isLoading;
 
-  const showSuggestionsBannerVisible =
+  const suggestionsModalVisible =
     !guided &&
-    showSuggestionsBanner &&
+    suggestionsModalOpen &&
     !!roomName &&
     !isLoading &&
     roomSuggestionList.length > 0 &&
@@ -1035,19 +1088,20 @@ export default function RoomReviewPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-white pb-24 md:pb-20">
-      {showSuggestionsBannerVisible && session ? (
-        <SuggestionConfirmBanner
+      {session ? (
+        <SuggestionConfirmModal
+          open={suggestionsModalVisible}
           roomSlug={roomSlug}
           roomName={roomName}
           claimItems={session.claim_items ?? []}
           list={roomSuggestionList}
           onApply={handleApplySuggestionsFromBanner}
-          onSkip={() => {
+          onDismiss={() => {
             setReopenSuggestions(false);
             if (typeof window !== "undefined" && roomSlug) {
               localStorage.setItem(`suggestions_shown_${roomSlug}`, "shown");
             }
-            setShowSuggestionsBanner(false);
+            setSuggestionsModalOpen(false);
           }}
           disabled={isSaving}
         />
@@ -1096,37 +1150,48 @@ export default function RoomReviewPage() {
                   <span aria-hidden className="text-gray-300">
                     ›
                   </span>
-                  <span className="truncate font-semibold text-gray-900">{roomName}</span>
+                  <span className="truncate font-semibold text-gray-900">{displayRoomTitle(roomName)}</span>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {isSaving && <SmallSpinner />}
-                  {prevRoom ? (
-                    <Link
-                      href={`/review/${slugify(prevRoom)}${guided ? "?guided=true" : ""}`}
+                  {navPrev ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const q = guided ? "?guided=true" : "";
+                        router.push(`/review/${navPrev.slug}${q}`);
+                      }}
                       className="min-h-[48px] inline-flex items-center rounded-lg px-2 text-sm font-medium text-[#2563EB] hover:underline md:text-base"
                     >
-                      ← Prev
-                    </Link>
+                      ← {navPrev.name}
+                    </button>
                   ) : (
-                    <Link
-                      href="/review"
+                    <button
+                      type="button"
+                      onClick={() => router.push("/review")}
                       className="min-h-[48px] inline-flex items-center rounded-lg px-2 text-sm font-medium text-[#2563EB] hover:underline md:text-base"
                     >
-                      ← Prev
-                    </Link>
+                      ← All rooms
+                    </button>
                   )}
-                  {nextRoom ? (
-                    <Link
-                      href={`/review/${slugify(nextRoom)}${guided ? "?guided=true" : ""}`}
+                  {navNext ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const q = guided ? "?guided=true" : "";
+                        router.push(`/review/${navNext.slug}${q}`);
+                      }}
                       className="min-h-[48px] inline-flex items-center rounded-lg px-2 text-sm font-medium text-[#2563EB] hover:underline md:text-base"
                     >
-                      Next →
-                    </Link>
+                      {navNext.name} →
+                    </button>
                   ) : null}
                 </div>
               </div>
 
-              <h1 className="mt-5 text-2xl font-bold tracking-tight text-gray-900 md:text-3xl">{roomName}</h1>
+              <h1 className="mt-5 text-2xl font-bold tracking-tight text-gray-900 md:text-3xl">
+                {displayRoomTitle(roomName)}
+              </h1>
               <div className="mt-3 h-px w-full bg-gray-200" />
 
               <p className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-2 text-sm text-[#6B7280] md:text-base">
@@ -1169,7 +1234,10 @@ export default function RoomReviewPage() {
                     <span className="text-gray-300">·</span>
                     <button
                       type="button"
-                      onClick={() => setReopenSuggestions(true)}
+                      onClick={() => {
+                        setReopenSuggestions(true);
+                        setSuggestionsModalOpen(true);
+                      }}
                       className="text-xs font-semibold text-amber-800 underline-offset-2 hover:underline"
                     >
                       View initial suggestions
@@ -1217,7 +1285,10 @@ export default function RoomReviewPage() {
             </div>
           </header>
 
-          <main className="mx-auto w-full max-w-[1100px] flex-1 px-8 py-6">
+          <main
+            id="claim-items-anchor"
+            className="mx-auto w-full max-w-[1100px] flex-1 scroll-mt-24 overflow-x-hidden px-4 py-6 md:px-8"
+          >
             <section className="rounded-2xl border border-gray-100 bg-white shadow-sm transition-all duration-300">
               <div className="border-b border-gray-100 px-5 py-5 md:px-6">
                 <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">
@@ -1532,28 +1603,52 @@ export default function RoomReviewPage() {
 
             <section className="mt-12">
               <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">
-                Add items to {roomName}
+                Add items to {displayRoomTitle(roomName).toUpperCase()}
               </h2>
               <p className="mt-1 text-sm text-[#6B7280]">
-                Focused addition sets — pick Essential, Complete, or Full, then add checked lines to your claim.
+                Focused addition sets — choose a tier (Essential through Full or Ultimate), then add checked lines to
+                your claim.
               </p>
 
               <div className="mt-8 space-y-8">
-                {clientRoomBundles.length === 0 ? (
-                  <p className="text-sm text-[#6B7280]">No addition packages for this room yet.</p>
+                {focusedBundles.length === 0 ? (
+                  <p className="text-sm text-[#6B7280]">No focused addition packages for this room yet.</p>
                 ) : (
-                  clientRoomBundles.map((b) => (
+                  focusedBundles.map((b) => (
                     <FocusedAdditionCard
                       key={b.bundle_code}
                       bundle={b}
                       roomName={roomName}
-                      claimItems={items}
+                      existingItems={session?.claim_items ?? []}
+                      sessionId={sessionId}
                       disabled={isSaving}
                       onAdd={(lines) => void handleFocusedBundleAdd(lines)}
                     />
                   ))
                 )}
               </div>
+
+              {isAdminUser && adminOnlyBundles.length > 0 ? (
+                <div className="mt-10 rounded-2xl border border-dashed border-purple-200 bg-purple-50/40 p-5">
+                  <p className="text-xs font-bold uppercase tracking-wide text-purple-900">Admin · full letter-tier packages</p>
+                  <p className="mt-1 text-sm text-purple-800">
+                    Hidden from clients. Open the bundle browser to preview large packages (over $30k).
+                  </p>
+                  <Link
+                    href={`/review/bundles/${roomSlug}`}
+                    className="mt-3 inline-flex min-h-[48px] items-center rounded-xl bg-purple-700 px-4 text-sm font-bold text-white hover:bg-purple-800"
+                  >
+                    Open bundle browser →
+                  </Link>
+                  <ul className="mt-3 max-h-40 list-inside list-disc overflow-y-auto text-xs text-purple-900">
+                    {adminOnlyBundles.slice(0, 40).map((b) => (
+                      <li key={b.bundle_code}>
+                        {b.bundle_code} — {b.name} ({formatCurrency(b.total_value)})
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
 
               <div className="mt-10 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
                 <p className="text-sm font-bold uppercase tracking-wide text-gray-900">💬 Request a specific item</p>
@@ -1610,7 +1705,7 @@ export default function RoomReviewPage() {
                     className="flex w-full items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 text-left md:px-6"
                   >
                     <span className="text-xs font-bold uppercase tracking-wider text-gray-900">
-                      Household items ({tier2Sorted.length} items)
+                      HOUSEHOLD ITEMS ({tier2Sorted.length} items · {formatCurrency(miscOriginalTotal)})
                       <span className="ml-2 tabular-nums text-gray-500">
                         {householdSectionOpen ? "▼" : "▶"}
                       </span>
@@ -1646,7 +1741,7 @@ export default function RoomReviewPage() {
                       </ul>
 
                       <div>
-                        <p className="text-sm font-semibold text-gray-800">How many did you have?</p>
+                        <p className="text-sm font-semibold text-gray-800">How many of each did you have?</p>
                         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
                           <button
                             type="button"
@@ -1654,16 +1749,20 @@ export default function RoomReviewPage() {
                               setHouseholdCustomOpen(false);
                               setHouseholdPendingMult(1);
                             }}
-                            className={`rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
+                            className={`min-h-[48px] rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
                               householdPendingMult === 1 && !householdCustomOpen
                                 ? "border-[#2563EB] bg-blue-50"
                                 : "border-gray-200 bg-white"
                             }`}
                           >
                             Same
-                            <span className="mt-1 block text-xs font-normal text-[#16A34A] tabular-nums">
-                              {formatCurrency(householdButtonDeltas.same)}
-                            </span>
+                            {householdPendingMult === 1 && !householdCustomOpen ? (
+                              <span className="mt-1 block text-xs font-normal text-[#16A34A]">✓</span>
+                            ) : (
+                              <span className="mt-1 block text-xs font-normal text-[#6B7280] tabular-nums">
+                                {formatCurrency(householdButtonDeltas.same)}
+                              </span>
+                            )}
                           </button>
                           <button
                             type="button"
@@ -1671,18 +1770,15 @@ export default function RoomReviewPage() {
                               setHouseholdCustomOpen(false);
                               setHouseholdPendingMult(2);
                             }}
-                            className={`rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
+                            className={`min-h-[48px] rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
                               householdPendingMult === 2 && !householdCustomOpen
                                 ? "border-[#2563EB] bg-blue-50"
                                 : "border-gray-200 bg-white"
                             }`}
                           >
-                            ×2 More
+                            ×2
                             <span className="mt-1 block text-xs font-normal text-[#16A34A] tabular-nums">
-                              +
-                              {formatCurrency(
-                                Math.max(0, householdButtonDeltas.x2 - householdButtonDeltas.same)
-                              )}
+                              +{formatCurrency(miscOriginalTotal)}
                             </span>
                           </button>
                           <button
@@ -1691,31 +1787,30 @@ export default function RoomReviewPage() {
                               setHouseholdCustomOpen(false);
                               setHouseholdPendingMult(3);
                             }}
-                            className={`rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
+                            className={`min-h-[48px] rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
                               householdPendingMult === 3 && !householdCustomOpen
                                 ? "border-[#2563EB] bg-blue-50"
                                 : "border-gray-200 bg-white"
                             }`}
                           >
-                            ×3 More
+                            ×3
                             <span className="mt-1 block text-xs font-normal text-[#16A34A] tabular-nums">
-                              +
-                              {formatCurrency(
-                                Math.max(0, householdButtonDeltas.x3 - householdButtonDeltas.same)
-                              )}
+                              +{formatCurrency(miscOriginalTotal * 2)}
                             </span>
                           </button>
                           <button
                             type="button"
                             onClick={() => {
                               setHouseholdCustomOpen(true);
-                              setHouseholdPendingMult(householdCustomMult);
+                              const m = householdCustomMult < 4 ? 4 : householdCustomMult;
+                              setHouseholdCustomMult(m);
+                              setHouseholdPendingMult(m);
                             }}
-                            className={`rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
+                            className={`min-h-[48px] rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
                               householdCustomOpen ? "border-[#2563EB] bg-blue-50" : "border-gray-200 bg-white"
                             }`}
                           >
-                            Custom
+                            More ▼
                             <span className="mt-1 block text-xs font-normal text-[#16A34A] tabular-nums">
                               +
                               {formatCurrency(
@@ -1726,11 +1821,11 @@ export default function RoomReviewPage() {
                         </div>
                         {householdCustomOpen ? (
                           <div className="mt-4 rounded-xl border border-gray-100 bg-gray-50 p-4">
-                            <label className="text-xs font-medium text-gray-700">Multiplier 1× – 5×</label>
+                            <label className="text-xs font-medium text-gray-700">Multiplier 3× – 10×</label>
                             <input
                               type="range"
-                              min={1}
-                              max={5}
+                              min={3}
+                              max={10}
                               step={1}
                               value={householdCustomMult}
                               onChange={(e) => {
@@ -1759,12 +1854,15 @@ export default function RoomReviewPage() {
                             <p className="text-[#6B7280]">No dollar change at this level.</p>
                           ) : (
                             <>
-                              <p className="tabular-nums text-gray-900">
+                              <p className="font-medium text-gray-900">
                                 Add{" "}
-                                <span className="font-semibold text-[#16A34A]">
-                                  +{formatCurrency(householdPreviewTotalDelta)}
+                                <span className="font-semibold text-[#16A34A] tabular-nums">
+                                  {formatCurrency(householdPreviewTotalDelta)}
                                 </span>{" "}
-                                across household lines
+                                to your claim for more household items?
+                              </p>
+                              <p className="mt-2 text-xs text-[#6B7280]">
+                                Updates {tier2Sorted.length} lines (ceiling rules may adjust individual rows).
                               </p>
                               <ul className="mt-3 max-h-40 space-y-1 overflow-y-auto text-xs text-[#6B7280]">
                                 {householdPreviewLines
@@ -1778,19 +1876,61 @@ export default function RoomReviewPage() {
                                     </li>
                                   ))}
                               </ul>
-                              <button
-                                type="button"
-                                disabled={isSaving}
-                                onClick={() =>
-                                  householdPendingMult != null &&
-                                  void applyHouseholdMultiplier(householdPendingMult)
-                                }
-                                className="mt-4 w-full rounded-lg bg-[#2563EB] py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-                              >
-                                Apply +{formatCurrency(householdPreviewTotalDelta)}
-                              </button>
+                              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                                <button
+                                  type="button"
+                                  disabled={isSaving}
+                                  onClick={() =>
+                                    householdPendingMult != null &&
+                                    void applyHouseholdMultiplier(householdPendingMult)
+                                  }
+                                  className="min-h-[48px] flex-1 rounded-xl bg-[#2563EB] py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                                >
+                                  Confirm +{formatCurrency(householdPreviewTotalDelta)}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isSaving}
+                                  onClick={() => setHouseholdPendingMult(null)}
+                                  className="min-h-[48px] flex-1 rounded-xl border border-gray-300 bg-white py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
                             </>
                           )}
+                        </div>
+                      ) : null}
+
+                      {consumableBundles.length > 0 ? (
+                        <div className="mt-8 border-t border-gray-100 pt-6">
+                          <p className="text-xs font-bold uppercase tracking-wide text-gray-900">
+                            Restock & consumable packs
+                          </p>
+                          <p className="mt-1 text-sm text-[#6B7280]">
+                            One-tap add common replenishment lines for this room.
+                          </p>
+                          <div className="mt-4 space-y-3">
+                            {consumableBundles.map((b) => (
+                              <div
+                                key={b.bundle_code}
+                                className="flex flex-col gap-2 rounded-xl border border-gray-100 bg-gray-50/80 p-4 sm:flex-row sm:items-center sm:justify-between"
+                              >
+                                <div className="min-w-0">
+                                  <p className="font-semibold text-gray-900">{b.name}</p>
+                                  <p className="text-xs text-[#6B7280]">{b.items.length} lines · {formatCurrency(b.total_value)}</p>
+                                </div>
+                                <button
+                                  type="button"
+                                  disabled={isSaving}
+                                  onClick={() => void handleConsumableBundleAdd(b)}
+                                  className="min-h-[48px] shrink-0 rounded-xl bg-[#16A34A] px-4 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-40"
+                                >
+                                  Add pack
+                                </button>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       ) : null}
                     </div>
@@ -1856,26 +1996,36 @@ export default function RoomReviewPage() {
               </span>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <Link
-                href={prevRoom ? `/review/${slugify(prevRoom)}${guided ? "?guided=true" : ""}` : "/review"}
-                className="hidden min-h-[48px] items-center rounded-lg border border-gray-200 px-3 text-xs font-medium text-gray-800 transition-colors hover:bg-gray-50 sm:inline-flex md:text-sm"
+              <button
+                type="button"
+                onClick={() => {
+                  const q = guided ? "?guided=true" : "";
+                  if (navPrev) router.push(`/review/${navPrev.slug}${q}`);
+                  else router.push("/review");
+                }}
+                className="inline-flex min-h-[48px] items-center rounded-lg border border-gray-200 px-3 text-xs font-medium text-gray-800 transition-colors hover:bg-gray-50 md:text-sm"
               >
-                ← Rooms
-              </Link>
-              {nextRoom ? (
-                <Link
-                  href={`/review/${slugify(nextRoom)}${guided ? "?guided=true" : ""}`}
+                {navPrev ? `← ${navPrev.name}` : "← All rooms"}
+              </button>
+              {navNext ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const q = guided ? "?guided=true" : "";
+                    router.push(`/review/${navNext.slug}${q}`);
+                  }}
                   className="inline-flex min-h-[48px] items-center rounded-lg bg-[#2563EB] px-4 text-xs font-bold text-white transition-colors hover:bg-blue-700 md:text-sm"
                 >
-                  Next Room →
-                </Link>
+                  {navNext.name} →
+                </button>
               ) : (
-                <Link
-                  href="/review"
+                <button
+                  type="button"
+                  onClick={() => router.push("/review")}
                   className="inline-flex min-h-[48px] items-center rounded-lg bg-gray-200 px-4 text-xs font-medium text-gray-800 md:text-sm"
                 >
                   Done
-                </Link>
+                </button>
               )}
             </div>
           </div>
@@ -2014,14 +2164,17 @@ export default function RoomReviewPage() {
                   </div>
                 );
               })()}
-              {nextRoom ? (
-                <Link
-                  href={`/review/${slugify(nextRoom)}?guided=true`}
-                  onClick={() => setShowGuidedComplete(false)}
-                  className="flex min-h-[48px] items-center justify-center rounded-xl bg-[#2563EB] px-4 text-center text-base font-bold text-white"
+              {navNext ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowGuidedComplete(false);
+                    router.push(`/review/${navNext.slug}?guided=true`);
+                  }}
+                  className="flex min-h-[48px] w-full items-center justify-center rounded-xl bg-[#2563EB] px-4 text-center text-base font-bold text-white"
                 >
-                  Next Room: {nextRoom} →
-                </Link>
+                  Next: {navNext.name} →
+                </button>
               ) : (
                 <Link
                   href="/review"

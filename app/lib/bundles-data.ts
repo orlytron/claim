@@ -1,4 +1,6 @@
 import { AFFORDABLE_BUNDLES } from "./bundles-affordable-data";
+import { FOCUSED_TIERED_BUNDLES } from "./bundles-focused-tiered";
+import { TIERED_FOCUS_BUNDLES } from "./bundles-tiered-new";
 
 export interface BundleItem {
   description: string;
@@ -18,17 +20,31 @@ export type TierLineSource = {
   category: string;
 };
 
+/** `items` in each block = lines added at that tier only (cumulative list built in UI). */
 export type BundleTierBlock = {
   total: number;
-  items?: TierLineSource[];
-  adds?: TierLineSource[];
+  items: BundleItem[];
 };
 
-export type BundleTiersDef = {
+export type BundleTiers3 = {
   essential: BundleTierBlock;
   complete: BundleTierBlock;
   full: BundleTierBlock;
 };
+
+export type BundleTiers5 = {
+  essential: BundleTierBlock;
+  enhanced: BundleTierBlock;
+  complete: BundleTierBlock;
+  full: BundleTierBlock;
+  ultimate: BundleTierBlock;
+};
+
+export type BundleTiersDef = BundleTiers3 | BundleTiers5;
+
+export function isBundleTiers5(t: BundleTiersDef): t is BundleTiers5 {
+  return "enhanced" in t;
+}
 
 export interface Bundle {
   room: string;
@@ -40,12 +56,14 @@ export interface Bundle {
   sweet_spot: boolean;
   plausibility: "green" | "yellow" | "red" | "easy" | "medium";
   items: BundleItem[];
-  /** When set, room page uses FocusedAdditionCard (Essential / Complete / Full). */
+  /** When set (or tier === "focused"), room page uses FocusedAdditionCard. */
   tiers?: BundleTiersDef;
 }
 
 export const BUNDLES_DATA: Bundle[] = [
   ...AFFORDABLE_BUNDLES,
+  ...TIERED_FOCUS_BUNDLES,
+  ...(FOCUSED_TIERED_BUNDLES as Bundle[]),
   // ── LIVING ROOM ──────────────────────────────────────────────────────────────
   {
     room: "Living Room", bundle_code: "LR-A", name: "Warm Refresh",
