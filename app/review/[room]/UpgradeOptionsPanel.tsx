@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ClaimItem } from "../../lib/types";
 import { formatCurrency } from "../../lib/utils";
 
@@ -186,6 +186,7 @@ export function UpgradeOptionsPanel({
   onApply,
   onApplied,
   onRefreshNotice,
+  onCatalogEmpty,
 }: {
   item: ClaimItem;
   locked: boolean;
@@ -193,7 +194,9 @@ export function UpgradeOptionsPanel({
   onApply: (option: UpgradeOption) => Promise<void>;
   onApplied?: () => void;
   onRefreshNotice?: (message: string) => void;
+  onCatalogEmpty?: () => void;
 }) {
+  const emptyNotifiedRef = useRef(false);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [rawProducts, setRawProducts] = useState<CatalogProduct[]>([]);
@@ -248,6 +251,10 @@ export function UpgradeOptionsPanel({
   }, [item.description]);
 
   useEffect(() => {
+    emptyNotifiedRef.current = false;
+  }, [item.description, item.unit_cost, cacheHas]);
+
+  useEffect(() => {
     if (!cacheHas || locked) return;
     let cancelled = false;
     (async () => {
@@ -271,6 +278,17 @@ export function UpgradeOptionsPanel({
       cancelled = true;
     };
   }, [cacheHas, locked, fetchPayload, applyResponseJson]);
+
+  useEffect(() => {
+    if (!cacheHas || locked || loading || refreshing) return;
+    if (validOptions.length > 0) {
+      emptyNotifiedRef.current = false;
+      return;
+    }
+    if (emptyNotifiedRef.current) return;
+    emptyNotifiedRef.current = true;
+    onCatalogEmpty?.();
+  }, [cacheHas, locked, loading, refreshing, validOptions.length, onCatalogEmpty]);
 
   const handleRefresh = useCallback(async () => {
     if (locked) return;
@@ -348,25 +366,7 @@ export function UpgradeOptionsPanel({
   }
 
   if (!loading && !refreshing && validOptions.length === 0) {
-    return (
-      <NoCacheUpgradeForm
-        item={item}
-        startOpen
-        message="No standard upgrades found for this item. Enter a custom value below."
-        onAddCustom={async (price, title, brand) => {
-          await onApply({
-            label: "Custom",
-            price,
-            title,
-            brand,
-            model: "",
-            retailer: "",
-            url: "",
-          });
-          onApplied?.();
-        }}
-      />
-    );
+    return null;
   }
 
   return (

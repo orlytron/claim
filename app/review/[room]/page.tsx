@@ -11,8 +11,12 @@ import { CLAIM_GOAL_DEFAULT, DEFAULT_ROOM_TARGETS } from "../../lib/room-targets
 import { readRoomGoal, writeRoomGoal } from "../../lib/room-goals";
 import { loadSession, saveSession, SessionData } from "../../lib/session";
 import { supabase } from "../../lib/supabase";
-import { findBundleSingletonConflicts } from "../../lib/bundle-singleton";
-import { mergeClaimIncoming } from "../../lib/claim-item-merge";
+import { getSingletonKey as bundleRoomSlotKey } from "../../lib/bundle-room-singleton-key";
+import {
+  computeItemAtSlider,
+  computeNotches,
+  type MiscLine,
+} from "../../lib/misc-items-slider";
 import { displayAgeYears, ORIGINAL_CLAIM_ITEMS } from "../../lib/original-claim-data";
 import { ClaimItem } from "../../lib/types";
 import { useClaimMode } from "../../lib/useClaimMode";
@@ -54,12 +58,6 @@ function sameClaimLine(a: ClaimItem, b: ClaimItem) {
     Math.abs(a.unit_cost - b.unit_cost) < 0.01
   );
 }
-
-function bundleItemSig(bi: BundleItem) {
-  return `${bi.description}|${bi.total}|${bi.unit_cost}`;
-}
-
-type BundleConflictResolution = "replace" | "both" | "skip";
 
 function roundRoomGoalSlider(v: number) {
   return Math.min(
@@ -274,7 +272,12 @@ function QtyAdjuster({
 }
 
 function SourceTag({ source }: { source?: ClaimItem["source"] }) {
-  if (!source || source === "original") return null;
+  if (!source || source === "original")
+    return (
+      <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[12px] font-medium text-gray-700">
+        original
+      </span>
+    );
   if (source === "upgrade")
     return (
       <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[12px] font-medium text-[#2563EB]">
@@ -284,7 +287,7 @@ function SourceTag({ source }: { source?: ClaimItem["source"] }) {
   if (source === "bundle")
     return (
       <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[12px] font-medium text-[#16A34A]">
-        + added
+        added
       </span>
     );
   if (source === "art")
@@ -343,17 +346,16 @@ export default function RoomReviewPage() {
   const [sliderSnapIndex, setSliderSnapIndex] = useState(0);
   const [openUpgradeKey, setOpenUpgradeKey] = useState<string | null>(null);
   const [suggestExpand, setSuggestExpand] = useState(false);
+  const [miscSectionOpen, setMiscSectionOpen] = useState(false);
+  const [miscMultIndex, setMiscMultIndex] = useState(0);
+  const [bundleBudgetValue, setBundleBudgetValue] = useState(0);
+  const [bundleSectionOpen, setBundleSectionOpen] = useState(true);
   const [bundleChecks, setBundleChecks] = useState<boolean[]>([]);
   const [bundleAdding, setBundleAdding] = useState(false);
   const [bundleAddedFlash, setBundleAddedFlash] = useState(false);
   const [qtyFlashKey, setQtyFlashKey] = useState<string | null>(null);
   const [editingAgeKey, setEditingAgeKey] = useState<string | null>(null);
   const [ageDraft, setAgeDraft] = useState("");
-  const [bundleConflictModal, setBundleConflictModal] = useState<{
-    selected: BundleItem[];
-    pairs: { bundleItem: BundleItem; existing: ClaimItem }[];
-    resolutions: (BundleConflictResolution | null)[];
-  } | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   const undoHistoryRef = useRef<ClaimItem[][]>([]);
@@ -418,15 +420,18 @@ export default function RoomReviewPage() {
     setRedoAvail(false);
   }, [roomSlug]);
 
-  const bundleSnapValues = useMemo(() => {
+  const bundleBudgetRange = useMemo(() => {
     const vals = BUNDLES_DATA.filter((b) => b.room === roomName).map((b) => b.total_value);
-    const u = Array.from(new Set(vals)).sort((a, b) => a - b);
-    return [0, ...u];
+    if (vals.length === 0) return { min: 17_000, max: 285_000 };
+    return { min: Math.min(...vals), max: Math.max(...vals) };
   }, [roomName]);
 
   useEffect(() => {
-    setSliderSnapIndex(bundleSnapValues.length > 1 ? 1 : 0);
-  }, [roomName, bundleSnapValues.length]);
+    setBundleBudgetValue(bundleBudgetRange.min);
+    setMiscMultIndex(0);
+    setMiscSectionOpen(false);
+    setBundleSectionOpen(true);
+  }, [roomName, bundleBudgetRange.min, bundleBudgetRange.max]);
 
   useEffect(() => {
     setLockedKeys(readLocked());
@@ -472,7 +477,7 @@ export default function RoomReviewPage() {
     setRoomTarget(roundRoomGoalSlider(storedGoal ?? def));
 
     const descriptions = roomItems
-      .filter(isUpgradeCandidate)
+      .filter((i) => i.unit_cost >= 500 && isUpgradeCandidate(i))
       .map((i) => i.pre_upgrade_item?.description ?? i.description);
     const params = new URLSearchParams();
     params.set("room", name);
@@ -487,8 +492,42 @@ export default function RoomReviewPage() {
     setIsLoading(false);
   }
 
-  /** All room lines, one list — sorted by unit price (highest first). */
-  const sortedRoomItems = useMemo(() => [...items].sort((a, b) => b.unit_cost - a.unit_cost), [items]);
+  /** Tier 1: major items ($500+) — full row. Tier 2: misc — grouped section. */
+  const tier1Sorted = useMemo(
+    () => [...items].filter((i) => i.unit_cost >= 500).sort((a, b) => b.unit_cost - a.unit_cost),
+    [items]
+  );
+  const tier2Sorted = useMemo(
+    () => [...items].filter((i) => i.unit_cost < 500).sort((a, b) => b.unit_cost - a.unit_cost),
+    [items]
+  );
+  const miscLines: MiscLine[] = useMemo(
+    () => tier2Sorted.map((i) => ({ description: i.description, qty: i.qty, unit_cost: i.unit_cost })),
+    [tier2Sorted]
+  );
+  const miscNotches = useMemo(() => computeNotches(miscLines), [miscLines]);
+  const miscMultiplier = miscNotches[Math.min(miscMultIndex, Math.max(0, miscNotches.length - 1))] ?? 1;
+  const miscPreviewLines = useMemo(() => {
+    return tier2Sorted.map((item) => {
+      const next = computeItemAtSlider(item, miscMultiplier);
+      const before = item.qty * item.unit_cost;
+      const after = next.qty * next.unit_cost;
+      return { item, next, before, after, delta: after - before };
+    });
+  }, [tier2Sorted, miscMultiplier]);
+  const miscOriginalTotal = useMemo(
+    () => tier2Sorted.reduce((s, i) => s + i.qty * i.unit_cost, 0),
+    [tier2Sorted]
+  );
+  const miscPreviewTotal = useMemo(() => miscPreviewLines.reduce((s, l) => s + l.after, 0), [miscPreviewLines]);
+  const miscNotchTotals = useMemo(() => {
+    return miscNotches.map((m) =>
+      tier2Sorted.reduce((s, i) => {
+        const n = computeItemAtSlider(i, m);
+        return s + n.qty * n.unit_cost;
+      }, 0)
+    );
+  }, [tier2Sorted, miscNotches]);
 
   const upgradeCandidates = useMemo(() => items.filter(isUpgradeCandidate), [items]);
 
@@ -679,20 +718,6 @@ export default function RoomReviewPage() {
     await saveRoomItems(next);
     setEditingAgeKey(null);
   }
-
-  const claimLineForSuggestion = useCallback(
-    (row: SuggestedAdditionRow) => {
-      const opt = row.mid;
-      return items.find(
-        (i) =>
-          i.room === roomName &&
-          i.source === "bundle" &&
-          norm(i.description) === norm(opt.title) &&
-          Math.abs(i.unit_cost - opt.price) < 0.01
-      );
-    },
-    [items, roomName]
-  );
 
   function claimTotals(claim: ClaimItem[]) {
     const t = claim.reduce((s, i) => s + i.qty * i.unit_cost, 0);
@@ -926,11 +951,16 @@ export default function RoomReviewPage() {
     writeRoomGoal(sessionId, roomName, rounded);
   }
 
-  const sliderValue = bundleSnapValues[Math.min(sliderSnapIndex, bundleSnapValues.length - 1)] ?? 0;
   const closestBundle = useMemo(() => {
-    if (!roomName || !sliderValue) return null;
-    return BUNDLES_DATA.filter((b) => b.room === roomName && b.total_value === sliderValue)[0] ?? null;
-  }, [roomName, sliderValue]);
+    if (!roomName) return null;
+    const list = BUNDLES_DATA.filter((b) => b.room === roomName);
+    if (list.length === 0) return null;
+    const v =
+      bundleBudgetValue > 0 ? bundleBudgetValue : (bundleBudgetRange.min + bundleBudgetRange.max) / 2;
+    return list.reduce((best, b) =>
+      Math.abs(b.total_value - v) <= Math.abs(best.total_value - v) ? b : best
+    );
+  }, [roomName, bundleBudgetValue, bundleBudgetRange.min, bundleBudgetRange.max]);
 
   useEffect(() => {
     if (closestBundle) {
@@ -941,12 +971,8 @@ export default function RoomReviewPage() {
     setBundleAddedFlash(false);
   }, [closestBundle?.bundle_code]);
 
-  const bundleStops = useMemo(() => {
-    const vals = BUNDLES_DATA.filter((b) => b.room === roomName).map((b) => b.total_value);
-    return Array.from(new Set(vals)).sort((a, b) => a - b);
-  }, [roomName]);
-  const minBundleDisplay = bundleStops[0] ?? 0;
-  const maxBundleDisplay = bundleStops[bundleStops.length - 1] ?? 0;
+  const minBundleDisplay = bundleBudgetRange.min;
+  const maxBundleDisplay = bundleBudgetRange.max;
 
   const bundleSelectedTotal = useMemo(() => {
     if (!closestBundle) return 0;
@@ -958,96 +984,147 @@ export default function RoomReviewPage() {
     return bundleChecks.filter(Boolean).length;
   }, [closestBundle, bundleChecks]);
 
-  function handleBundleAddClick() {
-    if (!closestBundle || !session?.claim_items) return;
-    const selected = closestBundle.items.filter((_, i) => bundleChecks[i]);
-    if (selected.length === 0) return;
-    const pairs = findBundleSingletonConflicts(closestBundle.room, selected, items);
-    if (pairs.length > 0) {
-      setBundleConflictModal({
-        selected,
-        pairs,
-        resolutions: pairs.map(() => null),
-      });
-      return;
-    }
-    void executeBundleAdd(selected, [], []);
+  const bundleUpgradeDeltaSelected = useMemo(() => {
+    if (!closestBundle) return 0;
+    let d = 0;
+    closestBundle.items.forEach((bi, i) => {
+      if (!bundleChecks[i]) return;
+      const slot = bundleRoomSlotKey(bi.description);
+      if (slot == null) return;
+      const existing = items.find(
+        (c) => c.room === roomName && bundleRoomSlotKey(c.description) === slot
+      );
+      if (!existing) return;
+      const oldT = existing.qty * existing.unit_cost;
+      const newT = bi.unit_cost * existing.qty;
+      d += newT - oldT;
+    });
+    return d;
+  }, [closestBundle, bundleChecks, items, roomName]);
+
+  const bundleAdditionsSelected = useMemo(() => {
+    if (!closestBundle) return 0;
+    let d = 0;
+    closestBundle.items.forEach((bi, i) => {
+      if (!bundleChecks[i]) return;
+      const slot = bundleRoomSlotKey(bi.description);
+      const existing =
+        slot != null
+          ? items.find((c) => c.room === roomName && bundleRoomSlotKey(c.description) === slot)
+          : undefined;
+      if (existing) return;
+      d += bi.total;
+    });
+    return d;
+  }, [closestBundle, bundleChecks, items, roomName]);
+
+  function findExistingForBundleSlot(bi: BundleItem, roomItems: ClaimItem[]): ClaimItem | undefined {
+    const slot = bundleRoomSlotKey(bi.description);
+    if (slot == null) return undefined;
+    return roomItems.find((c) => c.room === roomName && bundleRoomSlotKey(c.description) === slot);
   }
 
-  async function executeBundleAdd(
-    selected: BundleItem[],
-    pairs: { bundleItem: BundleItem; existing: ClaimItem }[],
-    resolutions: BundleConflictResolution[]
-  ) {
+  async function handleApplyPackage() {
     if (!closestBundle || !session?.claim_items) return;
-    setBundleAdding(true);
     const beforeClaim = session.claim_items;
+    const selectedIndices = closestBundle.items.map((_, i) => i).filter((i) => bundleChecks[i]);
+    if (selectedIndices.length === 0) return;
+    setBundleAdding(true);
     try {
-      let claim = [...beforeClaim];
-      const toAdd: BundleItem[] = [];
+      pushUndoSnapshot();
+      let nextRoom = items.map((i) => ({ ...i }));
+      let packageExtra = 0;
 
-      for (const bi of selected) {
-        const sig = bundleItemSig(bi);
-        const idx = pairs.findIndex((p) => bundleItemSig(p.bundleItem) === sig);
-        if (idx < 0) {
-          toAdd.push(bi);
-          continue;
+      for (const i of selectedIndices) {
+        const bi = closestBundle.items[i];
+        const existing = findExistingForBundleSlot(bi, nextRoom);
+        if (existing) {
+          const oldLine = existing.qty * existing.unit_cost;
+          const newLine = bi.unit_cost * existing.qty;
+          packageExtra += newLine - oldLine;
+          const snap: ClaimItem["pre_upgrade_item"] = existing.pre_upgrade_item ?? {
+            description: existing.description,
+            brand: existing.brand,
+            model: existing.model,
+            unit_cost: existing.unit_cost,
+            category: existing.category,
+            source: existing.source ?? "original",
+          };
+          nextRoom = nextRoom.map((c) =>
+            sameClaimLine(c, existing)
+              ? {
+                  ...c,
+                  description: bi.description,
+                  brand: bi.brand || c.brand,
+                  model: c.model,
+                  unit_cost: bi.unit_cost,
+                  previous_unit_cost: existing.unit_cost,
+                  pre_upgrade_item: snap,
+                  source: "upgrade" as const,
+                  age_years: 0,
+                  age_months: 0,
+                  condition: "New" as const,
+                }
+              : c
+          );
+        } else {
+          packageExtra += bi.total;
+          nextRoom.push({
+            room: roomName,
+            description: bi.description,
+            brand: bi.brand || "",
+            model: "",
+            qty: bi.qty,
+            age_years: 0,
+            age_months: 0,
+            condition: "New",
+            unit_cost: bi.unit_cost,
+            category: bi.category,
+            source: "bundle",
+          });
         }
-        const r = resolutions[idx];
-        if (r === "skip") continue;
-        if (r === "replace") {
-          const ex = pairs[idx].existing;
-          claim = claim.filter((c) => !sameClaimLine(c, ex));
-        }
-        toAdd.push(bi);
       }
 
-      const incoming: ClaimItem[] = toAdd.map((bi) => ({
-        room: closestBundle.room,
-        description: bi.description,
-        brand: bi.brand,
-        model: "",
-        qty: bi.qty,
-        age_years: 0,
-        age_months: 0,
-        condition: "New",
-        unit_cost: bi.unit_cost,
-        category: bi.category,
-        source: "bundle",
-      }));
+      const afterClaim = [...beforeClaim.filter((i) => i.room !== roomName), ...nextRoom];
+      await persistRoomItemsSnapshot(nextRoom);
+      fireUpgradeReward(beforeClaim, afterClaim, packageExtra);
 
-      if (incoming.length === 0) {
-        setBundleConflictModal(null);
-        setToast("Nothing added — overlapping items were skipped.");
-        return;
-      }
-
-      const merged = mergeClaimIncoming(claim, incoming, "bundle");
-      const totalVal = incoming.reduce((s, i) => s + i.unit_cost * i.qty, 0);
-
+      const selectedItems = selectedIndices.map((i) => closestBundle.items[i]);
       const { error: accErr } = await supabase.from("bundle_decisions").upsert(
         {
           bundle_code: closestBundle.bundle_code,
           room: closestBundle.room,
           bundle_name: closestBundle.name,
-          action: "partial_accept",
-          items: selected as BundleItem[],
-          total_value: selected.reduce((s, i) => s + i.total, 0),
+          action: "applied",
+          items: selectedItems as BundleItem[],
+          total_value: selectedItems.reduce((s, bi) => s + bi.total, 0),
           note: null,
         },
         { onConflict: "bundle_code" }
       );
-      if (accErr) console.warn("bundle_decisions partial_accept blocked:", accErr.message);
+      if (accErr) console.warn("bundle_decisions applied blocked:", accErr.message);
 
-      await saveFullClaim(merged);
-      fireUpgradeReward(beforeClaim, merged, totalVal);
-      setToast(`Added ${incoming.length} item${incoming.length !== 1 ? "s" : ""} from bundle`);
+      setToast(`Package applied · +${formatCurrency(packageExtra)}`);
       setBundleAddedFlash(true);
-      window.setTimeout(() => setBundleAddedFlash(false), 1000);
-      setBundleConflictModal(null);
+      window.setTimeout(() => setBundleAddedFlash(false), 1200);
+      setBundleSectionOpen(false);
     } finally {
       setBundleAdding(false);
     }
+  }
+
+  async function applyMiscSliderToAll() {
+    if (!session?.claim_items || tier2Sorted.length === 0) return;
+    const m = miscMultiplier;
+    pushUndoSnapshot();
+    const nextRoom = items.map((ci) => {
+      const hit = tier2Sorted.find((t) => sameClaimLine(t, ci));
+      if (!hit) return ci;
+      const n = computeItemAtSlider(hit, m);
+      return { ...ci, qty: n.qty, unit_cost: n.unit_cost };
+    });
+    await persistRoomItemsSnapshot(nextRoom);
+    setToast("Misc items updated");
   }
 
   if (!hydrated) {
@@ -1208,22 +1285,22 @@ export default function RoomReviewPage() {
                 </p>
               </div>
 
-              {sortedRoomItems.length === 0 ? (
+              {tier1Sorted.length === 0 && tier2Sorted.length === 0 ? (
                 <p className="px-5 py-8 text-sm text-[#6B7280] md:px-6">No items in this room.</p>
               ) : (
                 <div>
-                  {sortedRoomItems.map((item, idx) => {
+                  {tier1Sorted.map((item, idx) => {
                     const lk = lockKeyForItem(item);
                     const locked = lockedKeys.includes(lk);
                     const rowKey = lk;
-                    const canUpgrade = isUpgradeCandidate(item);
+                    const showUpgradeFlow = isUpgradeCandidate(item) && item.unit_cost >= 500;
                     const cacheHas =
-                      canUpgrade &&
+                      showUpgradeFlow &&
                       (cachedDescs.has(norm(item.description)) ||
                         cachedDescs.has(norm(item.pre_upgrade_item?.description ?? "")));
+                    const showAccordion = showUpgradeFlow && cacheHas;
                     const upgraded = item.source === "upgrade" && !!item.pre_upgrade_item;
                     const pre = item.pre_upgrade_item;
-                    const origUnit = pre?.unit_cost ?? item.unit_cost;
                     const isOpen = openUpgradeKey === rowKey;
                     const rowBg = locked
                       ? "bg-blue-50/40"
@@ -1354,14 +1431,14 @@ export default function RoomReviewPage() {
                               </>
                             ) : (
                               <>
-                                <div className="flex flex-wrap items-start justify-between gap-2">
-                                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                                    <p className="text-[17px] font-semibold text-gray-900 [overflow-wrap:anywhere]">{item.description}</p>
-                                    <SourceTag source={item.source} />
-                                  </div>
+                                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                                  <p className="text-[17px] font-semibold text-gray-900 [overflow-wrap:anywhere]">
+                                    {item.description}
+                                  </p>
                                   {item.brand ? (
-                                    <span className="shrink-0 text-sm text-[#6B7280]">{item.brand}</span>
+                                    <span className="text-sm font-medium text-[#6B7280]">{item.brand}</span>
                                   ) : null}
+                                  <SourceTag source={item.source} />
                                 </div>
                                 <div className="mt-1 flex flex-wrap items-center gap-3">
                                   <span className="text-[17px] font-bold tabular-nums text-gray-900">
@@ -1440,7 +1517,7 @@ export default function RoomReviewPage() {
                             )}
                           </div>
                           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                            {canUpgrade && !upgraded ? (
+                            {showAccordion && !upgraded ? (
                               <>
                                 <button
                                   type="button"
@@ -1460,11 +1537,11 @@ export default function RoomReviewPage() {
                                 </button>
                               </>
                             ) : null}
-                            <LockButton locked={locked} onToggle={() => toggleLock(lk)} />
+                            {item.unit_cost >= 500 ? <LockButton locked={locked} onToggle={() => toggleLock(lk)} /> : null}
                           </div>
                         </div>
 
-                        {canUpgrade ? (
+                        {showAccordion ? (
                           <div
                             className={`overflow-hidden transition-[max-height] duration-300 ease-in-out ${
                               isOpen ? "max-h-[2200px]" : "max-h-0"
@@ -1482,6 +1559,7 @@ export default function RoomReviewPage() {
                                 }}
                                 onApplied={() => setOpenUpgradeKey(null)}
                                 onRefreshNotice={(msg) => setToast(msg)}
+                                onCatalogEmpty={() => setOpenUpgradeKey(null)}
                               />
                             </div>
                           </div>
@@ -1489,17 +1567,136 @@ export default function RoomReviewPage() {
                       </div>
                     );
                   })}
+
+                  {tier2Sorted.length > 0 ? (
+                    <div className="border-t-2 border-gray-200 bg-gray-50/50">
+                      <button
+                        type="button"
+                        onClick={() => setMiscSectionOpen((o) => !o)}
+                        className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left md:px-6"
+                      >
+                        <span className="text-xs font-bold uppercase tracking-wider text-gray-900">
+                          MISCELLANEOUS ITEMS ({tier2Sorted.length} items · {formatCurrency(miscOriginalTotal)}){" "}
+                          <span className="tabular-nums">{miscSectionOpen ? "▼" : "▶"}</span>
+                        </span>
+                      </button>
+                      {miscSectionOpen ? (
+                        <div className="space-y-6 border-t border-gray-200 px-4 pb-6 pt-4 md:px-6">
+                          <div>
+                            <p className="text-sm font-semibold text-gray-800">Adjust all items</p>
+                            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-[#6B7280]">
+                              <span>1.0x</span>
+                              <span className="font-semibold text-gray-900">{miscMultiplier.toFixed(2)}x</span>
+                              <span>3.0x</span>
+                            </div>
+                            <input
+                              type="range"
+                              min={0}
+                              max={Math.max(0, miscNotches.length - 1)}
+                              step={1}
+                              value={Math.min(miscMultIndex, Math.max(0, miscNotches.length - 1))}
+                              onChange={(e) => setMiscMultIndex(Number(e.target.value))}
+                              className="mt-1 h-2 w-full accent-[#2563EB]"
+                              aria-label="Adjust miscellaneous items"
+                            />
+                            <div className="mt-2 flex justify-between text-[11px] tabular-nums text-[#6B7280]">
+                              {miscNotchTotals.length > 0 ? (
+                                <>
+                                  <span>{formatCurrency(miscNotchTotals[0] ?? 0)}</span>
+                                  {miscNotchTotals.length > 3 ? (
+                                    <span>{formatCurrency(miscNotchTotals[Math.floor(miscNotchTotals.length / 2)] ?? 0)}</span>
+                                  ) : null}
+                                  {miscNotchTotals.length > 1 ? (
+                                    <span>{formatCurrency(miscNotchTotals[miscNotchTotals.length - 1] ?? 0)} max</span>
+                                  ) : null}
+                                </>
+                              ) : null}
+                            </div>
+                          </div>
+                          <div className="rounded-xl border border-gray-200 bg-white p-4 text-sm">
+                            <p className="tabular-nums text-gray-900">
+                              {formatCurrency(miscOriginalTotal)} → {formatCurrency(miscPreviewTotal)}
+                              {miscPreviewTotal - miscOriginalTotal !== 0 ? (
+                                <span className="ml-2 font-semibold text-[#16A34A]">
+                                  (+{formatCurrency(miscPreviewTotal - miscOriginalTotal)})
+                                </span>
+                              ) : null}
+                            </p>
+                            {miscPreviewLines.some(
+                              (l) =>
+                                l.item.qty !== l.next.qty ||
+                                Math.abs(l.item.unit_cost - l.next.unit_cost) > 0.01
+                            ) ? (
+                              <ul className="mt-3 space-y-2 text-[13px] text-[#6B7280]">
+                                {miscPreviewLines
+                                  .filter(
+                                    (l) =>
+                                      l.item.qty !== l.next.qty ||
+                                      Math.abs(l.item.unit_cost - l.next.unit_cost) > 0.01
+                                  )
+                                  .slice(0, 12)
+                                  .map((l, j) => (
+                                    <li key={`${l.item.description}-${j}`} className="[overflow-wrap:anywhere]">
+                                      <span className="font-medium text-gray-800">{l.item.description}</span> ×{l.item.qty}{" "}
+                                      {formatCurrency(l.item.unit_cost)} → ×{l.next.qty}{" "}
+                                      {formatCurrency(l.next.unit_cost)} (+{formatCurrency(l.delta)})
+                                    </li>
+                                  ))}
+                              </ul>
+                            ) : (
+                              <p className="mt-2 text-[13px] text-[#6B7280]">No changes at this level.</p>
+                            )}
+                            <button
+                              type="button"
+                              disabled={isSaving || tier2Sorted.length === 0}
+                              onClick={() => void applyMiscSliderToAll()}
+                              className="mt-4 w-full rounded-lg bg-[#2563EB] py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                            >
+                              Apply to All
+                            </button>
+                          </div>
+                          <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
+                            {tier2Sorted.map((item, idx) => (
+                              <li
+                                key={`misc-${generateItemId(item)}-${idx}`}
+                                className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-sm"
+                              >
+                                <span className="min-w-0 flex-1 font-medium text-gray-900 [overflow-wrap:anywhere]">
+                                  {item.description}
+                                </span>
+                                <span className="shrink-0 tabular-nums text-[#6B7280]">
+                                  {formatCurrency(item.unit_cost)} × {item.qty} ={" "}
+                                  {formatCurrency(item.unit_cost * item.qty)}
+                                </span>
+                                <button
+                                  type="button"
+                                  disabled={isSaving}
+                                  onClick={() => void handleRemoveItemRow(item)}
+                                  className="shrink-0 rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-600 hover:border-red-400 hover:text-red-600 disabled:opacity-40"
+                                  aria-label="Remove line"
+                                >
+                                  ✕
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               )}
             </section>
 
             <section className="mt-12">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">Add to this room</h2>
-              <p className="mt-1 text-sm text-[#6B7280]">Add items that weren&apos;t in your original claim</p>
+              <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">Add missing items</h2>
+              <p className="mt-1 text-sm text-[#6B7280]">
+                Items typically found in this room that aren&apos;t in your original claim
+              </p>
 
-              <div className="mt-8 grid gap-10 md:grid-cols-2 md:gap-12">
+              <div className="mt-8">
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-800">Suggested additions</h3>
+                  <h3 className="text-sm font-semibold text-gray-800">Common additions</h3>
                   {missingSuggestions.length === 0 ? (
                     <p className="mt-4 text-sm text-[#6B7280]">No suggestions for this room.</p>
                   ) : (
@@ -1511,120 +1708,31 @@ export default function RoomReviewPage() {
                             {rows.map((row) => {
                               const added = suggestionMidInClaim(row);
                               const opt = row.mid;
-                              const line = claimLineForSuggestion(row);
-                              const suggAgeKey = `sugg-age-${row.id}`;
                               return (
-                                <li key={row.id} className="flex min-h-[56px] flex-wrap items-center gap-3 px-4 py-3">
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                                      <p className="text-[15px] font-medium text-gray-900 [overflow-wrap:anywhere]">{opt.title}</p>
-                                      {added && line ? <SourceTag source={line.source} /> : null}
-                                      <span className="text-[15px] font-bold tabular-nums text-[#2563EB]">
-                                        {formatCurrency(added && line ? line.unit_cost : opt.price)}
-                                      </span>
-                                      {added && line ? (
-                                        <>
-                                          <QtyAdjuster
-                                            qty={line.qty}
-                                            disabled={isSaving}
-                                            onChange={(q) => void updateItemQty(line, q)}
-                                          />
-                                          {qtyFlashKey === lockKeyForItem(line) ? (
-                                            <span className="text-xs font-medium text-[#16A34A]">Qty updated</span>
-                                          ) : null}
-                                          <span className="text-[#6B7280]">·</span>
-                                          {editingAgeKey === suggAgeKey ? (
-                                            <span className="inline-flex flex-wrap items-center gap-2">
-                                              <input
-                                                type="number"
-                                                min={0}
-                                                max={120}
-                                                className="w-14 rounded border border-gray-300 px-2 py-1 text-sm"
-                                                value={ageDraft}
-                                                onChange={(e) => setAgeDraft(e.target.value)}
-                                              />
-                                              <span className="text-sm text-[#6B7280]">years</span>
-                                              <button
-                                                type="button"
-                                                className="text-sm font-semibold text-[#2563EB]"
-                                                onClick={() =>
-                                                  void updateItemAge(
-                                                    line,
-                                                    Math.min(120, Math.max(0, parseInt(ageDraft, 10) || 0))
-                                                  )
-                                                }
-                                              >
-                                                Save
-                                              </button>
-                                              <button
-                                                type="button"
-                                                className="text-sm text-[#6B7280]"
-                                                onClick={() => setEditingAgeKey(null)}
-                                              >
-                                                Cancel
-                                              </button>
-                                            </span>
-                                          ) : (
-                                            <span
-                                              role="button"
-                                              tabIndex={0}
-                                              onKeyDown={(e) => {
-                                                if (e.key === "Enter" || e.key === " ") {
-                                                  e.preventDefault();
-                                                  if (!isSaving) {
-                                                    setEditingAgeKey(suggAgeKey);
-                                                    setAgeDraft(String(line.age_years ?? 0));
-                                                  }
-                                                }
-                                              }}
-                                              onClick={() => {
-                                                if (isSaving) return;
-                                                setEditingAgeKey(suggAgeKey);
-                                                setAgeDraft(String(line.age_years ?? 0));
-                                              }}
-                                              className={`cursor-pointer text-base font-medium text-gray-900 underline decoration-[#2563EB] decoration-2 underline-offset-2 ${isSaving ? "opacity-40" : ""}`}
-                                            >
-                                              {displayAgeYears(line) < 1
-                                                ? "New / < 1 year"
-                                                : `${displayAgeYears(line)} years`}
-                                            </span>
-                                          )}
-                                        </>
-                                      ) : null}
-                                    </div>
-                                    <p className="mt-1 text-[13px] text-[#6B7280]">
-                                      {opt.brand ?? "—"}
-                                      {opt.url ? (
-                                        <>
-                                          {" "}
-                                          ·{" "}
-                                          <a
-                                            href={opt.url}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="text-[#2563EB] underline-offset-2 hover:underline"
-                                          >
-                                            View
-                                          </a>
-                                        </>
-                                      ) : null}
-                                    </p>
-                                  </div>
-                                  <div className="flex shrink-0 items-center">
-                                    <button
-                                      type="button"
-                                      disabled={isSaving}
-                                      onClick={() => void handleToggleSuggestionMid(row)}
-                                      className={`flex h-8 w-8 items-center justify-center rounded-full text-lg font-bold transition-all duration-200 disabled:opacity-40 ${
-                                        added
-                                          ? "bg-[#16A34A] text-white shadow-sm"
-                                          : "border-2 border-[#2563EB] bg-white text-[#2563EB] hover:bg-blue-50"
-                                      }`}
-                                      aria-label={added ? "Remove from claim" : "Add to claim"}
-                                    >
-                                      {added ? "✓" : "+"}
-                                    </button>
-                                  </div>
+                                <li
+                                  key={row.id}
+                                  className="flex min-h-[48px] flex-wrap items-center gap-2 px-4 py-2.5"
+                                >
+                                  <span className="min-w-0 flex-1 text-[15px] font-medium text-gray-900 [overflow-wrap:anywhere]">
+                                    {opt.title}
+                                  </span>
+                                  <span className="shrink-0 text-sm text-[#6B7280]">{opt.brand ?? "—"}</span>
+                                  <span className="shrink-0 text-[15px] font-bold tabular-nums text-gray-900">
+                                    {formatCurrency(opt.price)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    disabled={isSaving}
+                                    onClick={() => void handleToggleSuggestionMid(row)}
+                                    className={`shrink-0 rounded-lg px-3 py-1 text-sm font-bold transition disabled:opacity-40 ${
+                                      added
+                                        ? "bg-[#16A34A] text-white"
+                                        : "border-2 border-[#2563EB] bg-white text-[#2563EB] hover:bg-blue-50"
+                                    }`}
+                                    aria-label={added ? "Added" : "Add to claim"}
+                                  >
+                                    {added ? "✓ Added" : "+"}
+                                  </button>
                                 </li>
                               );
                             })}
@@ -1637,101 +1745,204 @@ export default function RoomReviewPage() {
                           onClick={() => setSuggestExpand((e) => !e)}
                           className="text-sm font-semibold text-[#2563EB] hover:underline"
                         >
-                          {suggestExpand ? "Show fewer suggestions ▲" : "Show more suggestions ▼"}
+                          {suggestExpand ? "Show fewer ▲" : "Show more ▼"}
                         </button>
                       ) : null}
                     </div>
                   )}
                 </div>
+              </div>
+            </section>
 
+            <section className="mt-12 rounded-2xl border border-gray-100 bg-white shadow-sm">
+              <button
+                type="button"
+                onClick={() => setBundleSectionOpen((o) => !o)}
+                className="flex w-full items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 text-left md:px-6"
+              >
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-800">Bundles</h3>
-                  {bundleStops.length === 0 ? (
-                    <p className="mt-4 text-sm text-[#6B7280]">No bundles defined for this room.</p>
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">Add by package</h2>
+                  <p className="mt-1 text-sm text-[#6B7280]">
+                    Pre-grouped items sized to fill your room budget
+                  </p>
+                </div>
+                <span className="text-gray-400">{bundleSectionOpen ? "▼" : "▶"}</span>
+              </button>
+              {bundleSectionOpen ? (
+                <div className="px-5 py-6 md:px-6">
+                  {BUNDLES_DATA.filter((b) => b.room === roomName).length === 0 ? (
+                    <p className="text-sm text-[#6B7280]">No bundles defined for this room.</p>
                   ) : (
-                    <div className="mt-4 space-y-4">
-                      <p className="text-center text-xs text-[#6B7280]">← drag to explore bundles →</p>
-                      <div className="flex flex-wrap items-center justify-center gap-2 text-xs tabular-nums text-[#6B7280] sm:text-sm">
-                        <span>Budget: {formatCurrency(minBundleDisplay)}</span>
-                        <input
-                          type="range"
-                          min={0}
-                          max={Math.max(0, bundleSnapValues.length - 1)}
-                          step={1}
-                          value={Math.min(sliderSnapIndex, bundleSnapValues.length - 1)}
-                          onChange={(e) => setSliderSnapIndex(Number(e.target.value))}
-                          className="mx-1 h-2 w-full max-w-[240px] flex-1 accent-[#2563EB] sm:max-w-none"
-                        />
-                        <span>{formatCurrency(maxBundleDisplay)}</span>
+                    <div className="space-y-6">
+                      <div>
+                        <p className="text-center text-xs text-[#6B7280]">← drag to explore →</p>
+                        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs tabular-nums text-[#6B7280] sm:text-sm">
+                          <span className="shrink-0 font-medium">{formatCurrency(minBundleDisplay)}</span>
+                          <input
+                            type="range"
+                            min={minBundleDisplay}
+                            max={maxBundleDisplay}
+                            step={1000}
+                            value={Math.min(maxBundleDisplay, Math.max(minBundleDisplay, bundleBudgetValue))}
+                            onChange={(e) => setBundleBudgetValue(Number(e.target.value))}
+                            className="h-2 min-w-0 flex-1 accent-[#2563EB]"
+                            aria-label="Bundle budget explorer"
+                          />
+                          <span className="shrink-0 font-medium">{formatCurrency(maxBundleDisplay)}</span>
+                        </div>
+                        {closestBundle ? (
+                          <p className="mt-3 text-center text-sm font-semibold text-gray-900">
+                            {closestBundle.name}{" "}
+                            <span className="tabular-nums text-[#2563EB]">
+                              {formatCurrency(closestBundle.total_value)}
+                            </span>
+                          </p>
+                        ) : null}
                       </div>
 
-                      <div className="rounded-2xl bg-white p-6 shadow-md transition-shadow duration-200">
-                        {closestBundle &&
-                        bundleChecks.length > 0 &&
-                        bundleChecks.length === closestBundle.items.length ? (
-                          <>
-                            <div className="flex flex-wrap items-start justify-between gap-2 border-b border-gray-100 pb-4">
-                              <h4 className="text-base font-semibold text-gray-900 [overflow-wrap:anywhere]">{closestBundle.name}</h4>
-                              <span className="text-base font-bold tabular-nums text-gray-900">
-                                {formatCurrency(closestBundle.total_value)}
+                      {closestBundle && bundleChecks.length === closestBundle.items.length ? (
+                        <div className="rounded-2xl border border-gray-200 bg-gray-50/50 p-4 md:p-6">
+                          <div className="flex flex-wrap items-start justify-between gap-2 border-b border-gray-200 pb-4">
+                            <h4 className="text-lg font-semibold text-gray-900 [overflow-wrap:anywhere]">
+                              {closestBundle.name}
+                            </h4>
+                            <span className="text-lg font-bold tabular-nums text-gray-900">
+                              {formatCurrency(closestBundle.total_value)}
+                            </span>
+                          </div>
+
+                          <div className="mt-4 grid grid-cols-1 gap-6 md:grid-cols-2">
+                            <div>
+                              <p className="border-b border-gray-200 pb-2 text-xs font-bold uppercase tracking-wide text-[#6B7280]">
+                                Upgrades existing
+                              </p>
+                              <ul className="mt-3 space-y-4">
+                                {closestBundle.items.map((bi, i) => {
+                                  const existing = findExistingForBundleSlot(bi, items);
+                                  if (!existing) return null;
+                                  const delta = bi.unit_cost * existing.qty - existing.unit_cost * existing.qty;
+                                  return (
+                                    <li key={`bl-${i}`} className="flex gap-2 text-sm">
+                                      <input
+                                        type="checkbox"
+                                        className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
+                                        checked={!!bundleChecks[i]}
+                                        onChange={() =>
+                                          setBundleChecks((prev) => {
+                                            const next = [...prev];
+                                            next[i] = !next[i];
+                                            return next;
+                                          })
+                                        }
+                                      />
+                                      <div className="min-w-0 flex-1">
+                                        <p className="text-[13px] text-gray-500 line-through [overflow-wrap:anywhere]">
+                                          {existing.brand ? `${existing.brand} ` : ""}
+                                          {existing.description}{" "}
+                                          <span className="tabular-nums font-semibold">
+                                            {formatCurrency(existing.unit_cost * existing.qty)}
+                                          </span>
+                                        </p>
+                                        <p className="mt-1 font-medium text-gray-900 [overflow-wrap:anywhere]">
+                                          → {bi.brand ? `${bi.brand} ` : ""}
+                                          {bi.description}
+                                        </p>
+                                        <p className="mt-1 tabular-nums text-gray-900">
+                                          {formatCurrency(bi.unit_cost * existing.qty)}
+                                          {delta > 0 ? (
+                                            <span className="ml-2 font-semibold text-[#16A34A]">
+                                              (+{formatCurrency(delta)})
+                                            </span>
+                                          ) : null}
+                                        </p>
+                                      </div>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            </div>
+                            <div>
+                              <p className="border-b border-gray-200 pb-2 text-xs font-bold uppercase tracking-wide text-[#6B7280]">
+                                Adds new
+                              </p>
+                              <ul className="mt-3 space-y-4">
+                                {closestBundle.items.map((bi, i) => {
+                                  if (findExistingForBundleSlot(bi, items)) return null;
+                                  return (
+                                    <li key={`br-${i}`} className="flex gap-2 text-sm">
+                                      <input
+                                        type="checkbox"
+                                        className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
+                                        checked={!!bundleChecks[i]}
+                                        onChange={() =>
+                                          setBundleChecks((prev) => {
+                                            const next = [...prev];
+                                            next[i] = !next[i];
+                                            return next;
+                                          })
+                                        }
+                                      />
+                                      <div className="min-w-0 flex-1">
+                                        <p className="font-medium text-gray-900 [overflow-wrap:anywhere]">
+                                          + {bi.brand ? `${bi.brand} ` : ""}
+                                          {bi.description}
+                                        </p>
+                                        <p className="mt-1 font-bold tabular-nums text-gray-900">
+                                          {formatCurrency(bi.total)}
+                                        </p>
+                                      </div>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            </div>
+                          </div>
+
+                          <div className="mt-6 border-t border-gray-200 pt-4 text-sm text-gray-800">
+                            <p>
+                              Upgrades:{" "}
+                              <span className="font-semibold text-[#16A34A]">
+                                +{formatCurrency(Math.max(0, bundleUpgradeDeltaSelected))}
                               </span>
-                            </div>
-                            <ul className="mt-2 divide-y divide-gray-100">
-                              {closestBundle.items.map((bi, i) => (
-                                <li key={`${bi.description}-${i}`} className="flex min-h-[44px] items-center gap-3 py-2">
-                                  <input
-                                    type="checkbox"
-                                    className="h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
-                                    checked={!!bundleChecks[i]}
-                                    onChange={() =>
-                                      setBundleChecks((prev) => {
-                                        const next = [...prev];
-                                        next[i] = !next[i];
-                                        return next;
-                                      })
-                                    }
-                                  />
-                                  <span className="min-w-0 flex-1 text-[15px] text-gray-900 [overflow-wrap:anywhere]">
-                                    {bi.brand ? `${bi.brand} ` : ""}
-                                    {bi.description}
-                                  </span>
-                                  <span className="shrink-0 text-[15px] font-bold tabular-nums text-gray-900">{formatCurrency(bi.total)}</span>
-                                </li>
-                              ))}
-                            </ul>
-                            <div className="mt-4 border-t border-gray-200 pt-4 text-sm font-semibold text-gray-800">
-                              Selected: {bundleSelectedCount} item{bundleSelectedCount !== 1 ? "s" : ""} ·{" "}
-                              <span className="tabular-nums">{formatCurrency(bundleSelectedTotal)}</span>
-                            </div>
-                            <button
-                              type="button"
-                              disabled={bundleAdding || bundleSelectedCount === 0 || isSaving}
-                              onClick={() => handleBundleAddClick()}
-                              className={`mt-5 flex h-12 w-full items-center justify-center rounded-xl text-base font-bold transition-all duration-300 md:h-14 md:text-base ${
-                                bundleAddedFlash
-                                  ? "bg-[#16A34A] text-white"
-                                  : "bg-[#2563EB] text-white hover:bg-blue-700"
-                              } disabled:opacity-40`}
-                            >
-                              {bundleAdding ? "…" : bundleAddedFlash ? "✓ Added" : "Add Selected Items →"}
-                            </button>
-                          </>
-                        ) : (
-                          <p className="py-8 text-center text-sm text-[#6B7280]">
-                            Move the slider to select a bundle for this room.
-                          </p>
-                        )}
-                      </div>
-                      <Link
-                        href={`/review/bundles/${roomSlug}`}
-                        className="inline-block text-sm font-semibold text-[#2563EB] hover:underline"
-                      >
-                        Browse all bundles →
-                      </Link>
+                            </p>
+                            <p className="mt-1">
+                              Additions:{" "}
+                              <span className="font-semibold text-[#16A34A]">
+                                +{formatCurrency(bundleAdditionsSelected)}
+                              </span>
+                            </p>
+                            <p className="mt-2 text-base font-bold text-gray-900">
+                              Selected:{" "}
+                              <span className="tabular-nums">{formatCurrency(bundleSelectedTotal)}</span> total
+                            </p>
+                          </div>
+
+                          <button
+                            type="button"
+                            disabled={bundleAdding || bundleSelectedCount === 0 || isSaving}
+                            onClick={() => void handleApplyPackage()}
+                            className={`mt-5 flex h-12 w-full items-center justify-center rounded-xl text-base font-bold transition md:h-14 ${
+                              bundleAddedFlash
+                                ? "bg-[#16A34A] text-white"
+                                : "bg-[#2563EB] text-white hover:bg-blue-700"
+                            } disabled:opacity-40`}
+                          >
+                            {bundleAdding ? "…" : bundleAddedFlash ? "✓ Applied" : "✓ Apply this package"}
+                          </button>
+                          <Link
+                            href={`/review/bundles/${roomSlug}`}
+                            className="mt-4 inline-block text-sm font-semibold text-[#2563EB] hover:underline"
+                          >
+                            Browse all bundles →
+                          </Link>
+                        </div>
+                      ) : (
+                        <p className="text-center text-sm text-[#6B7280]">Loading package…</p>
+                      )}
                     </div>
                   )}
                 </div>
-              </div>
+              ) : null}
             </section>
 
             <p className="mt-10 text-center text-sm text-[#6B7280]">
@@ -1836,96 +2047,6 @@ export default function RoomReviewPage() {
                 onClick={() => void confirmResetRoom()}
               >
                 Yes, Reset
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {bundleConflictModal ? (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
-          <div
-            className="max-h-[min(90vh,520px)] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="bundle-conflict-title"
-          >
-            <h2 id="bundle-conflict-title" className="text-lg font-bold text-gray-900">
-              Some items in this bundle overlap with what you already have:
-            </h2>
-            <div className="mt-4 space-y-6">
-              {bundleConflictModal.pairs.map((p, i) => (
-                <div key={i} className="border-t border-gray-100 pt-4 first:border-t-0 first:pt-0">
-                  <p className="text-sm text-[#6B7280]">
-                    You have:{" "}
-                    <span className="font-semibold text-gray-900">
-                      {p.existing.brand ? `${p.existing.brand} ` : ""}
-                      {p.existing.description}
-                    </span>{" "}
-                    <span className="tabular-nums">({formatCurrency(p.existing.unit_cost * p.existing.qty)})</span>
-                  </p>
-                  <p className="mt-1 text-sm text-[#6B7280]">
-                    Bundle has:{" "}
-                    <span className="font-semibold text-gray-900">
-                      {p.bundleItem.brand ? `${p.bundleItem.brand} ` : ""}
-                      {p.bundleItem.description}
-                    </span>{" "}
-                    <span className="tabular-nums">({formatCurrency(p.bundleItem.total)})</span>
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {(["replace", "both", "skip"] as const).map((choice) => (
-                      <button
-                        key={choice}
-                        type="button"
-                        onClick={() =>
-                          setBundleConflictModal((prev) => {
-                            if (!prev) return prev;
-                            const next = [...prev.resolutions];
-                            next[i] = choice;
-                            return { ...prev, resolutions: next };
-                          })
-                        }
-                        className={`rounded-lg border px-3 py-2 text-xs font-semibold transition-colors sm:text-sm ${
-                          bundleConflictModal.resolutions[i] === choice
-                            ? "border-[#2563EB] bg-blue-50 text-[#2563EB]"
-                            : "border-gray-200 text-gray-700 hover:bg-gray-50"
-                        }`}
-                      >
-                        {choice === "replace"
-                          ? "Replace existing"
-                          : choice === "both"
-                            ? "Add both"
-                            : "Skip"}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="mt-6 flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700"
-                onClick={() => setBundleConflictModal(null)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={
-                  bundleAdding ||
-                  bundleConflictModal.resolutions.some((r) => r == null)
-                }
-                onClick={() =>
-                  void executeBundleAdd(
-                    bundleConflictModal.selected,
-                    bundleConflictModal.pairs,
-                    bundleConflictModal.resolutions as BundleConflictResolution[]
-                  )
-                }
-                className="rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
-              >
-                Continue
               </button>
             </div>
           </div>
