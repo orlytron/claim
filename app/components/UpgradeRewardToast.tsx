@@ -36,7 +36,7 @@ export default function UpgradeRewardToast() {
       setVisible(true);
       hideTimer = setTimeout(() => {
         setVisible(false);
-        clearTimer = setTimeout(() => setPayload(null), 200);
+        clearTimer = setTimeout(() => setPayload(null), 100);
       }, 1000);
     }
     window.addEventListener("claim-upgrade-reward", onReward as EventListener);
@@ -51,7 +51,7 @@ export default function UpgradeRewardToast() {
 
   return (
     <div
-      className={`fixed right-4 top-4 z-50 flex h-12 max-h-[48px] min-w-[140px] items-center rounded-lg border border-green-200 bg-white px-3 py-2 text-sm font-semibold text-[#16A34A] shadow-md transition-all duration-300 ease-out tabular-nums ${
+      className={`fixed right-4 top-4 z-50 flex h-12 max-h-[48px] min-w-[140px] items-center rounded-lg border border-green-200 bg-white px-3 py-2 text-sm font-semibold text-[#16A34A] shadow-md transition-opacity duration-100 ease-out tabular-nums ${
         visible ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-6 opacity-0"
       }`}
       role="status"

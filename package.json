@@ -10,7 +10,9 @@
     "seed": "npx ts-node --project scripts/tsconfig.json scripts/seed-israel.ts",
     "seed-bundles": "npx ts-node --project scripts/tsconfig.json scripts/seed-bundles.ts",
     "seed-upgrades": "npx ts-node --project scripts/tsconfig.json scripts/seed-upgrades.ts",
-    "cleanup-upgrades": "npx ts-node --project scripts/tsconfig.json scripts/cleanup-upgrades.ts"
+    "cleanup-upgrades": "npx ts-node --project scripts/tsconfig.json scripts/cleanup-upgrades.ts",
+    "expand-high-value": "npx ts-node --project scripts/tsconfig.json scripts/expand-high-value-upgrades.ts",
+    "smart-upgrades": "npx ts-node --project scripts/tsconfig.json scripts/smart-upgrade-seed.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

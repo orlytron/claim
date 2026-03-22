@@ -92,6 +92,10 @@ function isUpgradeCandidate(item: ClaimItem): boolean {
   const desc = item.description.toLowerCase();
   const brand = (item.brand || "").toLowerCase();
 
+  if (item.unit_cost < 100 && !(item.brand || "").trim()) return false;
+
+  if (/\bxbox\b/i.test(desc)) return false;
+
   const artKeywords = [
     "artwork",
     "print",
@@ -323,6 +327,12 @@ export default function RoomReviewPage() {
   const [allRooms, setAllRooms] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 1000);
+    return () => clearTimeout(t);
+  }, [toast]);
   const [cachedDescs, setCachedDescs] = useState<Set<string>>(new Set());
   const [lockedKeys, setLockedKeys] = useState<string[]>([]);
   const [roomTarget, setRoomTarget] = useState(0);
@@ -477,14 +487,14 @@ export default function RoomReviewPage() {
     setIsLoading(false);
   }
 
-  const upgradeItems = useMemo(
-    () => items.filter(isUpgradeCandidate).sort((a, b) => b.unit_cost - a.unit_cost),
-    [items]
-  );
+  /** All room lines, one list — sorted by unit price (highest first). */
+  const sortedRoomItems = useMemo(() => [...items].sort((a, b) => b.unit_cost - a.unit_cost), [items]);
+
+  const upgradeCandidates = useMemo(() => items.filter(isUpgradeCandidate), [items]);
 
   const upgradeSubtotal = useMemo(
-    () => upgradeItems.reduce((s, i) => s + i.qty * i.unit_cost, 0),
-    [upgradeItems]
+    () => upgradeCandidates.reduce((s, i) => s + i.qty * i.unit_cost, 0),
+    [upgradeCandidates]
   );
 
   const missingSuggestions = useMemo(() => {
@@ -560,33 +570,6 @@ export default function RoomReviewPage() {
     return lockedKeys.includes(lockKeyForItem(item));
   }
 
-  const upgradeRowKeys = useMemo(() => new Set(upgradeItems.map((u) => lockKeyForItem(u))), [upgradeItems, lockKeyForItem]);
-
-  const extraRoomItems = useMemo(
-    () => items.filter((i) => !upgradeRowKeys.has(lockKeyForItem(i))),
-    [items, upgradeRowKeys, lockKeyForItem]
-  );
-
-  const matchesSuggestionMid = useCallback(
-    (item: ClaimItem) => {
-      const list = SUGGESTED_ADDITIONS[roomName] ?? [];
-      return list.some((row) => {
-        const opt = row.mid;
-        return (
-          item.source === "bundle" &&
-          norm(item.description) === norm(opt.title) &&
-          Math.abs(item.unit_cost - opt.price) < 0.01
-        );
-      });
-    },
-    [roomName]
-  );
-
-  const bundleOnlyExtras = useMemo(
-    () => extraRoomItems.filter((i) => !matchesSuggestionMid(i)),
-    [extraRoomItems, matchesSuggestionMid]
-  );
-
   function flashQtySaved(key: string) {
     setQtyFlashKey(key);
     window.setTimeout(() => setQtyFlashKey(null), 1000);
@@ -651,7 +634,6 @@ export default function RoomReviewPage() {
     const next = items.filter((ci) => !sameClaimLine(ci, item));
     await saveRoomItems(next);
     setToast("Removed");
-    window.setTimeout(() => setToast(null), 1000);
   }
 
   async function confirmResetRoom() {
@@ -1061,7 +1043,7 @@ export default function RoomReviewPage() {
       fireUpgradeReward(beforeClaim, merged, totalVal);
       setToast(`Added ${incoming.length} item${incoming.length !== 1 ? "s" : ""} from bundle`);
       setBundleAddedFlash(true);
-      window.setTimeout(() => setBundleAddedFlash(false), 2500);
+      window.setTimeout(() => setBundleAddedFlash(false), 1000);
       setBundleConflictModal(null);
     } finally {
       setBundleAdding(false);
@@ -1220,23 +1202,25 @@ export default function RoomReviewPage() {
           <main className="mx-auto w-full max-w-[1100px] flex-1 px-8 py-6">
             <section className="rounded-2xl border border-gray-100 bg-white shadow-sm transition-all duration-300">
               <div className="border-b border-gray-100 px-5 py-5 md:px-6">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">Upgrade what you have</h2>
-                <p className="mt-1 text-sm text-[#6B7280]">Click Upgrade on any item to see options</p>
+                <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">Your room inventory</h2>
+                <p className="mt-1 text-sm text-[#6B7280]">
+                  All claim lines for this room. Use Upgrade on eligible items to see replacement options.
+                </p>
               </div>
 
-              {upgradeItems.length === 0 ? (
-                <p className="px-5 py-8 text-sm text-[#6B7280] md:px-6">
-                  No upgrade candidates in this room (art and small decor are handled elsewhere).
-                </p>
+              {sortedRoomItems.length === 0 ? (
+                <p className="px-5 py-8 text-sm text-[#6B7280] md:px-6">No items in this room.</p>
               ) : (
                 <div>
-                  {upgradeItems.map((item, idx) => {
+                  {sortedRoomItems.map((item, idx) => {
                     const lk = lockKeyForItem(item);
                     const locked = lockedKeys.includes(lk);
                     const rowKey = lk;
+                    const canUpgrade = isUpgradeCandidate(item);
                     const cacheHas =
-                      cachedDescs.has(norm(item.description)) ||
-                      cachedDescs.has(norm(item.pre_upgrade_item?.description ?? ""));
+                      canUpgrade &&
+                      (cachedDescs.has(norm(item.description)) ||
+                        cachedDescs.has(norm(item.pre_upgrade_item?.description ?? "")));
                     const upgraded = item.source === "upgrade" && !!item.pre_upgrade_item;
                     const pre = item.pre_upgrade_item;
                     const origUnit = pre?.unit_cost ?? item.unit_cost;
@@ -1456,7 +1440,7 @@ export default function RoomReviewPage() {
                             )}
                           </div>
                           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                            {!upgraded ? (
+                            {canUpgrade && !upgraded ? (
                               <>
                                 <button
                                   type="button"
@@ -1480,112 +1464,34 @@ export default function RoomReviewPage() {
                           </div>
                         </div>
 
-                        <div
-                          className={`overflow-hidden transition-[max-height] duration-300 ease-in-out ${
-                            isOpen ? "max-h-[2200px]" : "max-h-0"
-                          }`}
-                        >
-                          <div className="border-t border-gray-100 bg-gray-50/90 px-4 py-6 md:px-6">
-                            <UpgradeOptionsPanel
-                              key={`${item.description}-${item.unit_cost}-${idx}`}
-                              item={item}
-                              locked={locked}
-                              cacheHas={cacheHas}
-                              onApply={async (opt) => {
-                                if (upgraded && item.pre_upgrade_item) await handleChangeUpgrade(item, opt);
-                                else await handleApplyUpgrade(item, opt);
-                              }}
-                              onApplied={() => setOpenUpgradeKey(null)}
-                              onRefreshNotice={(msg) => setToast(msg)}
-                            />
+                        {canUpgrade ? (
+                          <div
+                            className={`overflow-hidden transition-[max-height] duration-300 ease-in-out ${
+                              isOpen ? "max-h-[2200px]" : "max-h-0"
+                            }`}
+                          >
+                            <div className="border-t border-gray-100 bg-gray-50/90 px-4 py-6 md:px-6">
+                              <UpgradeOptionsPanel
+                                key={`${item.description}-${item.unit_cost}-${idx}`}
+                                item={item}
+                                locked={locked}
+                                cacheHas={cacheHas}
+                                onApply={async (opt) => {
+                                  if (upgraded && item.pre_upgrade_item) await handleChangeUpgrade(item, opt);
+                                  else await handleApplyUpgrade(item, opt);
+                                }}
+                                onApplied={() => setOpenUpgradeKey(null)}
+                                onRefreshNotice={(msg) => setToast(msg)}
+                              />
+                            </div>
                           </div>
-                        </div>
+                        ) : null}
                       </div>
                     );
                   })}
                 </div>
               )}
             </section>
-
-            {bundleOnlyExtras.length > 0 ? (
-              <section className="mt-10 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm md:p-6">
-                <h3 className="text-sm font-semibold text-gray-900">Added from bundles (this room)</h3>
-                <p className="mt-1 text-xs text-[#6B7280]">Adjust quantity or age for lines that came from a bundle.</p>
-                <ul className="mt-4 divide-y divide-gray-100">
-                  {bundleOnlyExtras.map((item, idx) => {
-                    const xk = `bundle-extra-${lockKeyForItem(item)}-${idx}`;
-                    return (
-                      <li key={xk} className="flex flex-wrap items-center gap-3 py-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="text-[15px] font-medium text-gray-900 [overflow-wrap:anywhere]">{item.description}</p>
-                            <SourceTag source={item.source} />
-                          </div>
-                          <p className="mt-1 text-[13px] text-[#6B7280]">{item.brand || "—"}</p>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-[15px] font-bold tabular-nums text-[#2563EB]">{formatCurrency(item.unit_cost)}</span>
-                          <QtyAdjuster
-                            qty={item.qty}
-                            disabled={isSaving}
-                            onChange={(q) => void updateItemQty(item, q)}
-                          />
-                          {qtyFlashKey === lockKeyForItem(item) ? (
-                            <span className="text-xs font-medium text-[#16A34A]">Qty updated</span>
-                          ) : null}
-                          {editingAgeKey === xk ? (
-                            <span className="inline-flex flex-wrap items-center gap-2">
-                              <input
-                                type="number"
-                                min={0}
-                                max={120}
-                                className="w-14 rounded border border-gray-300 px-2 py-1 text-sm"
-                                value={ageDraft}
-                                onChange={(e) => setAgeDraft(e.target.value)}
-                              />
-                              <span className="text-sm text-[#6B7280]">years</span>
-                              <button
-                                type="button"
-                                className="text-sm font-semibold text-[#2563EB]"
-                                onClick={() =>
-                                  void updateItemAge(
-                                    item,
-                                    Math.min(120, Math.max(0, parseInt(ageDraft, 10) || 0))
-                                  )
-                                }
-                              >
-                                Save
-                              </button>
-                              <button
-                                type="button"
-                                className="text-sm text-[#6B7280]"
-                                onClick={() => setEditingAgeKey(null)}
-                              >
-                                Cancel
-                              </button>
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              disabled={isSaving}
-                              onClick={() => {
-                                setEditingAgeKey(xk);
-                                setAgeDraft(String(item.age_years ?? 0));
-                              }}
-                              className="text-sm font-bold text-[#2563EB] underline underline-offset-2 disabled:opacity-40"
-                            >
-                              {!item.age_years || item.age_years < 1
-                                ? "New / < 1 year"
-                                : `${item.age_years} years old`}
-                            </button>
-                          )}
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            ) : null}
 
             <section className="mt-12">
               <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">Add to this room</h2>
@@ -1841,11 +1747,23 @@ export default function RoomReviewPage() {
             <div className="flex shrink-0 items-center gap-1">
               <button
                 type="button"
+                title="Undo"
+                aria-label="Undo"
                 disabled={!undoAvail || isSaving}
                 onClick={() => void undoRoom()}
-                className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs font-medium text-gray-700 disabled:opacity-40 md:text-sm"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-gray-200 text-lg leading-none text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
               >
-                ⟲ Undo
+                ⟲
+              </button>
+              <button
+                type="button"
+                title="Redo"
+                aria-label="Redo"
+                disabled={!redoAvail || isSaving}
+                onClick={() => void redoRoom()}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-gray-200 text-lg leading-none text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
+              >
+                ⟳
               </button>
             </div>
             <div className="hidden min-w-0 flex-[1_1_200px] flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-[#6B7280] md:flex md:text-sm">
@@ -1873,14 +1791,6 @@ export default function RoomReviewPage() {
               </span>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <button
-                type="button"
-                disabled={!redoAvail || isSaving}
-                onClick={() => void redoRoom()}
-                className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs font-medium text-gray-700 disabled:opacity-40 md:text-sm"
-              >
-                ⟳ Redo
-              </button>
               <Link
                 href={prevRoom ? `/review/${slugify(prevRoom)}${guided ? "?guided=true" : ""}` : "/review"}
                 className="hidden rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-800 transition-colors hover:bg-gray-50 sm:inline md:text-sm"
@@ -2044,8 +1954,8 @@ export default function RoomReviewPage() {
                 direction="right"
                 visible={guidedLoadVisible}
                 text={
-                  upgradeItems.length > 0
-                    ? `This is the ${roomName}!\nYou have ${upgradeItems.length} upgradeable ${upgradeItems.length === 1 ? "item" : "items"} worth ${formatCurrency(upgradeSubtotal)}.\nLet's see what we can upgrade! ✨`
+                  upgradeCandidates.length > 0
+                    ? `This is the ${roomName}!\nYou have ${upgradeCandidates.length} upgradeable ${upgradeCandidates.length === 1 ? "item" : "items"} worth ${formatCurrency(upgradeSubtotal)}.\nLet's see what we can upgrade! ✨`
                     : `This is the ${roomName}!\nThere are no lines here that need the upgrade assistant right now — art and small decor belong in Art Collection.\nCheck suggested additions below if any! ✨`
                 }
               />

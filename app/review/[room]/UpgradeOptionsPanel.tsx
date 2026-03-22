@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ClaimItem } from "../../lib/types";
 import { formatCurrency } from "../../lib/utils";
 
@@ -14,10 +14,11 @@ export type UpgradeOption = {
   url: string;
 };
 
+/** Legacy prefixes for rows created before flat options UI */
 export const ENTRY_TITLE_PREFIX = "Entry upgrade —";
 export const ENTRY_PLUS_TITLE_PREFIX = "Entry+ upgrade —";
 
-type UpgradeProduct = {
+type CatalogProduct = {
   title: string;
   brand: string;
   model: string;
@@ -26,7 +27,7 @@ type UpgradeProduct = {
   url: string;
 };
 
-type UpgradeOptionSet = { mid: UpgradeProduct; premium: UpgradeProduct | null };
+type UpgradeOptionSet = { mid: CatalogProduct; premium: CatalogProduct | null };
 
 function SmallSpinner() {
   return (
@@ -37,14 +38,81 @@ function SmallSpinner() {
   );
 }
 
+function normKey(title: string, price: number): string {
+  return `${title.trim().toLowerCase()}|${price}`;
+}
+
+function normalizeSet(s: unknown): UpgradeOptionSet | null {
+  if (!s || typeof s !== "object") return null;
+  const o = s as UpgradeOptionSet;
+  if (!o.mid || typeof o.mid !== "object" || !(o.mid as CatalogProduct).title) return null;
+  const mid = o.mid as CatalogProduct;
+  const prem =
+    o.premium && typeof o.premium === "object" && (o.premium as CatalogProduct).price > 0
+      ? (o.premium as CatalogProduct)
+      : null;
+  return { mid, premium: prem };
+}
+
+/** Priority: optionSets from API → single mid/premium on response. */
+function setsFromResponse(j: Record<string, unknown>): UpgradeOptionSet[] {
+  const rawSets = j.optionSets;
+  if (Array.isArray(rawSets) && rawSets.length > 0) {
+    const out = rawSets.map(normalizeSet).filter(Boolean) as UpgradeOptionSet[];
+    if (out.length) return out;
+  }
+  const m = j.mid as CatalogProduct | undefined;
+  if (m?.title && m.price > 0) {
+    const p = j.premium as CatalogProduct | null | undefined;
+    const prem = p && p.price > 0 ? p : null;
+    return [{ mid: m, premium: prem }];
+  }
+  return [];
+}
+
+/** Flatten all cached pairs into individual product cards; drop duplicate price+title and same-price premium as mid. */
+function flattenOptionSets(sets: UpgradeOptionSet[]): CatalogProduct[] {
+  const out: CatalogProduct[] = [];
+  const seen = new Set<string>();
+  const push = (p: CatalogProduct) => {
+    const k = normKey(p.title, p.price);
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push(p);
+  };
+  for (const s of sets) {
+    if (!s?.mid) continue;
+    push(s.mid);
+    if (s.premium && Math.abs(s.premium.price - s.mid.price) > 0.01) {
+      push(s.premium);
+    }
+  }
+  return out;
+}
+
+function validDisplayOptions(products: CatalogProduct[], baseUnit: number, itemBrand: string): CatalogProduct[] {
+  return products.filter((opt) => {
+    if (!opt.title?.trim() || opt.price <= 0) return false;
+    if (opt.price <= baseUnit * 1.15) return false;
+    const brand = (opt.brand || itemBrand || "").trim();
+    const retailer = (opt.retailer || "").trim();
+    if (!brand || !retailer) return false;
+    return true;
+  });
+}
+
 function NoCacheUpgradeForm({
   item,
   onAddCustom,
+  message,
+  startOpen = false,
 }: {
   item: ClaimItem;
   onAddCustom: (price: number, title: string, brand: string) => Promise<void>;
+  message?: string;
+  startOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(startOpen);
   const [price, setPrice] = useState("");
   const [title, setTitle] = useState(item.description);
   const [brand, setBrand] = useState(item.brand || "");
@@ -52,7 +120,8 @@ function NoCacheUpgradeForm({
 
   return (
     <div className="rounded-xl border border-dashed border-gray-200 bg-white p-5 shadow-sm">
-      <p className="text-sm text-[#6B7280]">No catalog match yet — add a custom replacement.</p>
+      {message ? <p className="text-sm text-[#6B7280]">{message}</p> : null}
+      {!message ? <p className="text-sm text-[#6B7280]">No catalog match yet — add a custom replacement.</p> : null}
       {!open ? (
         <button
           type="button"
@@ -127,8 +196,7 @@ export function UpgradeOptionsPanel({
 }) {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [optionSets, setOptionSets] = useState<UpgradeOptionSet[]>([]);
-  const [activeSetIndex, setActiveSetIndex] = useState(0);
+  const [rawProducts, setRawProducts] = useState<CatalogProduct[]>([]);
   const [customPrice, setCustomPrice] = useState("");
   const [customDesc, setCustomDesc] = useState("");
   const [applying, setApplying] = useState(false);
@@ -138,10 +206,7 @@ export function UpgradeOptionsPanel({
     item.source === "upgrade" && item.pre_upgrade_item ? item.pre_upgrade_item.unit_cost : item.unit_cost;
   const isUpgradedLine = item.source === "upgrade" && !!item.pre_upgrade_item;
   const origDesc = item.pre_upgrade_item?.description ?? item.description;
-
-  const activeSet = optionSets[Math.min(activeSetIndex, Math.max(0, optionSets.length - 1))] ?? null;
-  const mid = activeSet?.mid ?? null;
-  const premium = activeSet?.premium ?? null;
+  const itemBrand = item.brand || "";
 
   const fetchPayload = useCallback(() => {
     const descForApi =
@@ -164,35 +229,19 @@ export function UpgradeOptionsPanel({
     item.pre_upgrade_item?.unit_cost,
   ]);
 
-  const applyResponseJson = useCallback((j: Record<string, unknown>) => {
-    const sets = j.optionSets as UpgradeOptionSet[] | undefined;
-    if (Array.isArray(sets) && sets.length > 0) {
-      const normalized = sets
-        .map((s) => {
-          if (!s?.mid?.price) return null;
-          const prem =
-            s.premium && typeof s.premium === "object" && (s.premium as UpgradeProduct).price > 0
-              ? (s.premium as UpgradeProduct)
-              : null;
-          return { mid: s.mid as UpgradeProduct, premium: prem };
-        })
-        .filter(Boolean) as UpgradeOptionSet[];
-      if (normalized.length) {
-        setOptionSets(normalized);
-        setActiveSetIndex((i) => Math.min(i, normalized.length - 1));
-        return;
-      }
-    }
-    const m = j.mid as UpgradeProduct | undefined;
-    if (m?.price) {
-      const p = j.premium as UpgradeProduct | null | undefined;
-      const prem = p && p.price > 0 ? p : null;
-      setOptionSets([{ mid: m, premium: prem }]);
-      setActiveSetIndex(0);
-    } else {
-      setOptionSets([]);
-    }
-  }, []);
+  const applyResponseJson = useCallback(
+    (j: Record<string, unknown>) => {
+      const sets = setsFromResponse(j);
+      const flat = flattenOptionSets(sets);
+      setRawProducts(flat);
+    },
+    []
+  );
+
+  const validOptions = useMemo(
+    () => validDisplayOptions(rawProducts, baseUnit, itemBrand),
+    [rawProducts, baseUnit, itemBrand]
+  );
 
   useEffect(() => {
     setCustomDesc(item.description);
@@ -213,7 +262,7 @@ export function UpgradeOptionsPanel({
         const j = (await res.json()) as Record<string, unknown>;
         if (!cancelled) applyResponseJson(j);
       } catch {
-        if (!cancelled) setOptionSets([]);
+        if (!cancelled) setRawProducts([]);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -235,35 +284,15 @@ export function UpgradeOptionsPanel({
       if (!res.ok) throw new Error("fetch");
       const j = (await res.json()) as Record<string, unknown>;
       applyResponseJson(j);
-      const count = Array.isArray(j.optionSets) ? (j.optionSets as unknown[]).length * 2 : 2;
-      onRefreshNotice?.(`Updated! ${count} options loaded`);
+      const sets = setsFromResponse(j);
+      const n = flattenOptionSets(sets).length;
+      onRefreshNotice?.(`Updated! ${n} options loaded`);
     } catch {
       onRefreshNotice?.("Refresh failed");
     } finally {
       setRefreshing(false);
     }
   }, [locked, fetchPayload, applyResponseJson, onRefreshNotice]);
-
-  const entryUnitPrice = mid ? Math.round(mid.price * 0.7) : 0;
-  const entryPlusUnitPrice = mid ? Math.round(mid.price * 0.85) : 0;
-  const showEntry = !!mid && entryUnitPrice > baseUnit * 1.15;
-  const showEntryPlus = !!mid && entryPlusUnitPrice > baseUnit * 1.15;
-  const showPremium = !!mid && !!premium && premium.price > mid.price;
-
-  const entrySelected = isUpgradedLine && item.description.startsWith(ENTRY_TITLE_PREFIX);
-  const entryPlusSelected = isUpgradedLine && item.description.startsWith(ENTRY_PLUS_TITLE_PREFIX);
-  const midSelected =
-    isUpgradedLine &&
-    !entrySelected &&
-    !entryPlusSelected &&
-    !!mid &&
-    Math.abs(item.unit_cost - mid.price) < 0.01 &&
-    item.description === mid.title;
-  const premSelected =
-    isUpgradedLine &&
-    !!premium &&
-    Math.abs(item.unit_cost - premium.price) < 0.01 &&
-    item.description === premium.title;
 
   function runApply(p: Promise<void>) {
     if (applying) return;
@@ -274,10 +303,13 @@ export function UpgradeOptionsPanel({
   }
 
   const cardBase =
-    "flex min-w-[140px] flex-1 flex-col rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-all duration-200 hover:border-blue-300 hover:shadow-md md:min-w-0";
+    "flex min-w-[160px] flex-1 flex-col rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-all duration-200 hover:border-blue-300 hover:shadow-md md:min-w-0";
   const cardOn = "border-2 border-[#2563EB] bg-blue-50/80 shadow-md";
 
-  const totalOptionProducts = optionSets.length * 2;
+  function isCardSelected(opt: CatalogProduct): boolean {
+    if (!isUpgradedLine) return false;
+    return Math.abs(item.unit_cost - opt.price) < 0.01 && item.description === opt.title;
+  }
 
   if (locked) {
     return (
@@ -307,7 +339,7 @@ export function UpgradeOptionsPanel({
     );
   }
 
-  if (loading && !refreshing && optionSets.length === 0) {
+  if (loading && !refreshing && rawProducts.length === 0) {
     return (
       <div className="flex items-center justify-center gap-2 py-12 text-[#6B7280]">
         <SmallSpinner /> Loading options…
@@ -315,7 +347,27 @@ export function UpgradeOptionsPanel({
     );
   }
 
-  const brandLine = mid?.brand || item.brand || "—";
+  if (!loading && !refreshing && validOptions.length === 0) {
+    return (
+      <NoCacheUpgradeForm
+        item={item}
+        startOpen
+        message="No standard upgrades found for this item. Enter a custom value below."
+        onAddCustom={async (price, title, brand) => {
+          await onApply({
+            label: "Custom",
+            price,
+            title,
+            brand,
+            model: "",
+            retailer: "",
+            url: "",
+          });
+          onApplied?.();
+        }}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -340,204 +392,56 @@ export function UpgradeOptionsPanel({
               <>↻ Refresh</>
             )}
           </button>
-          {totalOptionProducts > 0 ? (
-            <span className="text-[11px] text-[#6B7280]">{totalOptionProducts} options loaded</span>
+          {validOptions.length > 0 ? (
+            <span className="text-[11px] text-[#6B7280]">{validOptions.length} options loaded</span>
           ) : null}
         </div>
       </div>
 
-      {optionSets.length > 1 ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#6B7280]">
-          <span>
-            Suggestion set {activeSetIndex + 1} of {optionSets.length}
-          </span>
-          <div className="flex gap-2">
+      <div
+        className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 ${refreshing ? "opacity-60" : ""}`}
+      >
+        {validOptions.map((opt) => (
+          <div key={normKey(opt.title, opt.price)} className={`${cardBase} ${isCardSelected(opt) ? cardOn : ""}`}>
+            <p className="text-[15px] font-semibold leading-snug text-gray-900 [overflow-wrap:anywhere]">{opt.title}</p>
+            <p className="mt-2 text-sm font-medium text-gray-800">{(opt.brand || itemBrand).trim()}</p>
+            <p className="mt-1 text-xs font-medium text-[#6B7280]">{opt.retailer.trim()}</p>
+            <p className="mt-4 text-[22px] font-bold text-blue-600 tabular-nums">{formatCurrency(opt.price * item.qty)}</p>
+            <p className="text-sm font-semibold text-[#16A34A] tabular-nums">
+              +{formatCurrency((opt.price - baseUnit) * item.qty)}
+            </p>
+            {opt.url?.trim() ? (
+              <a
+                href={opt.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-2 text-xs font-semibold text-[#2563EB] underline"
+              >
+                View ↗
+              </a>
+            ) : null}
             <button
               type="button"
-              disabled={activeSetIndex <= 0}
-              onClick={() => setActiveSetIndex((i) => Math.max(0, i - 1))}
-              className="rounded-md border border-gray-200 px-2 py-1 font-medium hover:bg-gray-50 disabled:opacity-40"
+              disabled={applying || refreshing}
+              onClick={() =>
+                runApply(
+                  onApply({
+                    label: "Upgrade",
+                    price: opt.price,
+                    title: opt.title,
+                    brand: (opt.brand || itemBrand).trim(),
+                    model: opt.model || "",
+                    retailer: opt.retailer,
+                    url: opt.url || "",
+                  })
+                )
+              }
+              className="mt-4 h-10 w-full rounded-lg bg-[#2563EB] text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
             >
-              ← Previous
-            </button>
-            <button
-              type="button"
-              disabled={activeSetIndex >= optionSets.length - 1}
-              onClick={() => setActiveSetIndex((i) => Math.min(optionSets.length - 1, i + 1))}
-              className="rounded-md border border-gray-200 px-2 py-1 font-medium hover:bg-gray-50 disabled:opacity-40"
-            >
-              Next →
+              Select
             </button>
           </div>
-        </div>
-      ) : null}
-
-      <div className={`grid grid-cols-2 gap-4 md:grid-cols-4 ${refreshing ? "opacity-60" : ""}`}>
-          {showEntry && mid ? (
-            <div className={`${cardBase} ${entrySelected ? cardOn : ""}`}>
-              <p className="text-xs font-bold uppercase tracking-wide text-[#6B7280]">Entry</p>
-              <p className="mt-3 text-[15px] font-semibold text-gray-900">{brandLine}</p>
-              <p className="mt-1 text-sm text-[#6B7280]">Similar model</p>
-              <p className="mt-4 text-[22px] font-bold text-blue-600 tabular-nums">
-                {formatCurrency(entryUnitPrice * item.qty)}
-              </p>
-              <p className="text-sm font-semibold text-[#16A34A] tabular-nums">
-                +{formatCurrency((entryUnitPrice - baseUnit) * item.qty)}
-              </p>
-              <button
-                type="button"
-                disabled={applying || refreshing}
-                onClick={() =>
-                  runApply(
-                    onApply({
-                      label: "Entry",
-                      price: entryUnitPrice,
-                      title: `${ENTRY_TITLE_PREFIX} ${origDesc}`.slice(0, 240),
-                      brand: mid.brand || item.brand,
-                      model: "",
-                      retailer: mid.retailer || "",
-                      url: "",
-                    })
-                  )
-                }
-                className="mt-auto h-10 w-full rounded-lg bg-[#2563EB] text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
-              >
-                Select
-              </button>
-            </div>
-          ) : null}
-
-          {showEntryPlus && mid ? (
-            <div className={`${cardBase} ${entryPlusSelected ? cardOn : ""}`}>
-              <p className="text-xs font-bold uppercase tracking-wide text-[#6B7280]">Entry+</p>
-              <p className="mt-3 text-[15px] font-semibold text-gray-900">{brandLine}</p>
-              <p className="mt-1 text-sm text-[#6B7280]">Similar model</p>
-              <p className="mt-4 text-[22px] font-bold text-blue-600 tabular-nums">
-                {formatCurrency(entryPlusUnitPrice * item.qty)}
-              </p>
-              <p className="text-sm font-semibold text-[#16A34A] tabular-nums">
-                +{formatCurrency((entryPlusUnitPrice - baseUnit) * item.qty)}
-              </p>
-              <button
-                type="button"
-                disabled={applying || refreshing}
-                onClick={() =>
-                  runApply(
-                    onApply({
-                      label: "Entry+",
-                      price: entryPlusUnitPrice,
-                      title: `${ENTRY_PLUS_TITLE_PREFIX} ${origDesc}`.slice(0, 240),
-                      brand: mid.brand || item.brand,
-                      model: "",
-                      retailer: mid.retailer || "",
-                      url: "",
-                    })
-                  )
-                }
-                className="mt-auto h-10 w-full rounded-lg bg-[#2563EB] text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
-              >
-                Select
-              </button>
-            </div>
-          ) : null}
-
-          {mid ? (
-            <div className={`${cardBase} ${midSelected ? cardOn : ""}`}>
-              <p className="text-xs font-bold uppercase tracking-wide text-[#6B7280]">
-                Mid <span className="text-amber-500">★</span>
-              </p>
-              <p className="mt-2 text-[15px] font-semibold leading-snug text-gray-900 [overflow-wrap:anywhere]">
-                {mid.title}
-              </p>
-              <p className="mt-1 text-xs text-[#6B7280]">
-                {[mid.brand, mid.retailer].filter(Boolean).join(" · ") || "—"}
-              </p>
-              <p className="mt-4 text-[22px] font-bold text-blue-600 tabular-nums">
-                {formatCurrency(mid.price * item.qty)}
-              </p>
-              <p className="text-sm font-semibold text-[#16A34A] tabular-nums">
-                +{formatCurrency((mid.price - baseUnit) * item.qty)}
-              </p>
-              {mid.url ? (
-                <a
-                  href={mid.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-2 text-xs font-semibold text-[#2563EB] underline"
-                >
-                  View ↗
-                </a>
-              ) : null}
-              <button
-                type="button"
-                disabled={applying || refreshing}
-                onClick={() =>
-                  runApply(
-                    onApply({
-                      label: "Mid",
-                      price: mid.price,
-                      title: mid.title,
-                      brand: mid.brand,
-                      model: mid.model,
-                      retailer: mid.retailer,
-                      url: mid.url,
-                    })
-                  )
-                }
-                className="mt-4 h-10 w-full rounded-lg bg-[#2563EB] text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
-              >
-                Select
-              </button>
-            </div>
-          ) : null}
-
-          {showPremium && premium ? (
-            <div className={`${cardBase} ${premSelected ? cardOn : ""}`}>
-              <p className="text-xs font-bold uppercase tracking-wide text-[#6B7280]">Premium</p>
-              <p className="mt-2 text-[15px] font-semibold leading-snug text-gray-900 [overflow-wrap:anywhere]">
-                {premium.title}
-              </p>
-              <p className="mt-1 text-xs text-[#6B7280]">
-                {[premium.brand, premium.retailer].filter(Boolean).join(" · ") || "—"}
-              </p>
-              <p className="mt-4 text-[22px] font-bold text-blue-600 tabular-nums">
-                {formatCurrency(premium.price * item.qty)}
-              </p>
-              <p className="text-sm font-semibold text-[#16A34A] tabular-nums">
-                +{formatCurrency((premium.price - baseUnit) * item.qty)}
-              </p>
-              {premium.url ? (
-                <a
-                  href={premium.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-2 text-xs font-semibold text-[#2563EB] underline"
-                >
-                  View ↗
-                </a>
-              ) : null}
-              <button
-                type="button"
-                disabled={applying || refreshing}
-                onClick={() =>
-                  runApply(
-                    onApply({
-                      label: "Premium",
-                      price: premium.price,
-                      title: premium.title,
-                      brand: premium.brand,
-                      model: premium.model,
-                      retailer: premium.retailer,
-                      url: premium.url,
-                    })
-                  )
-                }
-                className="mt-4 h-10 w-full rounded-lg bg-[#2563EB] text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
-              >
-                Select
-              </button>
-            </div>
-          ) : null}
+        ))}
       </div>
 
       <div>
