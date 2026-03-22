@@ -36,8 +36,8 @@ export default function UpgradeRewardToast() {
       setVisible(true);
       hideTimer = setTimeout(() => {
         setVisible(false);
-        clearTimer = setTimeout(() => setPayload(null), 400);
-      }, 3000);
+        clearTimer = setTimeout(() => setPayload(null), 200);
+      }, 1000);
     }
     window.addEventListener("claim-upgrade-reward", onReward as EventListener);
     return () => {
@@ -51,22 +51,12 @@ export default function UpgradeRewardToast() {
 
   return (
     <div
-      className={`fixed right-4 top-4 z-50 max-w-[300px] rounded-2xl border border-green-200 bg-white p-4 text-base shadow-lg transition-all duration-300 ease-out ${
-        visible ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-8 opacity-0"
+      className={`fixed right-4 top-4 z-50 flex h-12 max-h-[48px] min-w-[140px] items-center rounded-lg border border-green-200 bg-white px-3 py-2 text-sm font-semibold text-[#16A34A] shadow-md transition-all duration-300 ease-out tabular-nums ${
+        visible ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-6 opacity-0"
       }`}
       role="status"
     >
-      <p className="font-bold text-gray-900">✓ Upgraded!</p>
-      <p className="mt-1 font-bold text-[#16A34A] tabular-nums">
-        +{formatCurrency(payload.delta)} added to claim
-      </p>
-      <p className="mt-2 text-sm text-[#6B7280] tabular-nums">Claim: {formatCurrency(payload.claimTotal)}</p>
-      <p className="text-sm text-[#6B7280] tabular-nums">
-        Goal:{" "}
-        <span className="font-semibold text-[#2563EB]">
-          {payload.goalPctBefore}% → {payload.goalPctAfter}%
-        </span>
-      </p>
+      ✓ +{formatCurrency(payload.delta)} added
     </div>
   );
 }

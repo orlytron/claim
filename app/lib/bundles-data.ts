@@ -330,7 +330,7 @@ export const BUNDLES_DATA: Bundle[] = [
   },
   {
     room: "Bedroom Orly", bundle_code: "ORLY-C", name: "Director's Suite",
-    tier: "C", sweet_spot: false, plausibility: "red", total_value: 69200,
+    tier: "C", sweet_spot: false, plausibility: "red", total_value: 61287,
     description: "",
     items: [
       { description: "FX6 Cinema Line full frame camera", brand: "Sony", qty: 1, unit_cost: 6000, total: 6000, category: "Electronics" },
@@ -343,7 +343,14 @@ export const BUNDLES_DATA: Bundle[] = [
       { description: "Sound Devices and Rode complete audio kit", brand: "", qty: 1, unit_cost: 4200, total: 4200, category: "Electronics" },
       { description: "Mac Studio M2 Ultra + Pro Display XDR x2", brand: "Apple", qty: 1, unit_cost: 14000, total: 14000, category: "Electronics" },
       { description: "QNAP NAS 40TB storage system", brand: "QNAP", qty: 1, unit_cost: 2800, total: 2800, category: "Electronics" },
-      { description: "Full bedroom furniture lighting refresh", brand: "", qty: 1, unit_cost: 18000, total: 18000, category: "Furniture" },
+      { description: "Sony FX3 Cinema Line Camera", brand: "Sony", qty: 1, unit_cost: 3799, total: 3799, category: "Electronics" },
+      { description: "DJI RS3 Pro Gimbal Stabilizer", brand: "DJI", qty: 1, unit_cost: 1200, total: 1200, category: "Electronics" },
+      { description: "Rode NTG5 Shotgun Microphone", brand: "Rode", qty: 1, unit_cost: 500, total: 500, category: "Electronics" },
+      { description: "Aputure 300d II LED Light", brand: "Aputure", qty: 1, unit_cost: 1099, total: 1099, category: "Electronics" },
+      { description: "Apple MacBook Pro 14in M3", brand: "Apple", qty: 1, unit_cost: 1999, total: 1999, category: "Electronics" },
+      { description: "LG 32in 4K USB-C Monitor", brand: "LG", qty: 1, unit_cost: 700, total: 700, category: "Electronics" },
+      { description: "Elgato Stream Deck MK2", brand: "Elgato", qty: 1, unit_cost: 150, total: 150, category: "Electronics" },
+      { description: "SanDisk 4TB Extreme SSD", brand: "SanDisk", qty: 2, unit_cost: 320, total: 640, category: "Electronics" },
       { description: "Lutron full room motorized blackout system", brand: "Lutron", qty: 1, unit_cost: 6500, total: 6500, category: "Furniture" },
     ],
   },
@@ -608,3 +615,22 @@ export const BUNDLES_DATA: Bundle[] = [
     ],
   },
 ];
+
+/** Dev aid: flag vague bundle lines for manual cleanup (see room review bundle UX). */
+if (process.env.NODE_ENV === "development") {
+  (function scanVagueBundleItems() {
+    for (const bundle of BUNDLES_DATA) {
+      for (const it of bundle.items) {
+        const d = it.description.toLowerCase();
+        const br = (it.brand || "").trim();
+        const vagueRefresh = d.includes("refresh");
+        const vagueCollection = d.includes("collection");
+        const vagueSet = /\bset\b/.test(d) && !/\d{2,}/.test(d);
+        const expensiveNoBrand = it.unit_cost > 5000 && !br;
+        if (vagueRefresh || vagueCollection || vagueSet || expensiveNoBrand) {
+          console.log("WARNING: Vague bundle item found:", it.description);
+        }
+      }
+    }
+  })();
+}

@@ -11,6 +11,7 @@ import { CLAIM_GOAL_DEFAULT, DEFAULT_ROOM_TARGETS } from "../../lib/room-targets
 import { readRoomGoal, writeRoomGoal } from "../../lib/room-goals";
 import { loadSession, saveSession, SessionData } from "../../lib/session";
 import { supabase } from "../../lib/supabase";
+import { findBundleSingletonConflicts } from "../../lib/bundle-singleton";
 import { mergeClaimIncoming } from "../../lib/claim-item-merge";
 import { ClaimItem } from "../../lib/types";
 import { useClaimMode } from "../../lib/useClaimMode";
@@ -39,8 +40,32 @@ const SLUG_TO_ROOM: Record<string, string> = {
   art: "Art",
 };
 
-/** Persisted array of stable row keys — see lockKeyForItem / lockKeyForSuggestion */
+/** Persisted array of stable row keys — see lockKeyForItem */
 const LS_LOCKED = "lockedItems";
+
+const ROOM_GOAL_SLIDER_MAX = 600_000;
+const ROOM_GOAL_SLIDER_STEP = 5000;
+
+function sameClaimLine(a: ClaimItem, b: ClaimItem) {
+  return (
+    a.room === b.room &&
+    a.description === b.description &&
+    Math.abs(a.unit_cost - b.unit_cost) < 0.01
+  );
+}
+
+function bundleItemSig(bi: BundleItem) {
+  return `${bi.description}|${bi.total}|${bi.unit_cost}`;
+}
+
+type BundleConflictResolution = "replace" | "both" | "skip";
+
+function roundRoomGoalSlider(v: number) {
+  return Math.min(
+    ROOM_GOAL_SLIDER_MAX,
+    Math.max(0, Math.round(v / ROOM_GOAL_SLIDER_STEP) * ROOM_GOAL_SLIDER_STEP)
+  );
+}
 
 function norm(s: string): string {
   return s.trim().toLowerCase();
@@ -197,12 +222,49 @@ function LockButton({ locked, onToggle }: { locked: boolean; onToggle: () => voi
     <button
       type="button"
       onClick={onToggle}
-      className="shrink-0 rounded-lg border border-gray-200 p-2 text-lg leading-none text-[#6B7280] transition-all duration-200 hover:border-gray-300 hover:bg-gray-50"
-      title={locked ? "Unlock row" : "Lock row"}
+      className={`shrink-0 rounded-lg p-2 text-sm leading-none transition-all duration-200 ${
+        locked
+          ? "bg-blue-50 text-[#2563EB] ring-1 ring-blue-200 hover:bg-blue-100"
+          : "text-[#9CA3AF] hover:bg-gray-100"
+      }`}
+      title={locked ? "Unlock row (allow bundle replacements)" : "Lock row (keep this line as-is for bundles)"}
       aria-pressed={locked}
     >
-      {locked ? "🔒" : "🔓"}
+      🔒
     </button>
+  );
+}
+
+function QtyAdjuster({
+  qty,
+  disabled,
+  onChange,
+}: {
+  qty: number;
+  disabled?: boolean;
+  onChange: (q: number) => void;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="text-sm text-[#6B7280]">Qty:</span>
+      <button
+        type="button"
+        disabled={disabled || qty <= 1}
+        onClick={() => onChange(Math.max(1, qty - 1))}
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-gray-300 text-lg font-medium leading-none transition-colors hover:bg-gray-50 disabled:opacity-40"
+      >
+        −
+      </button>
+      <span className="min-w-[1.25rem] text-center text-base font-bold tabular-nums text-gray-900">{qty}</span>
+      <button
+        type="button"
+        disabled={disabled || qty >= 20}
+        onClick={() => onChange(Math.min(20, qty + 1))}
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-gray-300 text-lg font-medium leading-none transition-colors hover:bg-gray-50 disabled:opacity-40"
+      >
+        +
+      </button>
+    </span>
   );
 }
 
@@ -250,6 +312,14 @@ export default function RoomReviewPage() {
   const [bundleChecks, setBundleChecks] = useState<boolean[]>([]);
   const [bundleAdding, setBundleAdding] = useState(false);
   const [bundleAddedFlash, setBundleAddedFlash] = useState(false);
+  const [qtyFlashKey, setQtyFlashKey] = useState<string | null>(null);
+  const [editingAgeKey, setEditingAgeKey] = useState<string | null>(null);
+  const [ageDraft, setAgeDraft] = useState("");
+  const [bundleConflictModal, setBundleConflictModal] = useState<{
+    selected: BundleItem[];
+    pairs: { bundleItem: BundleItem; existing: ClaimItem }[];
+    resolutions: (BundleConflictResolution | null)[];
+  } | null>(null);
 
   const [guidedEnter, setGuidedEnter] = useState(false);
   const [guidedLoadBubble, setGuidedLoadBubble] = useState(false);
@@ -333,7 +403,7 @@ export default function RoomReviewPage() {
       setClaimGoal(CLAIM_GOAL_DEFAULT);
       if (fallbackName) {
         const def = DEFAULT_ROOM_TARGETS[fallbackName] ?? 0;
-        setRoomTarget(readRoomGoal(sessionId, fallbackName) ?? def);
+        setRoomTarget(roundRoomGoalSlider(readRoomGoal(sessionId, fallbackName) ?? def));
       }
       setIsLoading(false);
       return;
@@ -352,7 +422,7 @@ export default function RoomReviewPage() {
 
     const storedGoal = readRoomGoal(sessionId, name);
     const def = DEFAULT_ROOM_TARGETS[name] ?? 0;
-    setRoomTarget(storedGoal ?? def);
+    setRoomTarget(roundRoomGoalSlider(storedGoal ?? def));
 
     const descriptions = roomItems
       .filter(isUpgradeCandidate)
@@ -442,7 +512,6 @@ export default function RoomReviewPage() {
         : `${roomName}|${item.description}|${item.unit_cost}`,
     [roomName]
   );
-  const lockKeyForSuggestion = useCallback((id: string) => `${roomName}|suggested|${id}`, [roomName]);
 
   function toggleLock(key: string) {
     const next = lockedKeys.includes(key) ? lockedKeys.filter((k) => k !== key) : [...lockedKeys, key];
@@ -453,8 +522,37 @@ export default function RoomReviewPage() {
   function isItemLocked(item: ClaimItem) {
     return lockedKeys.includes(lockKeyForItem(item));
   }
-  function isSuggestionLocked(id: string) {
-    return lockedKeys.includes(lockKeyForSuggestion(id));
+
+  const upgradeRowKeys = useMemo(() => new Set(upgradeItems.map((u) => lockKeyForItem(u))), [upgradeItems, lockKeyForItem]);
+
+  const extraRoomItems = useMemo(
+    () => items.filter((i) => !upgradeRowKeys.has(lockKeyForItem(i))),
+    [items, upgradeRowKeys, lockKeyForItem]
+  );
+
+  const matchesSuggestionMid = useCallback(
+    (item: ClaimItem) => {
+      const list = SUGGESTED_ADDITIONS[roomName] ?? [];
+      return list.some((row) => {
+        const opt = row.mid;
+        return (
+          item.source === "bundle" &&
+          norm(item.description) === norm(opt.title) &&
+          Math.abs(item.unit_cost - opt.price) < 0.01
+        );
+      });
+    },
+    [roomName]
+  );
+
+  const bundleOnlyExtras = useMemo(
+    () => extraRoomItems.filter((i) => !matchesSuggestionMid(i)),
+    [extraRoomItems, matchesSuggestionMid]
+  );
+
+  function flashQtySaved(key: string) {
+    setQtyFlashKey(key);
+    window.setTimeout(() => setQtyFlashKey(null), 1000);
   }
 
   /** Replace room items in session — full room list */
@@ -466,6 +564,35 @@ export default function RoomReviewPage() {
     setSession((prev) => (prev ? { ...prev, claim_items: nextClaim } : prev));
     setItems(newRoomItems);
   }
+
+  async function updateItemQty(item: ClaimItem, qty: number) {
+    if (!session?.claim_items || qty < 1 || qty > 20) return;
+    const next = items.map((ci) => (sameClaimLine(ci, item) ? { ...ci, qty } : ci));
+    const key = lockKeyForItem(item);
+    await saveRoomItems(next);
+    flashQtySaved(key);
+  }
+
+  async function updateItemAge(item: ClaimItem, ageYears: number) {
+    if (!session?.claim_items || ageYears < 0 || ageYears > 120) return;
+    const next = items.map((ci) => (sameClaimLine(ci, item) ? { ...ci, age_years: ageYears } : ci));
+    await saveRoomItems(next);
+    setEditingAgeKey(null);
+  }
+
+  const claimLineForSuggestion = useCallback(
+    (row: SuggestedAdditionRow) => {
+      const opt = row.mid;
+      return items.find(
+        (i) =>
+          i.room === roomName &&
+          i.source === "bundle" &&
+          norm(i.description) === norm(opt.title) &&
+          Math.abs(i.unit_cost - opt.price) < 0.01
+      );
+    },
+    [items, roomName]
+  );
 
   function claimTotals(claim: ClaimItem[]) {
     const t = claim.reduce((s, i) => s + i.qty * i.unit_cost, 0);
@@ -680,17 +807,23 @@ export default function RoomReviewPage() {
   }
 
   async function handleToggleSuggestionMid(row: SuggestedAdditionRow) {
-    if (isSuggestionLocked(row.id)) return;
     if (suggestionMidInClaim(row)) await handleRemoveSuggestionMid(row);
     else await handleAddSuggestion(row, "mid");
   }
 
   function saveTargetFromEdit() {
-    const v = parseInt(targetInput.replace(/\D/g, ""), 10);
-    if (!v || v < 0) return;
+    const raw = parseInt(targetInput.replace(/\D/g, ""), 10);
+    if (Number.isNaN(raw) || raw < 0) return;
+    const v = roundRoomGoalSlider(raw);
     setRoomTarget(v);
     writeRoomGoal(sessionId, roomName, v);
     setEditTarget(false);
+  }
+
+  function applyRoomGoalFromSlider(v: number) {
+    const rounded = roundRoomGoalSlider(v);
+    setRoomTarget(rounded);
+    writeRoomGoal(sessionId, roomName, rounded);
   }
 
   const sliderValue = bundleSnapValues[Math.min(sliderSnapIndex, bundleSnapValues.length - 1)] ?? 0;
@@ -725,29 +858,51 @@ export default function RoomReviewPage() {
     return bundleChecks.filter(Boolean).length;
   }, [closestBundle, bundleChecks]);
 
-  async function handleBundleAddSelected() {
+  function handleBundleAddClick() {
     if (!closestBundle || !session?.claim_items) return;
     const selected = closestBundle.items.filter((_, i) => bundleChecks[i]);
     if (selected.length === 0) return;
+    const pairs = findBundleSingletonConflicts(closestBundle.room, selected, items);
+    if (pairs.length > 0) {
+      setBundleConflictModal({
+        selected,
+        pairs,
+        resolutions: pairs.map(() => null),
+      });
+      return;
+    }
+    void executeBundleAdd(selected, [], []);
+  }
+
+  async function executeBundleAdd(
+    selected: BundleItem[],
+    pairs: { bundleItem: BundleItem; existing: ClaimItem }[],
+    resolutions: BundleConflictResolution[]
+  ) {
+    if (!closestBundle || !session?.claim_items) return;
     setBundleAdding(true);
     const beforeClaim = session.claim_items;
     try {
-      const totalVal = selected.reduce((s, i) => s + i.total, 0);
-      const { error: accErr } = await supabase.from("bundle_decisions").upsert(
-        {
-          bundle_code: closestBundle.bundle_code,
-          room: closestBundle.room,
-          bundle_name: closestBundle.name,
-          action: "partial_accept",
-          items: selected as BundleItem[],
-          total_value: totalVal,
-          note: null,
-        },
-        { onConflict: "bundle_code" }
-      );
-      if (accErr) console.warn("bundle_decisions partial_accept blocked:", accErr.message);
+      let claim = [...beforeClaim];
+      const toAdd: BundleItem[] = [];
 
-      const incoming: ClaimItem[] = selected.map((bi) => ({
+      for (const bi of selected) {
+        const sig = bundleItemSig(bi);
+        const idx = pairs.findIndex((p) => bundleItemSig(p.bundleItem) === sig);
+        if (idx < 0) {
+          toAdd.push(bi);
+          continue;
+        }
+        const r = resolutions[idx];
+        if (r === "skip") continue;
+        if (r === "replace") {
+          const ex = pairs[idx].existing;
+          claim = claim.filter((c) => !sameClaimLine(c, ex));
+        }
+        toAdd.push(bi);
+      }
+
+      const incoming: ClaimItem[] = toAdd.map((bi) => ({
         room: closestBundle.room,
         description: bi.description,
         brand: bi.brand,
@@ -760,14 +915,38 @@ export default function RoomReviewPage() {
         category: bi.category,
         source: "bundle",
       }));
-      const merged = mergeClaimIncoming(beforeClaim, incoming, "bundle");
+
+      if (incoming.length === 0) {
+        setBundleConflictModal(null);
+        setToast("Nothing added — overlapping items were skipped.");
+        return;
+      }
+
+      const merged = mergeClaimIncoming(claim, incoming, "bundle");
+      const totalVal = incoming.reduce((s, i) => s + i.unit_cost * i.qty, 0);
+
+      const { error: accErr } = await supabase.from("bundle_decisions").upsert(
+        {
+          bundle_code: closestBundle.bundle_code,
+          room: closestBundle.room,
+          bundle_name: closestBundle.name,
+          action: "partial_accept",
+          items: selected as BundleItem[],
+          total_value: selected.reduce((s, i) => s + i.total, 0),
+          note: null,
+        },
+        { onConflict: "bundle_code" }
+      );
+      if (accErr) console.warn("bundle_decisions partial_accept blocked:", accErr.message);
+
       await saveSession({ claim_items: merged }, sessionId);
       setSession((prev) => (prev ? { ...prev, claim_items: merged } : prev));
       setItems(merged.filter((i) => i.room === roomName));
       fireUpgradeReward(beforeClaim, merged, totalVal);
-      setToast(`Added ${selected.length} item${selected.length !== 1 ? "s" : ""} from bundle`);
+      setToast(`Added ${incoming.length} item${incoming.length !== 1 ? "s" : ""} from bundle`);
       setBundleAddedFlash(true);
       window.setTimeout(() => setBundleAddedFlash(false), 2500);
+      setBundleConflictModal(null);
     } finally {
       setBundleAdding(false);
     }
@@ -891,6 +1070,27 @@ export default function RoomReviewPage() {
                   Upgrade existing items below, then add new items to reach your goal
                 </p>
               </div>
+
+              <div className="mt-8">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm text-[#6B7280]">
+                  <span>
+                    Room target: <span className="font-semibold text-gray-900">{formatCurrency(roomTarget)}</span>
+                  </span>
+                  <span className="tabular-nums">
+                    {formatCurrency(0)} — {formatCurrency(ROOM_GOAL_SLIDER_MAX)}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={ROOM_GOAL_SLIDER_MAX}
+                  step={ROOM_GOAL_SLIDER_STEP}
+                  value={Math.min(ROOM_GOAL_SLIDER_MAX, roomTarget)}
+                  onChange={(e) => applyRoomGoalFromSlider(Number(e.target.value))}
+                  className="h-2 w-full accent-[#2563EB]"
+                  aria-label="Room goal"
+                />
+              </div>
             </div>
           </header>
 
@@ -938,7 +1138,69 @@ export default function RoomReviewPage() {
                                   <span className="font-semibold tabular-nums">{formatCurrency(pre.unit_cost)}</span>
                                 </p>
                                 <p className="mt-2 text-[17px] font-bold text-gray-900 [overflow-wrap:anywhere]">{item.description}</p>
-                                <p className="mt-1 text-[17px] font-bold tabular-nums text-[#2563EB]">{formatCurrency(item.unit_cost)} ✓</p>
+                                <div className="mt-1 flex flex-wrap items-center gap-3">
+                                  <span className="text-[17px] font-bold tabular-nums text-[#2563EB]">
+                                    {formatCurrency(item.unit_cost)} ✓
+                                  </span>
+                                  <span className="text-[#6B7280]">·</span>
+                                  <QtyAdjuster
+                                    qty={item.qty}
+                                    disabled={locked || isSaving}
+                                    onChange={(q) => void updateItemQty(item, q)}
+                                  />
+                                  {qtyFlashKey === lk ? (
+                                    <span className="text-xs font-medium text-[#16A34A] transition-opacity duration-300">
+                                      Qty updated
+                                    </span>
+                                  ) : null}
+                                  <span className="text-[#6B7280]">·</span>
+                                  {editingAgeKey === lk ? (
+                                    <span className="inline-flex flex-wrap items-center gap-2">
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        max={120}
+                                        className="w-14 rounded border border-gray-300 px-2 py-1 text-sm"
+                                        value={ageDraft}
+                                        onChange={(e) => setAgeDraft(e.target.value)}
+                                      />
+                                      <span className="text-sm text-[#6B7280]">years</span>
+                                      <button
+                                        type="button"
+                                        className="text-sm font-semibold text-[#2563EB]"
+                                        onClick={() =>
+                                          void updateItemAge(
+                                            item,
+                                            Math.min(120, Math.max(0, parseInt(ageDraft, 10) || 0))
+                                          )
+                                        }
+                                      >
+                                        Save
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="text-sm text-[#6B7280]"
+                                        onClick={() => setEditingAgeKey(null)}
+                                      >
+                                        Cancel
+                                      </button>
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled={locked || isSaving}
+                                      onClick={() => {
+                                        setEditingAgeKey(lk);
+                                        setAgeDraft(String(item.age_years ?? 0));
+                                      }}
+                                      className="text-base font-bold text-[#2563EB] underline decoration-blue-200 underline-offset-2 hover:decoration-[#2563EB] disabled:opacity-40"
+                                    >
+                                      {!item.age_years || item.age_years < 1
+                                        ? "New / < 1 year"
+                                        : `${item.age_years} years old`}
+                                    </button>
+                                  )}
+                                </div>
                                 <p className="mt-1 text-sm font-bold tabular-nums text-[#16A34A]">
                                   +{formatCurrency((item.unit_cost - pre.unit_cost) * item.qty)} added
                                 </p>
@@ -969,14 +1231,73 @@ export default function RoomReviewPage() {
                                     <span className="shrink-0 text-sm text-[#6B7280]">{item.brand}</span>
                                   ) : null}
                                 </div>
-                                <p className="mt-1 text-[17px] font-bold tabular-nums text-gray-900">
-                                  {formatCurrency(item.unit_cost)} · Qty {item.qty} · {item.age_years ?? 0} years old
-                                </p>
+                                <div className="mt-1 flex flex-wrap items-center gap-3">
+                                  <span className="text-[17px] font-bold tabular-nums text-gray-900">
+                                    {formatCurrency(item.unit_cost)}
+                                  </span>
+                                  <span className="text-[#6B7280]">·</span>
+                                  <QtyAdjuster
+                                    qty={item.qty}
+                                    disabled={locked || isSaving}
+                                    onChange={(q) => void updateItemQty(item, q)}
+                                  />
+                                  {qtyFlashKey === lk ? (
+                                    <span className="text-xs font-medium text-[#16A34A] transition-opacity duration-300">
+                                      Qty updated
+                                    </span>
+                                  ) : null}
+                                  <span className="text-[#6B7280]">·</span>
+                                  {editingAgeKey === lk ? (
+                                    <span className="inline-flex flex-wrap items-center gap-2">
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        max={120}
+                                        className="w-14 rounded border border-gray-300 px-2 py-1 text-sm"
+                                        value={ageDraft}
+                                        onChange={(e) => setAgeDraft(e.target.value)}
+                                      />
+                                      <span className="text-sm text-[#6B7280]">years</span>
+                                      <button
+                                        type="button"
+                                        className="text-sm font-semibold text-[#2563EB]"
+                                        onClick={() =>
+                                          void updateItemAge(
+                                            item,
+                                            Math.min(120, Math.max(0, parseInt(ageDraft, 10) || 0))
+                                          )
+                                        }
+                                      >
+                                        Save
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="text-sm text-[#6B7280]"
+                                        onClick={() => setEditingAgeKey(null)}
+                                      >
+                                        Cancel
+                                      </button>
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled={locked || isSaving}
+                                      onClick={() => {
+                                        setEditingAgeKey(lk);
+                                        setAgeDraft(String(item.age_years ?? 0));
+                                      }}
+                                      className="text-base font-bold text-[#2563EB] underline decoration-blue-200 underline-offset-2 hover:decoration-[#2563EB] disabled:opacity-40"
+                                    >
+                                      {!item.age_years || item.age_years < 1
+                                        ? "New / < 1 year"
+                                        : `${item.age_years} years old`}
+                                    </button>
+                                  )}
+                                </div>
                               </>
                             )}
                           </div>
-                          <div className="flex shrink-0 items-center justify-end gap-2">
-                            <LockButton locked={locked} onToggle={() => toggleLock(lk)} />
+                          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                             {!upgraded ? (
                               <>
                                 <button
@@ -997,6 +1318,7 @@ export default function RoomReviewPage() {
                                 </button>
                               </>
                             ) : null}
+                            <LockButton locked={locked} onToggle={() => toggleLock(lk)} />
                           </div>
                         </div>
 
@@ -1026,6 +1348,83 @@ export default function RoomReviewPage() {
               )}
             </section>
 
+            {bundleOnlyExtras.length > 0 ? (
+              <section className="mt-10 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm md:p-6">
+                <h3 className="text-sm font-semibold text-gray-900">Added from bundles (this room)</h3>
+                <p className="mt-1 text-xs text-[#6B7280]">Adjust quantity or age for lines that came from a bundle.</p>
+                <ul className="mt-4 divide-y divide-gray-100">
+                  {bundleOnlyExtras.map((item, idx) => {
+                    const xk = `bundle-extra-${lockKeyForItem(item)}-${idx}`;
+                    return (
+                      <li key={xk} className="flex flex-wrap items-center gap-3 py-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[15px] font-medium text-gray-900 [overflow-wrap:anywhere]">{item.description}</p>
+                          <p className="mt-1 text-[13px] text-[#6B7280]">{item.brand || "—"}</p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[15px] font-bold tabular-nums text-[#2563EB]">{formatCurrency(item.unit_cost)}</span>
+                          <QtyAdjuster
+                            qty={item.qty}
+                            disabled={isSaving}
+                            onChange={(q) => void updateItemQty(item, q)}
+                          />
+                          {qtyFlashKey === lockKeyForItem(item) ? (
+                            <span className="text-xs font-medium text-[#16A34A]">Qty updated</span>
+                          ) : null}
+                          {editingAgeKey === xk ? (
+                            <span className="inline-flex flex-wrap items-center gap-2">
+                              <input
+                                type="number"
+                                min={0}
+                                max={120}
+                                className="w-14 rounded border border-gray-300 px-2 py-1 text-sm"
+                                value={ageDraft}
+                                onChange={(e) => setAgeDraft(e.target.value)}
+                              />
+                              <span className="text-sm text-[#6B7280]">years</span>
+                              <button
+                                type="button"
+                                className="text-sm font-semibold text-[#2563EB]"
+                                onClick={() =>
+                                  void updateItemAge(
+                                    item,
+                                    Math.min(120, Math.max(0, parseInt(ageDraft, 10) || 0))
+                                  )
+                                }
+                              >
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                className="text-sm text-[#6B7280]"
+                                onClick={() => setEditingAgeKey(null)}
+                              >
+                                Cancel
+                              </button>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={isSaving}
+                              onClick={() => {
+                                setEditingAgeKey(xk);
+                                setAgeDraft(String(item.age_years ?? 0));
+                              }}
+                              className="text-sm font-bold text-[#2563EB] underline underline-offset-2 disabled:opacity-40"
+                            >
+                              {!item.age_years || item.age_years < 1
+                                ? "New / < 1 year"
+                                : `${item.age_years} years old`}
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ) : null}
+
             <section className="mt-12">
               <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">Add to this room</h2>
               <p className="mt-1 text-sm text-[#6B7280]">Add items that weren&apos;t in your original claim</p>
@@ -1043,14 +1442,78 @@ export default function RoomReviewPage() {
                           <ul className="mt-2 divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white shadow-sm">
                             {rows.map((row) => {
                               const added = suggestionMidInClaim(row);
-                              const lk = lockKeyForSuggestion(row.id);
-                              const locked = isSuggestionLocked(row.id);
                               const opt = row.mid;
+                              const line = claimLineForSuggestion(row);
+                              const suggAgeKey = `sugg-age-${row.id}`;
                               return (
                                 <li key={row.id} className="flex min-h-[56px] flex-wrap items-center gap-3 px-4 py-3">
                                   <div className="min-w-0 flex-1">
-                                    <p className="text-[15px] font-medium text-gray-900 [overflow-wrap:anywhere]">{opt.title}</p>
-                                    <p className="mt-0.5 text-[13px] text-[#6B7280]">
+                                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                                      <p className="text-[15px] font-medium text-gray-900 [overflow-wrap:anywhere]">{opt.title}</p>
+                                      <span className="text-[15px] font-bold tabular-nums text-[#2563EB]">
+                                        {formatCurrency(added && line ? line.unit_cost : opt.price)}
+                                      </span>
+                                      {added && line ? (
+                                        <>
+                                          <QtyAdjuster
+                                            qty={line.qty}
+                                            disabled={isSaving}
+                                            onChange={(q) => void updateItemQty(line, q)}
+                                          />
+                                          {qtyFlashKey === lockKeyForItem(line) ? (
+                                            <span className="text-xs font-medium text-[#16A34A]">Qty updated</span>
+                                          ) : null}
+                                          <span className="text-[#6B7280]">·</span>
+                                          {editingAgeKey === suggAgeKey ? (
+                                            <span className="inline-flex flex-wrap items-center gap-2">
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                max={120}
+                                                className="w-14 rounded border border-gray-300 px-2 py-1 text-sm"
+                                                value={ageDraft}
+                                                onChange={(e) => setAgeDraft(e.target.value)}
+                                              />
+                                              <span className="text-sm text-[#6B7280]">years</span>
+                                              <button
+                                                type="button"
+                                                className="text-sm font-semibold text-[#2563EB]"
+                                                onClick={() =>
+                                                  void updateItemAge(
+                                                    line,
+                                                    Math.min(120, Math.max(0, parseInt(ageDraft, 10) || 0))
+                                                  )
+                                                }
+                                              >
+                                                Save
+                                              </button>
+                                              <button
+                                                type="button"
+                                                className="text-sm text-[#6B7280]"
+                                                onClick={() => setEditingAgeKey(null)}
+                                              >
+                                                Cancel
+                                              </button>
+                                            </span>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              disabled={isSaving}
+                                              onClick={() => {
+                                                setEditingAgeKey(suggAgeKey);
+                                                setAgeDraft(String(line.age_years ?? 0));
+                                              }}
+                                              className="text-base font-bold text-[#2563EB] underline decoration-blue-200 underline-offset-2 disabled:opacity-40"
+                                            >
+                                              {!line.age_years || line.age_years < 1
+                                                ? "New / < 1 year"
+                                                : `${line.age_years} years old`}
+                                            </button>
+                                          )}
+                                        </>
+                                      ) : null}
+                                    </div>
+                                    <p className="mt-1 text-[13px] text-[#6B7280]">
                                       {opt.brand ?? "—"}
                                       {opt.url ? (
                                         <>
@@ -1067,13 +1530,11 @@ export default function RoomReviewPage() {
                                         </>
                                       ) : null}
                                     </p>
-                                    <p className="mt-1 text-[15px] font-bold tabular-nums text-[#2563EB]">{formatCurrency(opt.price)}</p>
                                   </div>
-                                  <div className="flex shrink-0 items-center gap-2">
-                                    <LockButton locked={locked} onToggle={() => toggleLock(lk)} />
+                                  <div className="flex shrink-0 items-center">
                                     <button
                                       type="button"
-                                      disabled={locked || isSaving}
+                                      disabled={isSaving}
                                       onClick={() => void handleToggleSuggestionMid(row)}
                                       className={`flex h-8 w-8 items-center justify-center rounded-full text-lg font-bold transition-all duration-200 disabled:opacity-40 ${
                                         added
@@ -1166,7 +1627,7 @@ export default function RoomReviewPage() {
                             <button
                               type="button"
                               disabled={bundleAdding || bundleSelectedCount === 0 || isSaving}
-                              onClick={() => void handleBundleAddSelected()}
+                              onClick={() => handleBundleAddClick()}
                               className={`mt-5 flex h-12 w-full items-center justify-center rounded-xl text-base font-bold transition-all duration-300 md:h-14 md:text-base ${
                                 bundleAddedFlash
                                   ? "bg-[#16A34A] text-white"
@@ -1250,6 +1711,96 @@ export default function RoomReviewPage() {
             </div>
           </div>
         </footer>
+      ) : null}
+
+      {bundleConflictModal ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+          <div
+            className="max-h-[min(90vh,520px)] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="bundle-conflict-title"
+          >
+            <h2 id="bundle-conflict-title" className="text-lg font-bold text-gray-900">
+              Some items in this bundle overlap with what you already have:
+            </h2>
+            <div className="mt-4 space-y-6">
+              {bundleConflictModal.pairs.map((p, i) => (
+                <div key={i} className="border-t border-gray-100 pt-4 first:border-t-0 first:pt-0">
+                  <p className="text-sm text-[#6B7280]">
+                    You have:{" "}
+                    <span className="font-semibold text-gray-900">
+                      {p.existing.brand ? `${p.existing.brand} ` : ""}
+                      {p.existing.description}
+                    </span>{" "}
+                    <span className="tabular-nums">({formatCurrency(p.existing.unit_cost * p.existing.qty)})</span>
+                  </p>
+                  <p className="mt-1 text-sm text-[#6B7280]">
+                    Bundle has:{" "}
+                    <span className="font-semibold text-gray-900">
+                      {p.bundleItem.brand ? `${p.bundleItem.brand} ` : ""}
+                      {p.bundleItem.description}
+                    </span>{" "}
+                    <span className="tabular-nums">({formatCurrency(p.bundleItem.total)})</span>
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {(["replace", "both", "skip"] as const).map((choice) => (
+                      <button
+                        key={choice}
+                        type="button"
+                        onClick={() =>
+                          setBundleConflictModal((prev) => {
+                            if (!prev) return prev;
+                            const next = [...prev.resolutions];
+                            next[i] = choice;
+                            return { ...prev, resolutions: next };
+                          })
+                        }
+                        className={`rounded-lg border px-3 py-2 text-xs font-semibold transition-colors sm:text-sm ${
+                          bundleConflictModal.resolutions[i] === choice
+                            ? "border-[#2563EB] bg-blue-50 text-[#2563EB]"
+                            : "border-gray-200 text-gray-700 hover:bg-gray-50"
+                        }`}
+                      >
+                        {choice === "replace"
+                          ? "Replace existing"
+                          : choice === "both"
+                            ? "Add both"
+                            : "Skip"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700"
+                onClick={() => setBundleConflictModal(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={
+                  bundleAdding ||
+                  bundleConflictModal.resolutions.some((r) => r == null)
+                }
+                onClick={() =>
+                  void executeBundleAdd(
+                    bundleConflictModal.selected,
+                    bundleConflictModal.pairs,
+                    bundleConflictModal.resolutions as BundleConflictResolution[]
+                  )
+                }
+                className="rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
+              >
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {/* Guided tour — character + bubbles */}

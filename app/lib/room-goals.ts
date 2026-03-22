@@ -19,5 +19,5 @@ export function writeRoomGoal(sessionId: string, room: string, value: number) {
 
 export function readRoomGoal(sessionId: string, room: string): number | null {
   const v = readRoomGoals()[sessionId]?.[room];
-  return typeof v === "number" && v > 0 ? v : null;
+  return typeof v === "number" && v >= 0 ? v : null;
 }
