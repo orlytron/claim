@@ -566,6 +566,148 @@ function normTitle(t: string): string {
   return t.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+type CachedRow = { id?: string; mid: unknown; premium: unknown; options?: unknown };
+
+/** Flat option rows in `options` jsonb: must not be nested `{ mid: {...} }` wrappers. */
+function isValidFlatCacheEntry(o: unknown): boolean {
+  if (!o || typeof o !== "object") return false;
+  const x = o as Record<string, unknown>;
+  if ("mid" in x && x.mid != null && typeof x.mid === "object") return false;
+  return (
+    typeof x.title === "string" &&
+    x.title.trim().length > 0 &&
+    typeof x.price === "number" &&
+    x.price > 0
+  );
+}
+
+function buildCacheResponseBody(
+  cached: { mid: unknown; premium: unknown; options?: unknown },
+  cleanDesc: string,
+  currentPrice: number,
+  brandStr: string,
+  source: string
+): Record<string, unknown> | null {
+  const options = Array.isArray(cached.options) ? (cached.options as unknown[]) : [];
+  const validFlat = options.filter(isValidFlatCacheEntry);
+
+  if (validFlat.length > 0) {
+    const optionSets: UpgradeOptionSet[] = [];
+    for (const o of validFlat) {
+      const set = normalizeFlatOptionToSet(o, cleanDesc);
+      if (set && isCompleteOptionSet(set, currentPrice)) {
+        optionSets.push(enrichSet(set, brandStr));
+      }
+    }
+    if (optionSets.length > 0) {
+      return {
+        optionSets,
+        mid: optionSets[0]!.mid,
+        premium: optionSets[optionSets.length - 1]!.mid,
+        source,
+      };
+    }
+  }
+
+  const fromRow = optionSetsFromRow(
+    cached as { mid: unknown; premium: unknown; options?: unknown },
+    cleanDesc,
+    currentPrice,
+    brandStr
+  );
+  if (fromRow.length > 0) {
+    return {
+      optionSets: fromRow,
+      mid: fromRow[0]!.mid,
+      premium: fromRow[0]!.premium,
+      source,
+    };
+  }
+
+  if (cached.mid && typeof cached.mid === "object") {
+    const single = normalizeOptionSet({ mid: cached.mid, premium: cached.premium }, cleanDesc);
+    if (single && isCompleteOptionSet(single, currentPrice)) {
+      const enriched = enrichSet(single, brandStr);
+      return {
+        optionSets: [enriched],
+        mid: enriched.mid,
+        premium: enriched.premium,
+        source,
+      };
+    }
+  }
+
+  return null;
+}
+
+async function tryCacheHitResponse(
+  trimmedDesc: string,
+  cleanDesc: string,
+  currentPrice: number,
+  brandStr: string
+): Promise<NextResponse | null> {
+  const { data: exact, error: exactErr } = await supabaseAdmin
+    .from("upgrades_cache")
+    .select("mid, premium, options")
+    .ilike("item_description", trimmedDesc)
+    .maybeSingle();
+
+  if (exactErr) console.log("Cache read error (exact):", exactErr.message);
+
+  if (exact && (exact.mid || (Array.isArray(exact.options) && exact.options.length > 0))) {
+    const body = buildCacheResponseBody(exact, cleanDesc, currentPrice, brandStr, "cache");
+    if (body) {
+      console.log("Cache HIT (exact):", trimmedDesc);
+      return NextResponse.json(body);
+    }
+  }
+
+  const words = trimmedDesc.split(/\s+/).filter((w) => w.length > 3).slice(0, 2);
+  for (const word of words) {
+    const safe = word.replace(/[%_]/g, "");
+    if (!safe) continue;
+    const { data: partial, error: partialErr } = await supabaseAdmin
+      .from("upgrades_cache")
+      .select("mid, premium, options")
+      .ilike("item_description", `%${safe}%`)
+      .maybeSingle();
+    if (partialErr) continue;
+    if (partial && (partial.mid || (Array.isArray(partial.options) && partial.options.length > 0))) {
+      const body = buildCacheResponseBody(partial, cleanDesc, currentPrice, brandStr, "cache-partial");
+      if (body) {
+        console.log("Cache HIT (partial):", trimmedDesc, "→ matched on:", word);
+        return NextResponse.json(body);
+      }
+    }
+  }
+
+  console.log("Cache MISS:", trimmedDesc);
+  return null;
+}
+
+/** Same resolution order as cache read, includes `id` for updates. */
+async function findUpgradesCacheRowForUpdate(trimmedDesc: string): Promise<CachedRow | null> {
+  const { data: exact } = await supabaseAdmin
+    .from("upgrades_cache")
+    .select("id, mid, premium, options")
+    .ilike("item_description", trimmedDesc)
+    .maybeSingle();
+  if (exact?.id) return exact as CachedRow;
+
+  const words = trimmedDesc.split(/\s+/).filter((w) => w.length > 3).slice(0, 2);
+  for (const word of words) {
+    const safe = word.replace(/[%_]/g, "");
+    if (!safe) continue;
+    const { data: partial } = await supabaseAdmin
+      .from("upgrades_cache")
+      .select("id, mid, premium, options")
+      .ilike("item_description", `%${safe}%`)
+      .maybeSingle();
+    if (partial?.id) return partial as CachedRow;
+  }
+  return null;
+}
+
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as {
     item_description: string;
@@ -584,51 +726,13 @@ export async function POST(req: NextRequest) {
 
   const brandStr = brand ?? "";
   const catStr = category ?? "";
+  const trimmedDesc = cleanDesc.trim();
 
   // ── Cache read (skip when force_refresh) ─────────────────────────────────
   if (!force_refresh) {
     try {
-      const { data: exactRow, error: cacheErr } = await supabaseAdmin
-        .from("upgrades_cache")
-        .select("id, mid, premium, options")
-        .ilike("item_description", cleanDesc)
-        .maybeSingle();
-
-      if (cacheErr) console.log("Cache read error:", cacheErr.message);
-
-      if (exactRow?.mid) {
-        const optionSets = optionSetsFromRow(exactRow, cleanDesc, current_price, brandStr);
-        if (optionSets.length > 0) {
-          return NextResponse.json({
-            optionSets,
-            mid: optionSets[0]!.mid,
-            premium: optionSets[0]!.premium,
-            source: "cache",
-          });
-        }
-      }
-
-      const firstWord = cleanDesc.split(/\s+/).filter(Boolean)[0] ?? "";
-      if (firstWord.length >= 4) {
-        const safe = firstWord.replace(/[%_]/g, "");
-        const { data: fuzzy } = await supabaseAdmin
-          .from("upgrades_cache")
-          .select("id, mid, premium, options")
-          .ilike("item_description", `%${safe}%`)
-          .maybeSingle();
-
-        if (fuzzy?.mid) {
-          const optionSets = optionSetsFromRow(fuzzy, cleanDesc, current_price, brandStr);
-          if (optionSets.length > 0) {
-            return NextResponse.json({
-              optionSets,
-              mid: optionSets[0]!.mid,
-              premium: optionSets[0]!.premium,
-              source: "cache-fuzzy",
-            });
-          }
-        }
-      }
+      const hit = await tryCacheHitResponse(trimmedDesc, cleanDesc, current_price, brandStr);
+      if (hit) return hit;
     } catch (e) {
       console.log("Cache lookup exception (non-fatal):", e);
     }
@@ -637,13 +741,26 @@ export async function POST(req: NextRequest) {
   // ── Live fetch (SerpAPI $1000+ or Claude <$1000) ─────────────────────────
   const fresh = await fetchFreshPair(cleanDesc, brandStr, current_price, catStr);
 
+  if (fresh.mid?.price != null && fresh.mid.price > current_price * 10) {
+    console.error(
+      "PRICE SANITY FAIL:",
+      fresh.mid?.title,
+      fresh.mid?.price,
+      "vs original:",
+      current_price
+    );
+    return NextResponse.json({
+      optionSets: [],
+      mid: null,
+      premium: null,
+      source: "sanity-fail",
+      message: "No reasonable upgrade found. Enter a custom value below.",
+    });
+  }
+
   // ── Persist: append options; do not overwrite mid/premium on refresh ───────
   try {
-    const { data: existing } = await supabaseAdmin
-      .from("upgrades_cache")
-      .select("id, mid, premium, options")
-      .ilike("item_description", cleanDesc)
-      .maybeSingle();
+    const existing = await findUpgradesCacheRowForUpdate(trimmedDesc);
 
     if (existing?.id) {
       const rawOpts: unknown[] = Array.isArray(existing.options)
@@ -698,11 +815,7 @@ export async function POST(req: NextRequest) {
 
   let finalSets: UpgradeOptionSet[] = [fresh];
   try {
-    const { data: row } = await supabaseAdmin
-      .from("upgrades_cache")
-      .select("mid, premium, options")
-      .ilike("item_description", cleanDesc)
-      .maybeSingle();
+    const row = await findUpgradesCacheRowForUpdate(trimmedDesc);
     if (row) {
       const sanitized = optionSetsFromRow(row, cleanDesc, current_price, brandStr);
       if (sanitized.length) finalSets = sanitized;
