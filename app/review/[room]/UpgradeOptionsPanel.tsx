@@ -18,7 +18,7 @@ export type UpgradeOption = {
 export const ENTRY_TITLE_PREFIX = "Entry upgrade —";
 export const ENTRY_PLUS_TITLE_PREFIX = "Entry+ upgrade —";
 
-type CatalogProduct = {
+export type UpgradeProduct = {
   title: string;
   brand: string;
   model: string;
@@ -27,7 +27,7 @@ type CatalogProduct = {
   url: string;
 };
 
-type UpgradeOptionSet = { mid: CatalogProduct; premium: CatalogProduct | null };
+type UpgradeOptionSet = { mid: UpgradeProduct; premium: UpgradeProduct | null };
 
 function SmallSpinner() {
   return (
@@ -42,14 +42,18 @@ function normKey(title: string, price: number): string {
   return `${title.trim().toLowerCase()}|${price}`;
 }
 
+function fallbackShopUrl(title: string): string {
+  return `https://www.google.com/search?q=${encodeURIComponent(title)}&tbm=shop`;
+}
+
 function normalizeSet(s: unknown): UpgradeOptionSet | null {
   if (!s || typeof s !== "object") return null;
   const o = s as UpgradeOptionSet;
-  if (!o.mid || typeof o.mid !== "object" || !(o.mid as CatalogProduct).title) return null;
-  const mid = o.mid as CatalogProduct;
+  if (!o.mid || typeof o.mid !== "object" || !(o.mid as UpgradeProduct).title) return null;
+  const mid = o.mid as UpgradeProduct;
   const prem =
-    o.premium && typeof o.premium === "object" && (o.premium as CatalogProduct).price > 0
-      ? (o.premium as CatalogProduct)
+    o.premium && typeof o.premium === "object" && (o.premium as UpgradeProduct).price > 0
+      ? (o.premium as UpgradeProduct)
       : null;
   return { mid, premium: prem };
 }
@@ -61,20 +65,20 @@ function setsFromResponse(j: Record<string, unknown>): UpgradeOptionSet[] {
     const out = rawSets.map(normalizeSet).filter(Boolean) as UpgradeOptionSet[];
     if (out.length) return out;
   }
-  const m = j.mid as CatalogProduct | undefined;
+  const m = j.mid as UpgradeProduct | undefined;
   if (m?.title && m.price > 0) {
-    const p = j.premium as CatalogProduct | null | undefined;
+    const p = j.premium as UpgradeProduct | null | undefined;
     const prem = p && p.price > 0 ? p : null;
     return [{ mid: m, premium: prem }];
   }
   return [];
 }
 
-/** Flatten all cached pairs into individual product cards; drop duplicate price+title and same-price premium as mid. */
-function flattenOptionSets(sets: UpgradeOptionSet[]): CatalogProduct[] {
-  const out: CatalogProduct[] = [];
+/** Flatten option sets into individual products. */
+function flattenOptionSets(sets: UpgradeOptionSet[]): UpgradeProduct[] {
+  const out: UpgradeProduct[] = [];
   const seen = new Set<string>();
-  const push = (p: CatalogProduct) => {
+  const push = (p: UpgradeProduct) => {
     const k = normKey(p.title, p.price);
     if (seen.has(k)) return;
     seen.add(k);
@@ -90,15 +94,119 @@ function flattenOptionSets(sets: UpgradeOptionSet[]): CatalogProduct[] {
   return out;
 }
 
-function validDisplayOptions(products: CatalogProduct[], baseUnit: number, itemBrand: string): CatalogProduct[] {
-  return products.filter((opt) => {
-    if (!opt.title?.trim() || opt.price <= 0) return false;
-    if (opt.price <= baseUnit * 1.15) return false;
-    const brand = (opt.brand || itemBrand || "").trim();
-    const retailer = (opt.retailer || "").trim();
-    if (!brand || !retailer) return false;
-    return true;
+export function isSaneUpgrade(option: UpgradeProduct, originalPrice: number): boolean {
+  if (option.price <= originalPrice) return false;
+  if (option.price < originalPrice * 1.1) return false;
+  if (option.price > originalPrice * 20) return false;
+  if (!option.title || option.title.length < 3) return false;
+  if (!option.price || option.price <= 0) return false;
+  const titleLower = option.title.toLowerCase();
+  const badWords = [
+    "used",
+    "refurbished",
+    "pre-owned",
+    "open box",
+    "open-box",
+    "renewed",
+    "remanufactured",
+    "like new - used",
+    "warehouse deal",
+  ];
+  if (badWords.some((w) => titleLower.includes(w))) return false;
+  return true;
+}
+
+export function adjustForSets(option: UpgradeProduct, originalItem: ClaimItem): UpgradeProduct {
+  const title = option.title.toLowerCase();
+  const setMatch = title.match(/set of (\d+)|(\d+)[- ]pack|pair of/i);
+  if (setMatch) {
+    const count = parseInt(setMatch[1] || setMatch[2] || "2", 10);
+    if (originalItem.qty === 1 && count > 1) {
+      return {
+        ...option,
+        price: Math.round((option.price / count) * 100) / 100,
+        title: `${option.title} (per item, set of ${count})`,
+      };
+    }
+  }
+  return option;
+}
+
+export function deduplicateByTitle(options: UpgradeProduct[]): UpgradeProduct[] {
+  return options.filter((opt, i, arr) => {
+    const words = opt.title
+      .toLowerCase()
+      .split(/\s+/)
+      .slice(0, 4)
+      .join(" ");
+    return !arr.slice(0, i).some((prev) => {
+      const prevWords = prev.title
+        .toLowerCase()
+        .split(/\s+/)
+        .slice(0, 4)
+        .join(" ");
+      return prevWords === words;
+    });
   });
+}
+
+export function selectBestThree(options: UpgradeProduct[], originalPrice: number): UpgradeProduct[] {
+  const valid = options
+    .filter(
+      (o) => o.price > originalPrice * 1.1 && o.title?.length > 0 && o.price > 0
+    )
+    .filter(
+      (o, i, arr) =>
+        !arr.slice(0, i).some(
+          (prev) => Math.abs(prev.price - o.price) / Math.max(o.price, 1e-9) < 0.15
+        )
+    );
+
+  valid.sort((a, b) => a.price - b.price);
+
+  if (valid.length <= 3) return valid;
+
+  const cheapest = valid[0]!;
+  const priciest = valid[valid.length - 1]!;
+  const geometricMid = Math.sqrt(cheapest.price * priciest.price);
+  const middleCandidates = valid.slice(1, -1);
+  const middle =
+    middleCandidates.length === 1
+      ? middleCandidates[0]!
+      : middleCandidates.reduce((best, opt) =>
+          Math.abs(opt.price - geometricMid) < Math.abs(best.price - geometricMid) ? opt : best
+        );
+
+  return [cheapest, middle, priciest];
+}
+
+/** Drop cheapest tier if not meaningfully below mid (entry must be < mid * 0.80). */
+function dropEntryIfTooCloseToMid(sortedAsc: UpgradeProduct[]): UpgradeProduct[] {
+  if (sortedAsc.length !== 3) return sortedAsc;
+  const [entry, mid, premium] = sortedAsc;
+  if (entry.price < mid.price * 0.8) return sortedAsc;
+  return [mid, premium];
+}
+
+function tierLabels(count: number): string[] {
+  if (count === 1) return ["UPGRADE"];
+  if (count === 2) return ["MID ★", "PREMIUM"];
+  return ["ENTRY", "MID ★", "PREMIUM"];
+}
+
+function buildDisplayOptions(raw: UpgradeProduct[], item: ClaimItem, originalPrice: number): UpgradeProduct[] {
+  const adjusted = raw.map((o) => adjustForSets(o, item));
+  const sane = adjusted.filter((o) => isSaneUpgrade(o, originalPrice));
+  const deduped = deduplicateByTitle(sane);
+  let picked = selectBestThree(deduped, originalPrice);
+  picked.sort((a, b) => a.price - b.price);
+  picked = dropEntryIfTooCloseToMid(picked);
+  picked.sort((a, b) => a.price - b.price);
+  return picked;
+}
+
+function displayTitleForCard(title: string): string {
+  return title.length > 45 ? `${title.slice(0, 42)}...` : title;
 }
 
 function NoCacheUpgradeForm({
@@ -187,6 +295,8 @@ export function UpgradeOptionsPanel({
   onApplied,
   onRefreshNotice,
   onCatalogEmpty,
+  isPanelOpen,
+  onClose,
 }: {
   item: ClaimItem;
   locked: boolean;
@@ -195,11 +305,15 @@ export function UpgradeOptionsPanel({
   onApplied?: () => void;
   onRefreshNotice?: (message: string) => void;
   onCatalogEmpty?: () => void;
+  /** When true, panel listens for outside clicks to call onClose */
+  isPanelOpen?: boolean;
+  onClose?: () => void;
 }) {
   const emptyNotifiedRef = useRef(false);
+  const panelRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [rawProducts, setRawProducts] = useState<CatalogProduct[]>([]);
+  const [rawProducts, setRawProducts] = useState<UpgradeProduct[]>([]);
   const [customPrice, setCustomPrice] = useState("");
   const [customDesc, setCustomDesc] = useState("");
   const [applying, setApplying] = useState(false);
@@ -210,6 +324,13 @@ export function UpgradeOptionsPanel({
   const isUpgradedLine = item.source === "upgrade" && !!item.pre_upgrade_item;
   const origDesc = item.pre_upgrade_item?.description ?? item.description;
   const itemBrand = item.brand || "";
+
+  const displayOptions = useMemo(
+    () => buildDisplayOptions(rawProducts, item, baseUnit),
+    [rawProducts, item, baseUnit]
+  );
+
+  const tierLabelList = useMemo(() => tierLabels(displayOptions.length), [displayOptions.length]);
 
   const fetchPayload = useCallback(() => {
     const descForApi =
@@ -232,19 +353,11 @@ export function UpgradeOptionsPanel({
     item.pre_upgrade_item?.unit_cost,
   ]);
 
-  const applyResponseJson = useCallback(
-    (j: Record<string, unknown>) => {
-      const sets = setsFromResponse(j);
-      const flat = flattenOptionSets(sets);
-      setRawProducts(flat);
-    },
-    []
-  );
-
-  const validOptions = useMemo(
-    () => validDisplayOptions(rawProducts, baseUnit, itemBrand),
-    [rawProducts, baseUnit, itemBrand]
-  );
+  const applyResponseJson = useCallback((j: Record<string, unknown>) => {
+    const sets = setsFromResponse(j);
+    const flat = flattenOptionSets(sets);
+    setRawProducts(flat);
+  }, []);
 
   useEffect(() => {
     setCustomDesc(item.description);
@@ -281,14 +394,37 @@ export function UpgradeOptionsPanel({
 
   useEffect(() => {
     if (!cacheHas || locked || loading || refreshing) return;
-    if (validOptions.length > 0) {
+    if (displayOptions.length > 0) {
       emptyNotifiedRef.current = false;
       return;
     }
     if (emptyNotifiedRef.current) return;
     emptyNotifiedRef.current = true;
     onCatalogEmpty?.();
-  }, [cacheHas, locked, loading, refreshing, validOptions.length, onCatalogEmpty]);
+  }, [cacheHas, locked, loading, refreshing, displayOptions.length, onCatalogEmpty]);
+
+  useEffect(() => {
+    if (!isPanelOpen || !onClose) return;
+    const onCloseFn: () => void = onClose;
+    let cancelled = false;
+    let removeListener: (() => void) | undefined;
+    const timeoutId = window.setTimeout(() => {
+      if (cancelled) return;
+      function handleMouseDown(e: MouseEvent) {
+        const el = panelRef.current;
+        if (!el) return;
+        if (el.contains(e.target as Node)) return;
+        onCloseFn();
+      }
+      document.addEventListener("mousedown", handleMouseDown);
+      removeListener = () => document.removeEventListener("mousedown", handleMouseDown);
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+      removeListener?.();
+    };
+  }, [isPanelOpen, onClose]);
 
   const handleRefresh = useCallback(async () => {
     if (locked) return;
@@ -321,10 +457,10 @@ export function UpgradeOptionsPanel({
   }
 
   const cardBase =
-    "flex min-w-[160px] flex-1 flex-col rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-all duration-200 hover:border-blue-300 hover:shadow-md md:min-w-0";
+    "relative flex min-w-0 flex-1 flex-col rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-all duration-200 hover:border-blue-300 hover:shadow-md";
   const cardOn = "border-2 border-[#2563EB] bg-blue-50/80 shadow-md";
 
-  function isCardSelected(opt: CatalogProduct): boolean {
+  function isCardSelected(opt: UpgradeProduct): boolean {
     if (!isUpgradedLine) return false;
     return Math.abs(item.unit_cost - opt.price) < 0.01 && item.description === opt.title;
   }
@@ -365,13 +501,27 @@ export function UpgradeOptionsPanel({
     );
   }
 
-  if (!loading && !refreshing && validOptions.length === 0) {
+  if (!loading && !refreshing && displayOptions.length === 0) {
     return null;
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div
+      ref={panelRef}
+      className="upgrade-accordion relative space-y-6 pt-2"
+      role="region"
+      aria-label="Upgrade options"
+    >
+      <button
+        type="button"
+        onClick={() => onClose?.()}
+        className="absolute right-0 top-0 z-10 rounded-lg p-2 text-lg leading-none text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+        aria-label="Close upgrade panel"
+      >
+        ✕
+      </button>
+
+      <div className="flex flex-wrap items-start justify-between gap-3 pr-10">
         <p className="text-sm text-[#6B7280]">
           Choose your upgrade for{" "}
           <span className="font-semibold text-gray-900">{origDesc}</span>:
@@ -392,56 +542,67 @@ export function UpgradeOptionsPanel({
               <>↻ Refresh</>
             )}
           </button>
-          {validOptions.length > 0 ? (
-            <span className="text-[11px] text-[#6B7280]">{validOptions.length} options loaded</span>
+          {displayOptions.length > 0 ? (
+            <span className="text-[11px] text-[#6B7280]">{displayOptions.length} options shown</span>
           ) : null}
         </div>
       </div>
 
-      <div
-        className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 ${refreshing ? "opacity-60" : ""}`}
-      >
-        {validOptions.map((opt) => (
-          <div key={normKey(opt.title, opt.price)} className={`${cardBase} ${isCardSelected(opt) ? cardOn : ""}`}>
-            <p className="text-[15px] font-semibold leading-snug text-gray-900 [overflow-wrap:anywhere]">{opt.title}</p>
-            <p className="mt-2 text-sm font-medium text-gray-800">{(opt.brand || itemBrand).trim()}</p>
-            <p className="mt-1 text-xs font-medium text-[#6B7280]">{opt.retailer.trim()}</p>
-            <p className="mt-4 text-[22px] font-bold text-blue-600 tabular-nums">{formatCurrency(opt.price * item.qty)}</p>
-            <p className="text-sm font-semibold text-[#16A34A] tabular-nums">
-              +{formatCurrency((opt.price - baseUnit) * item.qty)}
-            </p>
-            {opt.url?.trim() ? (
+      <div className={`grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 ${refreshing ? "opacity-60" : ""}`}>
+        {displayOptions.map((opt, idx) => {
+          const tierLabel = tierLabelList[idx] ?? "";
+          const href = opt.url?.trim() ? opt.url.trim() : fallbackShopUrl(opt.title);
+          const displayTitle = displayTitleForCard(opt.title);
+          return (
+            <div key={normKey(opt.title, opt.price)} className={`${cardBase} ${isCardSelected(opt) ? cardOn : ""}`}>
+              <p className="text-xs font-bold uppercase tracking-wide text-[#2563EB]">{tierLabel}</p>
+              <div
+                className="mt-2 text-[15px] font-semibold leading-snug text-gray-900 [overflow-wrap:anywhere]"
+                title={opt.title}
+              >
+                {displayTitle}
+              </div>
+              <p className="mt-2 text-sm font-medium text-gray-800">{(opt.brand || itemBrand).trim() || "—"}</p>
+              <p className="mt-1 text-xs font-medium text-[#6B7280]">
+                {(opt.retailer || "").trim() || "Search online"}
+              </p>
+              <p className="mt-4 text-[22px] font-bold text-blue-600 tabular-nums">
+                {formatCurrency(opt.price * item.qty)}
+              </p>
+              <p className="text-sm font-semibold text-[#16A34A] tabular-nums">
+                +{formatCurrency((opt.price - baseUnit) * item.qty)}
+              </p>
               <a
-                href={opt.url}
+                href={href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="mt-2 text-xs font-semibold text-[#2563EB] underline"
+                className="mt-2 inline-block text-xs font-semibold text-[#2563EB] underline"
               >
                 View ↗
               </a>
-            ) : null}
-            <button
-              type="button"
-              disabled={applying || refreshing}
-              onClick={() =>
-                runApply(
-                  onApply({
-                    label: "Upgrade",
-                    price: opt.price,
-                    title: opt.title,
-                    brand: (opt.brand || itemBrand).trim(),
-                    model: opt.model || "",
-                    retailer: opt.retailer,
-                    url: opt.url || "",
-                  })
-                )
-              }
-              className="mt-4 h-10 w-full rounded-lg bg-[#2563EB] text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
-            >
-              Select
-            </button>
-          </div>
-        ))}
+              <button
+                type="button"
+                disabled={applying || refreshing}
+                onClick={() =>
+                  runApply(
+                    onApply({
+                      label: tierLabel,
+                      price: opt.price,
+                      title: opt.title,
+                      brand: (opt.brand || itemBrand).trim(),
+                      model: opt.model || "",
+                      retailer: (opt.retailer || "").trim() || "Search online",
+                      url: href,
+                    })
+                  )
+                }
+                className="mt-4 h-10 w-full rounded-lg bg-[#2563EB] text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
+              >
+                Select
+              </button>
+            </div>
+          );
+        })}
       </div>
 
       <div>
@@ -493,7 +654,7 @@ export function UpgradeOptionsPanel({
                     brand: item.brand,
                     model: "",
                     retailer: "",
-                    url: "",
+                    url: fallbackShopUrl(customDesc.trim() || origDesc),
                   })
                 )
               }

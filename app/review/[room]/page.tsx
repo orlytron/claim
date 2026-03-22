@@ -1414,10 +1414,12 @@ export default function RoomReviewPage() {
                                   <button
                                     type="button"
                                     disabled={locked || isSaving}
-                                    onClick={() => setOpenUpgradeKey(rowKey)}
+                                    onClick={() =>
+                                      isOpen ? setOpenUpgradeKey(null) : setOpenUpgradeKey(rowKey)
+                                    }
                                     className="text-sm font-medium text-[#2563EB] underline decoration-[#2563EB]/30 underline-offset-2 transition-colors hover:decoration-[#2563EB] disabled:opacity-40"
                                   >
-                                    Change
+                                    {isOpen ? "✕ Close" : "Change"}
                                   </button>
                                   <button
                                     type="button"
@@ -1527,14 +1529,25 @@ export default function RoomReviewPage() {
                                 >
                                   Keep ✓
                                 </button>
-                                <button
-                                  type="button"
-                                  disabled={locked || isSaving}
-                                  onClick={() => setOpenUpgradeKey(rowKey)}
-                                  className="inline-flex h-10 items-center justify-center gap-1 rounded-lg border-2 border-[#2563EB] bg-white px-3 text-sm font-semibold text-[#2563EB] transition-all duration-200 hover:bg-blue-50 disabled:opacity-40"
-                                >
-                                  <span aria-hidden>↑</span> Upgrade
-                                </button>
+                                {isOpen ? (
+                                  <button
+                                    type="button"
+                                    disabled={locked || isSaving}
+                                    onClick={() => setOpenUpgradeKey(null)}
+                                    className="inline-flex h-10 items-center justify-center rounded-lg border-2 border-gray-400 bg-white px-3 text-sm font-semibold text-gray-700 transition-all duration-200 hover:bg-gray-50 disabled:opacity-40"
+                                  >
+                                    ✕ Close
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled={locked || isSaving}
+                                    onClick={() => setOpenUpgradeKey(rowKey)}
+                                    className="inline-flex h-10 items-center justify-center gap-1 rounded-lg border-2 border-[#2563EB] bg-white px-3 text-sm font-semibold text-[#2563EB] transition-all duration-200 hover:bg-blue-50 disabled:opacity-40"
+                                  >
+                                    <span aria-hidden>↑</span> Upgrade
+                                  </button>
+                                )}
                               </>
                             ) : null}
                             {item.unit_cost >= 500 ? <LockButton locked={locked} onToggle={() => toggleLock(lk)} /> : null}
@@ -1553,6 +1566,8 @@ export default function RoomReviewPage() {
                                 item={item}
                                 locked={locked}
                                 cacheHas={cacheHas}
+                                isPanelOpen={isOpen}
+                                onClose={() => setOpenUpgradeKey(null)}
                                 onApply={async (opt) => {
                                   if (upgraded && item.pre_upgrade_item) await handleChangeUpgrade(item, opt);
                                   else await handleApplyUpgrade(item, opt);
