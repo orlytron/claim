@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ClaimItem } from "../../lib/types";
 import { formatCurrency } from "../../lib/utils";
 
@@ -14,7 +14,8 @@ export type UpgradeOption = {
   url: string;
 };
 
-const ENTRY_TITLE_PREFIX = "Entry upgrade —";
+export const ENTRY_TITLE_PREFIX = "Entry upgrade —";
+export const ENTRY_PLUS_TITLE_PREFIX = "Entry+ upgrade —";
 
 type UpgradeProduct = {
   title: string;
@@ -24,6 +25,8 @@ type UpgradeProduct = {
   retailer: string;
   url: string;
 };
+
+type UpgradeOptionSet = { mid: UpgradeProduct; premium: UpgradeProduct | null };
 
 function SmallSpinner() {
   return (
@@ -113,15 +116,19 @@ export function UpgradeOptionsPanel({
   cacheHas,
   onApply,
   onApplied,
+  onRefreshNotice,
 }: {
   item: ClaimItem;
   locked: boolean;
   cacheHas: boolean;
   onApply: (option: UpgradeOption) => Promise<void>;
   onApplied?: () => void;
+  onRefreshNotice?: (message: string) => void;
 }) {
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState<{ mid: UpgradeProduct; premium: UpgradeProduct | null } | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [optionSets, setOptionSets] = useState<UpgradeOptionSet[]>([]);
+  const [activeSetIndex, setActiveSetIndex] = useState(0);
   const [customPrice, setCustomPrice] = useState("");
   const [customDesc, setCustomDesc] = useState("");
   const [applying, setApplying] = useState(false);
@@ -132,51 +139,22 @@ export function UpgradeOptionsPanel({
   const isUpgradedLine = item.source === "upgrade" && !!item.pre_upgrade_item;
   const origDesc = item.pre_upgrade_item?.description ?? item.description;
 
-  useEffect(() => {
-    setCustomDesc(item.description);
-  }, [item.description]);
+  const activeSet = optionSets[Math.min(activeSetIndex, Math.max(0, optionSets.length - 1))] ?? null;
+  const mid = activeSet?.mid ?? null;
+  const premium = activeSet?.premium ?? null;
 
-  useEffect(() => {
-    if (!cacheHas || locked) return;
-    let cancelled = false;
+  const fetchPayload = useCallback(() => {
     const descForApi =
       item.source === "upgrade" ? item.description : item.pre_upgrade_item?.description ?? item.description;
     const priceForApi =
       item.source === "upgrade" ? item.unit_cost : item.pre_upgrade_item?.unit_cost ?? item.unit_cost;
-    (async () => {
-      setLoading(true);
-      try {
-        const res = await fetch("/api/search-upgrade", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            item_description: descForApi,
-            brand: item.brand || "",
-            current_price: priceForApi,
-            category: item.category || "",
-          }),
-        });
-        if (!res.ok) throw new Error("fetch");
-        const j = (await res.json()) as {
-          mid?: UpgradeProduct;
-          premium?: UpgradeProduct | null;
-        };
-        if (!cancelled && j.mid) {
-          const prem = j.premium && typeof j.premium === "object" && j.premium.price > 0 ? j.premium : null;
-          setData({ mid: j.mid, premium: prem });
-        } else if (!cancelled) setData(null);
-      } catch {
-        if (!cancelled) setData(null);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
+    return {
+      item_description: descForApi,
+      brand: item.brand || "",
+      current_price: priceForApi,
+      category: item.category || "",
     };
   }, [
-    cacheHas,
-    locked,
     item.brand,
     item.category,
     item.description,
@@ -186,23 +164,106 @@ export function UpgradeOptionsPanel({
     item.pre_upgrade_item?.unit_cost,
   ]);
 
-  const customOk = parseFloat(customPrice) > 0;
-  const entryUnitPrice = data?.mid ? Math.round(data.mid.price * 0.75) : 0;
-  const showEntry = !!data?.mid && entryUnitPrice > baseUnit * 1.15;
-  const showPremium = !!data?.mid && !!data.premium && data.premium.price > data.mid.price;
+  const applyResponseJson = useCallback((j: Record<string, unknown>) => {
+    const sets = j.optionSets as UpgradeOptionSet[] | undefined;
+    if (Array.isArray(sets) && sets.length > 0) {
+      const normalized = sets
+        .map((s) => {
+          if (!s?.mid?.price) return null;
+          const prem =
+            s.premium && typeof s.premium === "object" && (s.premium as UpgradeProduct).price > 0
+              ? (s.premium as UpgradeProduct)
+              : null;
+          return { mid: s.mid as UpgradeProduct, premium: prem };
+        })
+        .filter(Boolean) as UpgradeOptionSet[];
+      if (normalized.length) {
+        setOptionSets(normalized);
+        setActiveSetIndex((i) => Math.min(i, normalized.length - 1));
+        return;
+      }
+    }
+    const m = j.mid as UpgradeProduct | undefined;
+    if (m?.price) {
+      const p = j.premium as UpgradeProduct | null | undefined;
+      const prem = p && p.price > 0 ? p : null;
+      setOptionSets([{ mid: m, premium: prem }]);
+      setActiveSetIndex(0);
+    } else {
+      setOptionSets([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    setCustomDesc(item.description);
+  }, [item.description]);
+
+  useEffect(() => {
+    if (!cacheHas || locked) return;
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const res = await fetch("/api/search-upgrade", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(fetchPayload()),
+        });
+        if (!res.ok) throw new Error("fetch");
+        const j = (await res.json()) as Record<string, unknown>;
+        if (!cancelled) applyResponseJson(j);
+      } catch {
+        if (!cancelled) setOptionSets([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cacheHas, locked, fetchPayload, applyResponseJson]);
+
+  const handleRefresh = useCallback(async () => {
+    if (locked) return;
+    setRefreshing(true);
+    try {
+      const res = await fetch("/api/search-upgrade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...fetchPayload(), force_refresh: true }),
+      });
+      if (!res.ok) throw new Error("fetch");
+      const j = (await res.json()) as Record<string, unknown>;
+      applyResponseJson(j);
+      const count = Array.isArray(j.optionSets) ? (j.optionSets as unknown[]).length * 2 : 2;
+      onRefreshNotice?.(`Updated! ${count} options loaded`);
+    } catch {
+      onRefreshNotice?.("Refresh failed");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [locked, fetchPayload, applyResponseJson, onRefreshNotice]);
+
+  const entryUnitPrice = mid ? Math.round(mid.price * 0.7) : 0;
+  const entryPlusUnitPrice = mid ? Math.round(mid.price * 0.85) : 0;
+  const showEntry = !!mid && entryUnitPrice > baseUnit * 1.15;
+  const showEntryPlus = !!mid && entryPlusUnitPrice > baseUnit * 1.15;
+  const showPremium = !!mid && !!premium && premium.price > mid.price;
 
   const entrySelected = isUpgradedLine && item.description.startsWith(ENTRY_TITLE_PREFIX);
+  const entryPlusSelected = isUpgradedLine && item.description.startsWith(ENTRY_PLUS_TITLE_PREFIX);
   const midSelected =
     isUpgradedLine &&
     !entrySelected &&
-    !!data &&
-    Math.abs(item.unit_cost - data.mid.price) < 0.01 &&
-    item.description === data.mid.title;
+    !entryPlusSelected &&
+    !!mid &&
+    Math.abs(item.unit_cost - mid.price) < 0.01 &&
+    item.description === mid.title;
   const premSelected =
     isUpgradedLine &&
-    !!data?.premium &&
-    Math.abs(item.unit_cost - data.premium.price) < 0.01 &&
-    item.description === data.premium.title;
+    !!premium &&
+    Math.abs(item.unit_cost - premium.price) < 0.01 &&
+    item.description === premium.title;
 
   function runApply(p: Promise<void>) {
     if (applying) return;
@@ -213,8 +274,10 @@ export function UpgradeOptionsPanel({
   }
 
   const cardBase =
-    "flex flex-col rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-all duration-200 hover:border-blue-300 hover:shadow-md";
+    "flex min-w-[140px] flex-1 flex-col rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-all duration-200 hover:border-blue-300 hover:shadow-md md:min-w-0";
   const cardOn = "border-2 border-[#2563EB] bg-blue-50/80 shadow-md";
+
+  const totalOptionProducts = optionSets.length * 2;
 
   if (locked) {
     return (
@@ -244,7 +307,7 @@ export function UpgradeOptionsPanel({
     );
   }
 
-  if (loading) {
+  if (loading && !refreshing && optionSets.length === 0) {
     return (
       <div className="flex items-center justify-center gap-2 py-12 text-[#6B7280]">
         <SmallSpinner /> Loading options…
@@ -252,147 +315,229 @@ export function UpgradeOptionsPanel({
     );
   }
 
+  const brandLine = mid?.brand || item.brand || "—";
+
   return (
     <div className="space-y-6">
-      <p className="text-sm text-[#6B7280]">
-        Choose your upgrade for{" "}
-        <span className="font-semibold text-gray-900">{origDesc}</span>:
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <p className="text-sm text-[#6B7280]">
+          Choose your upgrade for{" "}
+          <span className="font-semibold text-gray-900">{origDesc}</span>:
+        </p>
+        <div className="flex flex-col items-end gap-1">
+          <button
+            type="button"
+            disabled={refreshing || applying}
+            onClick={() => void handleRefresh()}
+            className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-[#6B7280] transition hover:border-[#2563EB] hover:text-[#2563EB] disabled:opacity-50"
+          >
+            {refreshing ? (
+              <>
+                <SmallSpinner />
+                Refreshing…
+              </>
+            ) : (
+              <>↻ Refresh</>
+            )}
+          </button>
+          {totalOptionProducts > 0 ? (
+            <span className="text-[11px] text-[#6B7280]">{totalOptionProducts} options loaded</span>
+          ) : null}
+        </div>
+      </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        {showEntry && data?.mid && (
-          <div className={`${cardBase} ${entrySelected ? cardOn : ""}`}>
-            <p className="text-xs font-bold uppercase tracking-wide text-[#6B7280]">Entry</p>
-            <p className="mt-2 text-[15px] font-semibold leading-snug text-gray-900 [overflow-wrap:anywhere]">
-              {data.mid.title || "Entry upgrade"}
-            </p>
-            <p className="mt-1 text-xs text-[#6B7280]">{data.mid.brand || item.brand || "—"}</p>
-            <p className="mt-4 text-[22px] font-bold text-blue-600 tabular-nums">
-              {formatCurrency(entryUnitPrice * item.qty)}
-            </p>
-            <p className="text-sm font-semibold text-[#16A34A] tabular-nums">
-              +{formatCurrency((entryUnitPrice - baseUnit) * item.qty)}
-            </p>
+      {optionSets.length > 1 ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#6B7280]">
+          <span>
+            Suggestion set {activeSetIndex + 1} of {optionSets.length}
+          </span>
+          <div className="flex gap-2">
             <button
               type="button"
-              disabled={applying}
-              onClick={() =>
-                runApply(
-                  onApply({
-                    label: "Entry",
-                    price: entryUnitPrice,
-                    title: `${ENTRY_TITLE_PREFIX} ${origDesc}`.slice(0, 240),
-                    brand: data.mid.brand || item.brand,
-                    model: "",
-                    retailer: "",
-                    url: "",
-                  })
-                )
-              }
-              className="mt-auto h-10 w-full rounded-lg bg-[#2563EB] text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
+              disabled={activeSetIndex <= 0}
+              onClick={() => setActiveSetIndex((i) => Math.max(0, i - 1))}
+              className="rounded-md border border-gray-200 px-2 py-1 font-medium hover:bg-gray-50 disabled:opacity-40"
             >
-              Select
+              ← Previous
+            </button>
+            <button
+              type="button"
+              disabled={activeSetIndex >= optionSets.length - 1}
+              onClick={() => setActiveSetIndex((i) => Math.min(optionSets.length - 1, i + 1))}
+              className="rounded-md border border-gray-200 px-2 py-1 font-medium hover:bg-gray-50 disabled:opacity-40"
+            >
+              Next →
             </button>
           </div>
-        )}
+        </div>
+      ) : null}
 
-        {data?.mid && (
-          <div className={`${cardBase} ${midSelected ? cardOn : ""}`}>
-            <p className="text-xs font-bold uppercase tracking-wide text-[#6B7280]">
-              Mid <span className="text-amber-500">★</span>
-            </p>
-            <p className="mt-2 text-[15px] font-semibold leading-snug text-gray-900 [overflow-wrap:anywhere]">
-              {data.mid.title}
-            </p>
-            <p className="mt-1 text-xs text-[#6B7280]">
-              {[data.mid.brand, data.mid.retailer].filter(Boolean).join(" · ") || "—"}
-            </p>
-            <p className="mt-4 text-[22px] font-bold text-blue-600 tabular-nums">
-              {formatCurrency(data.mid.price * item.qty)}
-            </p>
-            <p className="text-sm font-semibold text-[#16A34A] tabular-nums">
-              +{formatCurrency((data.mid.price - baseUnit) * item.qty)}
-            </p>
-            {data.mid.url ? (
-              <a
-                href={data.mid.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-2 text-xs font-semibold text-[#2563EB] underline"
+      <div className={`grid grid-cols-2 gap-4 md:grid-cols-4 ${refreshing ? "opacity-60" : ""}`}>
+          {showEntry && mid ? (
+            <div className={`${cardBase} ${entrySelected ? cardOn : ""}`}>
+              <p className="text-xs font-bold uppercase tracking-wide text-[#6B7280]">Entry</p>
+              <p className="mt-3 text-[15px] font-semibold text-gray-900">{brandLine}</p>
+              <p className="mt-1 text-sm text-[#6B7280]">Similar model</p>
+              <p className="mt-4 text-[22px] font-bold text-blue-600 tabular-nums">
+                {formatCurrency(entryUnitPrice * item.qty)}
+              </p>
+              <p className="text-sm font-semibold text-[#16A34A] tabular-nums">
+                +{formatCurrency((entryUnitPrice - baseUnit) * item.qty)}
+              </p>
+              <button
+                type="button"
+                disabled={applying || refreshing}
+                onClick={() =>
+                  runApply(
+                    onApply({
+                      label: "Entry",
+                      price: entryUnitPrice,
+                      title: `${ENTRY_TITLE_PREFIX} ${origDesc}`.slice(0, 240),
+                      brand: mid.brand || item.brand,
+                      model: "",
+                      retailer: mid.retailer || "",
+                      url: "",
+                    })
+                  )
+                }
+                className="mt-auto h-10 w-full rounded-lg bg-[#2563EB] text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
               >
-                View ↗
-              </a>
-            ) : null}
-            <button
-              type="button"
-              disabled={applying}
-              onClick={() =>
-                runApply(
-                  onApply({
-                    label: "Mid",
-                    price: data.mid.price,
-                    title: data.mid.title,
-                    brand: data.mid.brand,
-                    model: data.mid.model,
-                    retailer: data.mid.retailer,
-                    url: data.mid.url,
-                  })
-                )
-              }
-              className="mt-4 h-10 w-full rounded-lg bg-[#2563EB] text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
-            >
-              Select
-            </button>
-          </div>
-        )}
+                Select
+              </button>
+            </div>
+          ) : null}
 
-        {showPremium && data?.premium && (
-          <div className={`${cardBase} ${premSelected ? cardOn : ""}`}>
-            <p className="text-xs font-bold uppercase tracking-wide text-[#6B7280]">Premium</p>
-            <p className="mt-2 text-[15px] font-semibold leading-snug text-gray-900 [overflow-wrap:anywhere]">
-              {data.premium.title}
-            </p>
-            <p className="mt-1 text-xs text-[#6B7280]">
-              {[data.premium.brand, data.premium.retailer].filter(Boolean).join(" · ") || "—"}
-            </p>
-            <p className="mt-4 text-[22px] font-bold text-blue-600 tabular-nums">
-              {formatCurrency(data.premium.price * item.qty)}
-            </p>
-            <p className="text-sm font-semibold text-[#16A34A] tabular-nums">
-              +{formatCurrency((data.premium.price - baseUnit) * item.qty)}
-            </p>
-            {data.premium.url ? (
-              <a
-                href={data.premium.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-2 text-xs font-semibold text-[#2563EB] underline"
+          {showEntryPlus && mid ? (
+            <div className={`${cardBase} ${entryPlusSelected ? cardOn : ""}`}>
+              <p className="text-xs font-bold uppercase tracking-wide text-[#6B7280]">Entry+</p>
+              <p className="mt-3 text-[15px] font-semibold text-gray-900">{brandLine}</p>
+              <p className="mt-1 text-sm text-[#6B7280]">Similar model</p>
+              <p className="mt-4 text-[22px] font-bold text-blue-600 tabular-nums">
+                {formatCurrency(entryPlusUnitPrice * item.qty)}
+              </p>
+              <p className="text-sm font-semibold text-[#16A34A] tabular-nums">
+                +{formatCurrency((entryPlusUnitPrice - baseUnit) * item.qty)}
+              </p>
+              <button
+                type="button"
+                disabled={applying || refreshing}
+                onClick={() =>
+                  runApply(
+                    onApply({
+                      label: "Entry+",
+                      price: entryPlusUnitPrice,
+                      title: `${ENTRY_PLUS_TITLE_PREFIX} ${origDesc}`.slice(0, 240),
+                      brand: mid.brand || item.brand,
+                      model: "",
+                      retailer: mid.retailer || "",
+                      url: "",
+                    })
+                  )
+                }
+                className="mt-auto h-10 w-full rounded-lg bg-[#2563EB] text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
               >
-                View ↗
-              </a>
-            ) : null}
-            <button
-              type="button"
-              disabled={applying}
-              onClick={() =>
-                runApply(
-                  onApply({
-                    label: "Premium",
-                    price: data.premium!.price,
-                    title: data.premium!.title,
-                    brand: data.premium!.brand,
-                    model: data.premium!.model,
-                    retailer: data.premium!.retailer,
-                    url: data.premium!.url,
-                  })
-                )
-              }
-              className="mt-4 h-10 w-full rounded-lg bg-[#2563EB] text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
-            >
-              Select
-            </button>
-          </div>
-        )}
+                Select
+              </button>
+            </div>
+          ) : null}
+
+          {mid ? (
+            <div className={`${cardBase} ${midSelected ? cardOn : ""}`}>
+              <p className="text-xs font-bold uppercase tracking-wide text-[#6B7280]">
+                Mid <span className="text-amber-500">★</span>
+              </p>
+              <p className="mt-2 text-[15px] font-semibold leading-snug text-gray-900 [overflow-wrap:anywhere]">
+                {mid.title}
+              </p>
+              <p className="mt-1 text-xs text-[#6B7280]">
+                {[mid.brand, mid.retailer].filter(Boolean).join(" · ") || "—"}
+              </p>
+              <p className="mt-4 text-[22px] font-bold text-blue-600 tabular-nums">
+                {formatCurrency(mid.price * item.qty)}
+              </p>
+              <p className="text-sm font-semibold text-[#16A34A] tabular-nums">
+                +{formatCurrency((mid.price - baseUnit) * item.qty)}
+              </p>
+              {mid.url ? (
+                <a
+                  href={mid.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 text-xs font-semibold text-[#2563EB] underline"
+                >
+                  View ↗
+                </a>
+              ) : null}
+              <button
+                type="button"
+                disabled={applying || refreshing}
+                onClick={() =>
+                  runApply(
+                    onApply({
+                      label: "Mid",
+                      price: mid.price,
+                      title: mid.title,
+                      brand: mid.brand,
+                      model: mid.model,
+                      retailer: mid.retailer,
+                      url: mid.url,
+                    })
+                  )
+                }
+                className="mt-4 h-10 w-full rounded-lg bg-[#2563EB] text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
+              >
+                Select
+              </button>
+            </div>
+          ) : null}
+
+          {showPremium && premium ? (
+            <div className={`${cardBase} ${premSelected ? cardOn : ""}`}>
+              <p className="text-xs font-bold uppercase tracking-wide text-[#6B7280]">Premium</p>
+              <p className="mt-2 text-[15px] font-semibold leading-snug text-gray-900 [overflow-wrap:anywhere]">
+                {premium.title}
+              </p>
+              <p className="mt-1 text-xs text-[#6B7280]">
+                {[premium.brand, premium.retailer].filter(Boolean).join(" · ") || "—"}
+              </p>
+              <p className="mt-4 text-[22px] font-bold text-blue-600 tabular-nums">
+                {formatCurrency(premium.price * item.qty)}
+              </p>
+              <p className="text-sm font-semibold text-[#16A34A] tabular-nums">
+                +{formatCurrency((premium.price - baseUnit) * item.qty)}
+              </p>
+              {premium.url ? (
+                <a
+                  href={premium.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 text-xs font-semibold text-[#2563EB] underline"
+                >
+                  View ↗
+                </a>
+              ) : null}
+              <button
+                type="button"
+                disabled={applying || refreshing}
+                onClick={() =>
+                  runApply(
+                    onApply({
+                      label: "Premium",
+                      price: premium.price,
+                      title: premium.title,
+                      brand: premium.brand,
+                      model: premium.model,
+                      retailer: premium.retailer,
+                      url: premium.url,
+                    })
+                  )
+                }
+                className="mt-4 h-10 w-full rounded-lg bg-[#2563EB] text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
+              >
+                Select
+              </button>
+            </div>
+          ) : null}
       </div>
 
       <div>
@@ -408,7 +553,7 @@ export function UpgradeOptionsPanel({
             customOpen ? "mt-4 max-h-[320px] opacity-100" : "max-h-0 opacity-0"
           }`}
         >
-          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm space-y-3">
+          <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <div>
               <label className="text-xs font-medium text-[#6B7280]">Description</label>
               <input
@@ -434,7 +579,7 @@ export function UpgradeOptionsPanel({
             </div>
             <button
               type="button"
-              disabled={applying || !customOk}
+              disabled={applying || parseFloat(customPrice) <= 0}
               onClick={() =>
                 runApply(
                   onApply({

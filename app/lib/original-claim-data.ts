@@ -1,4 +1,22 @@
 // Original 209 Israel claim items — used for reset and seeding
+
+/** Realistic default age when PDF had 0 years (by item value). */
+export function defaultAge(unit_cost: number): number {
+  if (unit_cost < 200) return 0;
+  if (unit_cost < 500) return 1;
+  if (unit_cost < 2000) return 2;
+  if (unit_cost < 5000) return 3;
+  return 4;
+}
+
+/** Age shown in UI when line still has 0 in session but user hasn’t set a real age. */
+export function displayAgeYears(item: { age_years: number; age_months?: number; unit_cost: number }): number {
+  if (item.age_years === 0 && (item.age_months ?? 0) === 0) {
+    return defaultAge(item.unit_cost);
+  }
+  return item.age_years;
+}
+
 export interface OriginalClaimItem {
   room: string; description: string; brand: string; model: string;
   qty: number; age_years: number; age_months: number; condition: string;
@@ -229,6 +247,7 @@ const ORIGINAL_CLAIM_ITEMS_RAW: Omit<OriginalClaimItem, "source">[] = [
 
 export const ORIGINAL_CLAIM_ITEMS: OriginalClaimItem[] = ORIGINAL_CLAIM_ITEMS_RAW.map((i) => ({
   ...i,
+  age_years: i.age_years === 0 ? defaultAge(i.unit_cost) : i.age_years,
   source: "original" as const,
 }));
 

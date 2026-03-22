@@ -13,6 +13,7 @@ import { loadSession, saveSession, SessionData } from "../../lib/session";
 import { supabase } from "../../lib/supabase";
 import { findBundleSingletonConflicts } from "../../lib/bundle-singleton";
 import { mergeClaimIncoming } from "../../lib/claim-item-merge";
+import { displayAgeYears, ORIGINAL_CLAIM_ITEMS } from "../../lib/original-claim-data";
 import { ClaimItem } from "../../lib/types";
 import { useClaimMode } from "../../lib/useClaimMode";
 import { generateItemId, slugify, formatCurrency } from "../../lib/utils";
@@ -268,6 +269,29 @@ function QtyAdjuster({
   );
 }
 
+function SourceTag({ source }: { source?: ClaimItem["source"] }) {
+  if (!source || source === "original") return null;
+  if (source === "upgrade")
+    return (
+      <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[12px] font-medium text-[#2563EB]">
+        ↑ upgraded
+      </span>
+    );
+  if (source === "bundle")
+    return (
+      <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[12px] font-medium text-[#16A34A]">
+        + added
+      </span>
+    );
+  if (source === "art")
+    return (
+      <span className="shrink-0 rounded-full bg-violet-50 px-2 py-0.5 text-[12px] font-medium text-violet-700">
+        🎨 art
+      </span>
+    );
+  return null;
+}
+
 function CountUpMoney({ value, className = "" }: { value: number; className?: string }) {
   const [v, setV] = useState(0);
   useEffect(() => {
@@ -320,6 +344,12 @@ export default function RoomReviewPage() {
     pairs: { bundleItem: BundleItem; existing: ClaimItem }[];
     resolutions: (BundleConflictResolution | null)[];
   } | null>(null);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+
+  const undoHistoryRef = useRef<ClaimItem[][]>([]);
+  const undoFutureRef = useRef<ClaimItem[][]>([]);
+  const [undoAvail, setUndoAvail] = useState(false);
+  const [redoAvail, setRedoAvail] = useState(false);
 
   const [guidedEnter, setGuidedEnter] = useState(false);
   const [guidedLoadBubble, setGuidedLoadBubble] = useState(false);
@@ -369,6 +399,13 @@ export default function RoomReviewPage() {
     setGuidedLoadDismissed(false);
     setGuidedUpgradeDelta(null);
     setGuidedUpgradeFromTo(null);
+  }, [roomSlug]);
+
+  useEffect(() => {
+    undoHistoryRef.current = [];
+    undoFutureRef.current = [];
+    setUndoAvail(false);
+    setRedoAvail(false);
   }, [roomSlug]);
 
   const bundleSnapValues = useMemo(() => {
@@ -555,14 +592,95 @@ export default function RoomReviewPage() {
     window.setTimeout(() => setQtyFlashKey(null), 1000);
   }
 
-  /** Replace room items in session — full room list */
-  async function saveRoomItems(newRoomItems: ClaimItem[]) {
+  async function persistRoomItemsSnapshot(newRoomItems: ClaimItem[]) {
     if (!session?.claim_items) return;
     const rest = session.claim_items.filter((i) => i.room !== roomName);
     const nextClaim = [...rest, ...newRoomItems];
     await saveSession({ claim_items: nextClaim }, sessionId);
     setSession((prev) => (prev ? { ...prev, claim_items: nextClaim } : prev));
     setItems(newRoomItems);
+  }
+
+  function pushUndoSnapshot() {
+    const snap = items.map((i) => ({ ...i }));
+    undoHistoryRef.current.push(snap);
+    if (undoHistoryRef.current.length > 3) undoHistoryRef.current.shift();
+    undoFutureRef.current = [];
+    setUndoAvail(undoHistoryRef.current.length > 0);
+    setRedoAvail(false);
+  }
+
+  /** Replace room items in session — full room list */
+  async function saveRoomItems(newRoomItems: ClaimItem[], opts?: { skipHistory?: boolean }) {
+    if (!session?.claim_items) return;
+    if (!opts?.skipHistory) pushUndoSnapshot();
+    await persistRoomItemsSnapshot(newRoomItems);
+  }
+
+  async function saveFullClaim(nextClaim: ClaimItem[]) {
+    if (!session?.claim_items) return;
+    pushUndoSnapshot();
+    await saveSession({ claim_items: nextClaim }, sessionId);
+    setSession((prev) => (prev ? { ...prev, claim_items: nextClaim } : prev));
+    setItems(nextClaim.filter((i) => i.room === roomName));
+  }
+
+  async function undoRoom() {
+    if (!undoHistoryRef.current.length || !session?.claim_items) return;
+    const prevRoom = undoHistoryRef.current.pop()!;
+    const curSnap = items.map((i) => ({ ...i }));
+    undoFutureRef.current.push(curSnap);
+    await persistRoomItemsSnapshot(prevRoom);
+    setUndoAvail(undoHistoryRef.current.length > 0);
+    setRedoAvail(undoFutureRef.current.length > 0);
+  }
+
+  async function redoRoom() {
+    if (!undoFutureRef.current.length || !session?.claim_items) return;
+    const nextRoom = undoFutureRef.current.pop()!;
+    const curSnap = items.map((i) => ({ ...i }));
+    undoHistoryRef.current.push(curSnap);
+    if (undoHistoryRef.current.length > 3) undoHistoryRef.current.shift();
+    await persistRoomItemsSnapshot(nextRoom);
+    setUndoAvail(undoHistoryRef.current.length > 0);
+    setRedoAvail(undoFutureRef.current.length > 0);
+  }
+
+  async function handleRemoveItemRow(item: ClaimItem) {
+    if (!session?.claim_items) return;
+    const next = items.filter((ci) => !sameClaimLine(ci, item));
+    await saveRoomItems(next);
+    setToast("Removed");
+    window.setTimeout(() => setToast(null), 1000);
+  }
+
+  async function confirmResetRoom() {
+    if (!session?.claim_items || !roomName) return;
+    setIsSaving(true);
+    try {
+      const originals: ClaimItem[] = ORIGINAL_CLAIM_ITEMS.filter((i) => i.room === roomName).map((o) => ({
+        room: o.room,
+        description: o.description,
+        brand: o.brand,
+        model: o.model,
+        qty: o.qty,
+        age_years: o.age_years,
+        age_months: o.age_months,
+        condition: o.condition,
+        unit_cost: o.unit_cost,
+        category: o.category,
+        source: "original" as const,
+      }));
+      const rest = session.claim_items.filter((i) => i.room !== roomName);
+      const nextClaim = [...rest, ...originals];
+      await saveFullClaim(nextClaim);
+      const { error } = await supabase.from("bundle_decisions").delete().eq("room", roomName);
+      if (error) console.warn("bundle_decisions delete:", error.message);
+      setShowResetConfirm(false);
+      setToast("Room reset to original");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function updateItemQty(item: ClaimItem, qty: number) {
@@ -939,9 +1057,7 @@ export default function RoomReviewPage() {
       );
       if (accErr) console.warn("bundle_decisions partial_accept blocked:", accErr.message);
 
-      await saveSession({ claim_items: merged }, sessionId);
-      setSession((prev) => (prev ? { ...prev, claim_items: merged } : prev));
-      setItems(merged.filter((i) => i.room === roomName));
+      await saveFullClaim(merged);
       fireUpgradeReward(beforeClaim, merged, totalVal);
       setToast(`Added ${incoming.length} item${incoming.length !== 1 ? "s" : ""} from bundle`);
       setBundleAddedFlash(true);
@@ -1013,7 +1129,7 @@ export default function RoomReviewPage() {
                   <dd className="font-medium tabular-nums text-gray-900">{formatCurrency(roomTotal)}</dd>
                 </div>
                 <div className="flex justify-between gap-4 border-b border-gray-100 pb-2 md:border-0 md:pb-0">
-                  <dt className="flex items-center gap-1 text-[#6B7280]">
+                  <dt className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[#6B7280]">
                     Room goal
                     <button
                       type="button"
@@ -1025,6 +1141,13 @@ export default function RoomReviewPage() {
                       aria-label="Edit room goal"
                     >
                       ✏️
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowResetConfirm(true)}
+                      className="text-xs font-medium text-[#2563EB] underline-offset-2 hover:underline"
+                    >
+                      Reset room to original
                     </button>
                   </dt>
                   <dd className="font-medium tabular-nums text-gray-900">{formatCurrency(roomTarget)}</dd>
@@ -1127,9 +1250,18 @@ export default function RoomReviewPage() {
                     return (
                       <div
                         key={`${generateItemId(item)}-${idx}`}
-                        className={`border-b border-gray-100 transition-colors duration-300 last:border-b-0 ${rowBg}`}
+                        className={`relative border-b border-gray-100 transition-colors duration-300 last:border-b-0 ${rowBg}`}
                       >
-                        <div className="flex min-h-[72px] flex-col gap-3 px-4 py-4 md:flex-row md:items-center md:justify-between md:px-6">
+                        <button
+                          type="button"
+                          disabled={locked || isSaving}
+                          onClick={() => void handleRemoveItemRow(item)}
+                          className="absolute right-3 top-3 flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 text-lg leading-none text-gray-400 transition hover:border-red-400 hover:text-red-500 disabled:opacity-30"
+                          aria-label="Remove line from claim"
+                        >
+                          ×
+                        </button>
+                        <div className="flex min-h-[72px] flex-col gap-3 px-4 py-4 pr-12 md:flex-row md:items-center md:justify-between md:px-6 md:pr-14">
                           <div className="min-w-0 flex-1">
                             {upgraded && pre ? (
                               <>
@@ -1137,7 +1269,10 @@ export default function RoomReviewPage() {
                                   {pre.description}{" "}
                                   <span className="font-semibold tabular-nums">{formatCurrency(pre.unit_cost)}</span>
                                 </p>
-                                <p className="mt-2 text-[17px] font-bold text-gray-900 [overflow-wrap:anywhere]">{item.description}</p>
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                  <p className="text-[17px] font-bold text-gray-900 [overflow-wrap:anywhere]">{item.description}</p>
+                                  <SourceTag source={item.source} />
+                                </div>
                                 <div className="mt-1 flex flex-wrap items-center gap-3">
                                   <span className="text-[17px] font-bold tabular-nums text-[#2563EB]">
                                     {formatCurrency(item.unit_cost)} ✓
@@ -1186,19 +1321,29 @@ export default function RoomReviewPage() {
                                       </button>
                                     </span>
                                   ) : (
-                                    <button
-                                      type="button"
-                                      disabled={locked || isSaving}
+                                    <span
+                                      role="button"
+                                      tabIndex={0}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter" || e.key === " ") {
+                                          e.preventDefault();
+                                          if (!locked && !isSaving) {
+                                            setEditingAgeKey(lk);
+                                            setAgeDraft(String(item.age_years ?? 0));
+                                          }
+                                        }
+                                      }}
                                       onClick={() => {
+                                        if (locked || isSaving) return;
                                         setEditingAgeKey(lk);
                                         setAgeDraft(String(item.age_years ?? 0));
                                       }}
-                                      className="text-base font-bold text-[#2563EB] underline decoration-blue-200 underline-offset-2 hover:decoration-[#2563EB] disabled:opacity-40"
+                                      className={`cursor-pointer text-base font-medium text-gray-900 underline decoration-[#2563EB] decoration-2 underline-offset-2 ${locked || isSaving ? "opacity-40" : ""}`}
                                     >
-                                      {!item.age_years || item.age_years < 1
+                                      {displayAgeYears(item) < 1
                                         ? "New / < 1 year"
-                                        : `${item.age_years} years old`}
-                                    </button>
+                                        : `${displayAgeYears(item)} years`}
+                                    </span>
                                   )}
                                 </div>
                                 <p className="mt-1 text-sm font-bold tabular-nums text-[#16A34A]">
@@ -1226,7 +1371,10 @@ export default function RoomReviewPage() {
                             ) : (
                               <>
                                 <div className="flex flex-wrap items-start justify-between gap-2">
-                                  <p className="text-[17px] font-semibold text-gray-900 [overflow-wrap:anywhere]">{item.description}</p>
+                                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                    <p className="text-[17px] font-semibold text-gray-900 [overflow-wrap:anywhere]">{item.description}</p>
+                                    <SourceTag source={item.source} />
+                                  </div>
                                   {item.brand ? (
                                     <span className="shrink-0 text-sm text-[#6B7280]">{item.brand}</span>
                                   ) : null}
@@ -1279,19 +1427,29 @@ export default function RoomReviewPage() {
                                       </button>
                                     </span>
                                   ) : (
-                                    <button
-                                      type="button"
-                                      disabled={locked || isSaving}
+                                    <span
+                                      role="button"
+                                      tabIndex={0}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter" || e.key === " ") {
+                                          e.preventDefault();
+                                          if (!locked && !isSaving) {
+                                            setEditingAgeKey(lk);
+                                            setAgeDraft(String(item.age_years ?? 0));
+                                          }
+                                        }
+                                      }}
                                       onClick={() => {
+                                        if (locked || isSaving) return;
                                         setEditingAgeKey(lk);
                                         setAgeDraft(String(item.age_years ?? 0));
                                       }}
-                                      className="text-base font-bold text-[#2563EB] underline decoration-blue-200 underline-offset-2 hover:decoration-[#2563EB] disabled:opacity-40"
+                                      className={`cursor-pointer text-base font-medium text-gray-900 underline decoration-[#2563EB] decoration-2 underline-offset-2 ${locked || isSaving ? "opacity-40" : ""}`}
                                     >
-                                      {!item.age_years || item.age_years < 1
+                                      {displayAgeYears(item) < 1
                                         ? "New / < 1 year"
-                                        : `${item.age_years} years old`}
-                                    </button>
+                                        : `${displayAgeYears(item)} years`}
+                                    </span>
                                   )}
                                 </div>
                               </>
@@ -1338,6 +1496,7 @@ export default function RoomReviewPage() {
                                 else await handleApplyUpgrade(item, opt);
                               }}
                               onApplied={() => setOpenUpgradeKey(null)}
+                              onRefreshNotice={(msg) => setToast(msg)}
                             />
                           </div>
                         </div>
@@ -1358,7 +1517,10 @@ export default function RoomReviewPage() {
                     return (
                       <li key={xk} className="flex flex-wrap items-center gap-3 py-3">
                         <div className="min-w-0 flex-1">
-                          <p className="text-[15px] font-medium text-gray-900 [overflow-wrap:anywhere]">{item.description}</p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-[15px] font-medium text-gray-900 [overflow-wrap:anywhere]">{item.description}</p>
+                            <SourceTag source={item.source} />
+                          </div>
                           <p className="mt-1 text-[13px] text-[#6B7280]">{item.brand || "—"}</p>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
@@ -1450,6 +1612,7 @@ export default function RoomReviewPage() {
                                   <div className="min-w-0 flex-1">
                                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                                       <p className="text-[15px] font-medium text-gray-900 [overflow-wrap:anywhere]">{opt.title}</p>
+                                      {added && line ? <SourceTag source={line.source} /> : null}
                                       <span className="text-[15px] font-bold tabular-nums text-[#2563EB]">
                                         {formatCurrency(added && line ? line.unit_cost : opt.price)}
                                       </span>
@@ -1496,19 +1659,29 @@ export default function RoomReviewPage() {
                                               </button>
                                             </span>
                                           ) : (
-                                            <button
-                                              type="button"
-                                              disabled={isSaving}
+                                            <span
+                                              role="button"
+                                              tabIndex={0}
+                                              onKeyDown={(e) => {
+                                                if (e.key === "Enter" || e.key === " ") {
+                                                  e.preventDefault();
+                                                  if (!isSaving) {
+                                                    setEditingAgeKey(suggAgeKey);
+                                                    setAgeDraft(String(line.age_years ?? 0));
+                                                  }
+                                                }
+                                              }}
                                               onClick={() => {
+                                                if (isSaving) return;
                                                 setEditingAgeKey(suggAgeKey);
                                                 setAgeDraft(String(line.age_years ?? 0));
                                               }}
-                                              className="text-base font-bold text-[#2563EB] underline decoration-blue-200 underline-offset-2 disabled:opacity-40"
+                                              className={`cursor-pointer text-base font-medium text-gray-900 underline decoration-[#2563EB] decoration-2 underline-offset-2 ${isSaving ? "opacity-40" : ""}`}
                                             >
-                                              {!line.age_years || line.age_years < 1
+                                              {displayAgeYears(line) < 1
                                                 ? "New / < 1 year"
-                                                : `${line.age_years} years old`}
-                                            </button>
+                                                : `${displayAgeYears(line)} years`}
+                                            </span>
                                           )}
                                         </>
                                       ) : null}
@@ -1663,9 +1836,19 @@ export default function RoomReviewPage() {
       )}
 
       {showRoomChrome ? (
-        <footer className="fixed bottom-0 inset-x-0 z-30 h-16 border-t border-gray-200 bg-white shadow-lg">
-          <div className="mx-auto flex h-full max-w-[1100px] items-center justify-between gap-3 px-4 md:gap-6 md:px-8">
-            <div className="hidden min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-xs tabular-nums text-[#6B7280] md:flex md:text-sm">
+        <footer className="fixed bottom-0 inset-x-0 z-30 min-h-16 border-t border-gray-200 bg-white py-2 shadow-lg md:py-0">
+          <div className="mx-auto flex max-w-[1100px] flex-wrap items-center justify-between gap-2 px-4 md:min-h-16 md:flex-nowrap md:gap-4 md:px-8">
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                disabled={!undoAvail || isSaving}
+                onClick={() => void undoRoom()}
+                className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs font-medium text-gray-700 disabled:opacity-40 md:text-sm"
+              >
+                ⟲ Undo
+              </button>
+            </div>
+            <div className="hidden min-w-0 flex-[1_1_200px] flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-[#6B7280] md:flex md:text-sm">
               <span>
                 Original: <span className="font-medium text-gray-900">{formatCurrency(originalRoomValue)}</span>
               </span>
@@ -1682,14 +1865,22 @@ export default function RoomReviewPage() {
                 <span className="font-normal text-[#6B7280]"> / {formatCurrency(roomTarget)} goal</span>
               </span>
             </div>
-            <div className="flex min-w-0 flex-1 items-center md:hidden">
-              <span className="truncate text-sm tabular-nums">
+            <div className="flex min-w-0 flex-1 basis-[45%] items-center md:hidden">
+              <span className="truncate text-xs tabular-nums">
                 <span className="text-[#6B7280]">Total </span>
                 <span className="font-bold text-[#2563EB]">{formatCurrency(roomTotal)}</span>
                 <span className="text-[#6B7280]"> / {formatCurrency(roomTarget)}</span>
               </span>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                disabled={!redoAvail || isSaving}
+                onClick={() => void redoRoom()}
+                className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs font-medium text-gray-700 disabled:opacity-40 md:text-sm"
+              >
+                ⟳ Redo
+              </button>
               <Link
                 href={prevRoom ? `/review/${slugify(prevRoom)}${guided ? "?guided=true" : ""}` : "/review"}
                 className="hidden rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-800 transition-colors hover:bg-gray-50 sm:inline md:text-sm"
@@ -1711,6 +1902,34 @@ export default function RoomReviewPage() {
             </div>
           </div>
         </footer>
+      ) : null}
+
+      {showResetConfirm ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl" role="dialog" aria-modal="true">
+            <p className="text-base font-semibold text-gray-900">Reset this room?</p>
+            <p className="mt-2 text-sm text-[#6B7280]">
+              Remove all upgrades and additions in {roomName}? Original PDF lines will be restored.
+            </p>
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700"
+                onClick={() => setShowResetConfirm(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSaving}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
+                onClick={() => void confirmResetRoom()}
+              >
+                Yes, Reset
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {bundleConflictModal ? (
