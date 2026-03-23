@@ -1,5 +1,6 @@
 import { AFFORDABLE_BUNDLES } from "./bundles-affordable-data";
 import { FOCUSED_TIERED_BUNDLES } from "./bundles-focused-tiered";
+import { CUMULATIVE_FIVE_TIER_FOCUS_BUNDLES } from "./bundles-five-tier-cumulative-index";
 import { TIERED_FOCUS_BUNDLES } from "./bundles-tiered-new";
 
 export interface BundleItem {
@@ -20,7 +21,10 @@ export type TierLineSource = {
   category: string;
 };
 
-/** `items` in each block = lines added at that tier only (cumulative list built in UI). */
+/**
+ * Tier block: either incremental adds (legacy 3-tier / tiered5 incremental) or
+ * a full cumulative snapshot for that tier when `Bundle.tiersCumulative` is true.
+ */
 export type BundleTierBlock = {
   total: number;
   items: BundleItem[];
@@ -58,11 +62,17 @@ export interface Bundle {
   items: BundleItem[];
   /** When set (or tier === "focused"), room page uses FocusedAdditionCard. */
   tiers?: BundleTiersDef;
+  /**
+   * When true with 5 tiers, each tier’s `items` is the full cumulative list for that level
+   * (includes all prior-tier lines). Otherwise tiers are incremental blocks concatenated in UI.
+   */
+  tiersCumulative?: boolean;
 }
 
 export const BUNDLES_DATA: Bundle[] = [
   ...AFFORDABLE_BUNDLES,
   ...TIERED_FOCUS_BUNDLES,
+  ...CUMULATIVE_FIVE_TIER_FOCUS_BUNDLES,
   ...(FOCUSED_TIERED_BUNDLES as Bundle[]),
   // ── LIVING ROOM ──────────────────────────────────────────────────────────────
   {
@@ -1244,6 +1254,7 @@ export const BUNDLES_DATA: Bundle[] = [
 
 /** Dev aid: flag vague bundle lines for manual cleanup (see room review bundle UX). */
 if (process.env.NODE_ENV === "development") {
+  console.log("Total bundles:", BUNDLES_DATA.length);
   (function scanVagueBundleItems() {
     for (const bundle of BUNDLES_DATA) {
       for (const it of bundle.items) {

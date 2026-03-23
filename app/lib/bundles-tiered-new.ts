@@ -1,4 +1,4 @@
-import type { Bundle, BundleItem, BundleTiers3, BundleTiers5 } from "./bundles-data";
+import type { Bundle, BundleItem, BundleTiers3 } from "./bundles-data";
 
 function bi(description: string, brand: string, unit_cost: number, qty: number, category: string): BundleItem {
   const total = Math.round(unit_cost * qty * 100) / 100;
@@ -33,41 +33,6 @@ function tiered(
     plausibility: o?.plausibility ?? "green",
     total_value: tiers.complete.total,
     items: [...essential, ...complete, ...full],
-    tiers,
-  };
-}
-
-function tiered5(
-  room: string,
-  bundle_code: string,
-  name: string,
-  description: string,
-  essential: BundleItem[],
-  enhanced: BundleItem[],
-  complete: BundleItem[],
-  full: BundleItem[],
-  ultimate: BundleItem[],
-  o?: { sweet_spot?: boolean; plausibility?: Bundle["plausibility"] }
-): Bundle {
-  const tiers: BundleTiers5 = {
-    essential: { total: essential.reduce((s, x) => s + x.total, 0), items: essential },
-    enhanced: { total: enhanced.reduce((s, x) => s + x.total, 0), items: enhanced },
-    complete: { total: complete.reduce((s, x) => s + x.total, 0), items: complete },
-    full: { total: full.reduce((s, x) => s + x.total, 0), items: full },
-    ultimate: { total: ultimate.reduce((s, x) => s + x.total, 0), items: ultimate },
-  };
-  const allItems = [...essential, ...enhanced, ...complete, ...full, ...ultimate];
-  const tv = allItems.reduce((s, x) => s + x.total, 0);
-  return {
-    room,
-    bundle_code,
-    name,
-    description,
-    tier: "focused",
-    sweet_spot: o?.sweet_spot ?? true,
-    plausibility: o?.plausibility ?? "green",
-    total_value: tv,
-    items: allItems,
     tiers,
   };
 }
@@ -525,32 +490,5 @@ export const TIERED_FOCUS_BUNDLES: Bundle[] = [
       bi("Vintage dress watch inherited", "", 3800, 1, "Watches"),
     ],
     { sweet_spot: false, plausibility: "medium" }
-  ),
-  tiered5(
-    "David Office / Guest Room",
-    "DAV-TEA-A",
-    "Japanese Tea Room Setup",
-    "Wabi-sabi inspired tea ceremony collection (5-tier — add more lines in bundles-tiered-new as needed)",
-    [
-      bi("Tetsubin cast iron teapot Japanese", "Iwachu", 180, 1, "Kitchen"),
-      bi("Matcha whisk set bamboo", "Ippodo", 45, 2, "Kitchen"),
-    ],
-    [
-      bi("Low Japanese tea table chabudai", "", 380, 1, "Furniture"),
-      bi("Floor sitting cushions zabuton", "", 95, 4, "Furniture"),
-    ],
-    [
-      bi("Kyusu teapot clay side handle", "", 120, 2, "Kitchen"),
-      bi("Premium matcha powder ceremonial", "Ippodo", 38, 6, "Kitchen"),
-    ],
-    [
-      bi("Tokonoma alcove scroll painting", "", 280, 1, "Decorative"),
-      bi("Japanese incense set kodo", "Baieido", 45, 4, "Decorative"),
-    ],
-    [
-      bi("Shoji screen room divider", "", 380, 2, "Furniture"),
-      bi("Tatami floor mat", "", 220, 2, "Furniture"),
-    ],
-    { sweet_spot: true, plausibility: "easy" }
   ),
 ];

@@ -114,6 +114,18 @@ function cumulativeTotals(blocks: BundleItem[][]): number[] {
   return out;
 }
 
+function itemSig(i: BundleItem): string {
+  return `${i.description}|${i.unit_cost}|${i.qty}|${i.brand ?? ""}`;
+}
+
+function firstTierIndexForItem(blocks: BundleItem[][], row: BundleItem): number {
+  const sig = itemSig(row);
+  for (let t = 0; t < blocks.length; t++) {
+    if ((blocks[t] ?? []).some((i) => itemSig(i) === sig)) return t;
+  }
+  return 0;
+}
+
 type RowMeta = { row: BundleItem; introducedAt: number; idx: number };
 
 function rowsForTier(blocks: BundleItem[][], tierIdx: number): RowMeta[] {
@@ -127,8 +139,28 @@ function rowsForTier(blocks: BundleItem[][], tierIdx: number): RowMeta[] {
   return out;
 }
 
-function lineKey(r: RowMeta) {
+function rowsForTierCumulative(blocks: BundleItem[][], tierIdx: number): RowMeta[] {
+  const list = blocks[tierIdx] ?? [];
+  return list.map((row, idx) => ({
+    row,
+    introducedAt: firstTierIndexForItem(blocks, row),
+    idx,
+  }));
+}
+
+function lineKey(r: RowMeta, tierUiIdx: number, cumulative: boolean) {
+  if (cumulative) {
+    return `cum-${tierUiIdx}-${r.idx}-${itemSig(r.row)}`;
+  }
   return `${r.introducedAt}-${r.idx}-${r.row.description}-${r.row.unit_cost}-${r.row.qty}`;
+}
+
+function lastNonEmptyTierIndex(blocks: BundleItem[][]): number {
+  let last = 0;
+  blocks.forEach((b, i) => {
+    if (b.length > 0) last = i;
+  });
+  return last;
 }
 
 export type FocusedAdditionCardProps = {
@@ -153,7 +185,8 @@ export default function FocusedAdditionCard({
   const tiersDef = useMemo(() => effectiveTiersDef(bundle), [bundle]);
   const five = isBundleTiers5(tiersDef);
   const blocks = useMemo(() => tierBlocksList(tiersDef), [tiersDef]);
-  const maxTierIdx = Math.max(0, blocks.filter((b) => b.length > 0).length - 1);
+  const cumulativeFive = Boolean(bundle.tiersCumulative && five);
+  const maxTierIdx = lastNonEmptyTierIndex(blocks);
   const effectiveMax = blocks.every((b) => b.length === 0) ? 0 : maxTierIdx;
 
   const [tierIdx, setTierIdx] = useState(0);
@@ -163,18 +196,32 @@ export default function FocusedAdditionCard({
   }, [bundle.bundle_code, five, effectiveMax]);
 
   const effectiveTier = Math.min(tierIdx, effectiveMax);
-  const rows = useMemo(() => rowsForTier(blocks, effectiveTier), [blocks, effectiveTier]);
-  const tierTotals = useMemo(() => cumulativeTotals(blocks), [blocks]);
+  const rows = useMemo(() => {
+    if (cumulativeFive) return rowsForTierCumulative(blocks, effectiveTier);
+    return rowsForTier(blocks, effectiveTier);
+  }, [cumulativeFive, blocks, effectiveTier]);
+  const tierTotals = useMemo(() => {
+    if (cumulativeFive && isBundleTiers5(tiersDef)) {
+      return [
+        tiersDef.essential.total,
+        tiersDef.enhanced.total,
+        tiersDef.complete.total,
+        tiersDef.full.total,
+        tiersDef.ultimate.total,
+      ];
+    }
+    return cumulativeTotals(blocks);
+  }, [cumulativeFive, tiersDef, blocks]);
 
   const [checked, setChecked] = useState<Set<string>>(new Set());
   useEffect(() => {
     const next = new Set<string>();
     for (const r of rows) {
-      const k = lineKey(r);
+      const k = lineKey(r, effectiveTier, cumulativeFive);
       if (!singletonInClaim(r.row.description, existingItems)) next.add(k);
     }
     setChecked(next);
-  }, [bundle.bundle_code, effectiveTier, rows, existingItems]);
+  }, [bundle.bundle_code, effectiveTier, rows, existingItems, cumulativeFive]);
 
   const [showCustom, setShowCustom] = useState(false);
   const [cDesc, setCDesc] = useState("");
@@ -191,14 +238,14 @@ export default function FocusedAdditionCard({
   const checkedTotal = useMemo(() => {
     let s = 0;
     for (const r of rows) {
-      if (checked.has(lineKey(r))) s += lineTotal(r.row);
+      if (checked.has(lineKey(r, effectiveTier, cumulativeFive))) s += lineTotal(r.row);
     }
     return Math.round(s * 100) / 100;
-  }, [rows, checked]);
+  }, [rows, checked, effectiveTier, cumulativeFive]);
 
   const selectedCount = useMemo(
-    () => rows.filter((r) => checked.has(lineKey(r))).length,
-    [rows, checked]
+    () => rows.filter((r) => checked.has(lineKey(r, effectiveTier, cumulativeFive))).length,
+    [rows, checked, effectiveTier, cumulativeFive]
   );
 
   const toggle = useCallback((k: string) => {
@@ -214,7 +261,7 @@ export default function FocusedAdditionCard({
     if (disabled || busy || added) return;
     const toAdd: ClaimItem[] = [];
     for (const r of rows) {
-      if (!checked.has(lineKey(r))) continue;
+      if (!checked.has(lineKey(r, effectiveTier, cumulativeFive))) continue;
       const bi = r.row;
       toAdd.push({
         room: roomName,
@@ -238,7 +285,7 @@ export default function FocusedAdditionCard({
     } finally {
       setBusy(false);
     }
-  }, [disabled, busy, added, rows, checked, roomName, onAdd]);
+  }, [disabled, busy, added, rows, checked, roomName, onAdd, effectiveTier, cumulativeFive]);
 
   const addCustom = useCallback(async () => {
     if (disabled || busy) return;
@@ -332,7 +379,7 @@ export default function FocusedAdditionCard({
 
       <ul className="mt-5 space-y-2">
         {rows.map((r) => {
-          const k = lineKey(r);
+          const k = lineKey(r, effectiveTier, cumulativeFive);
           const isNew = r.introducedAt === effectiveTier && effectiveTier > 0;
           const conflict = singletonInClaim(r.row.description, existingItems);
           const row = r.row;
