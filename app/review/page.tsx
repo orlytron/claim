@@ -72,9 +72,6 @@ function SimpleRoomCard({
     >
       <div className="flex items-start justify-between gap-3">
         <h3 className="text-lg font-bold text-gray-900">{label}</h3>
-        <span className="shrink-0 text-lg leading-none text-[#2563EB]" title="Edit target in room" aria-hidden>
-          ✏️
-        </span>
       </div>
       <p className="mt-2 text-base font-semibold tabular-nums text-gray-900">
         {formatCurrency(current)}{" "}
