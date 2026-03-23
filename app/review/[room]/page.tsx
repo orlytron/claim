@@ -2,11 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
-import AniGuide from "../../components/AniGuide";
+import { useParams, useRouter } from "next/navigation";
 import FocusedAdditionCard from "../../components/FocusedAdditionCard";
 import SuggestionConfirmModal from "../../components/SuggestionConfirmModal";
-import SpeechBubble from "../../components/SpeechBubble";
 import { dispatchUpgradeReward } from "../../components/UpgradeRewardToast";
 import type { Bundle } from "../../lib/bundles-data";
 import {
@@ -19,7 +17,6 @@ import { CLAIM_GOAL_DEFAULT, DEFAULT_ROOM_TARGETS } from "../../lib/room-targets
 import { readRoomGoal, writeRoomGoal } from "../../lib/room-goals";
 import { loadSession, saveSession, SessionData } from "../../lib/session";
 import { supabase } from "../../lib/supabase";
-import { computeMiscSegments, miscLineTotal, type MiscLine } from "../../lib/misc-items-slider";
 import { displayAgeYears, ORIGINAL_CLAIM_ITEMS } from "../../lib/original-claim-data";
 import { ClaimItem } from "../../lib/types";
 import { useClaimMode } from "../../lib/useClaimMode";
@@ -89,7 +86,7 @@ function writeLocked(keys: string[]) {
   localStorage.setItem(LS_LOCKED, JSON.stringify(keys));
 }
 
-/** Lines shown in the upgrade table + guided walkthrough (excludes art / low-value decor). */
+/** Lines that can have upgrade-cache lookups (excludes art / low-value decor). */
 function isUpgradeCandidate(item: ClaimItem): boolean {
   const desc = item.description.toLowerCase();
   const brand = (item.brand || "").toLowerCase();
@@ -309,29 +306,10 @@ function SourceTag({ source }: { source?: ClaimItem["source"] }) {
   return null;
 }
 
-function CountUpMoney({ value, className = "" }: { value: number; className?: string }) {
-  const [v, setV] = useState(0);
-  useEffect(() => {
-    const start = performance.now();
-    const dur = 900;
-    function tick(now: number) {
-      const t = Math.min(1, (now - start) / dur);
-      const ease = 1 - (1 - t) ** 2;
-      setV(Math.round(value * ease));
-      if (t < 1) requestAnimationFrame(tick);
-    }
-    const id = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(id);
-  }, [value]);
-  return <span className={className}>{formatCurrency(v)}</span>;
-}
-
 export default function RoomReviewPage() {
   const params = useParams<{ room: string }>();
   const roomSlug = params.room;
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const guided = searchParams.get("guided") === "true";
   const { sessionId, hydrated } = useClaimMode();
 
   const [session, setSession] = useState<SessionData | null>(null);
@@ -353,10 +331,6 @@ export default function RoomReviewPage() {
   const [editTarget, setEditTarget] = useState(false);
   const [targetInput, setTargetInput] = useState("");
   const [openUpgradeKey, setOpenUpgradeKey] = useState<string | null>(null);
-  const [householdSectionOpen, setHouseholdSectionOpen] = useState(false);
-  const [householdPendingMult, setHouseholdPendingMult] = useState<number | null>(null);
-  const [householdCustomOpen, setHouseholdCustomOpen] = useState(false);
-  const [householdCustomMult, setHouseholdCustomMult] = useState(6);
   const [requestText, setRequestText] = useState("");
   const [requestStatus, setRequestStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [qtyFlashKey, setQtyFlashKey] = useState<string | null>(null);
@@ -373,56 +347,6 @@ export default function RoomReviewPage() {
   const undoFutureRef = useRef<ClaimItem[][]>([]);
   const [undoAvail, setUndoAvail] = useState(false);
   const [redoAvail, setRedoAvail] = useState(false);
-
-  const [guidedEnter, setGuidedEnter] = useState(false);
-  const [guidedLoadBubble, setGuidedLoadBubble] = useState(false);
-  const [guidedLoadVisible, setGuidedLoadVisible] = useState(false);
-  const [guidedLoadDismissed, setGuidedLoadDismissed] = useState(false);
-  const [guidedUpgradeDelta, setGuidedUpgradeDelta] = useState<number | null>(null);
-  const [guidedUpgradeFromTo, setGuidedUpgradeFromTo] = useState<{ from: number; to: number } | null>(null);
-  const [showGuidedComplete, setShowGuidedComplete] = useState(false);
-  const firstUpgradeGuidedRef = useRef(false);
-  const baselineOriginalRoomRef = useRef<number | null>(null);
-  const guidedCompleteLatchRef = useRef(false);
-
-  useEffect(() => {
-    if (!guided) return;
-    requestAnimationFrame(() => setGuidedEnter(true));
-  }, [guided]);
-
-  useEffect(() => {
-    if (!guided || guidedLoadBubble || guidedLoadDismissed) return;
-    const t = setTimeout(() => {
-      setGuidedLoadBubble(true);
-      setGuidedLoadVisible(true);
-    }, 500);
-    return () => clearTimeout(t);
-  }, [guided, guidedLoadBubble, guidedLoadDismissed]);
-
-  useEffect(() => {
-    if (!guided || baselineOriginalRoomRef.current !== null || items.length === 0) return;
-    const candidates = items.filter(isUpgradeCandidate);
-    const o =
-      candidates.length === 0
-        ? 0
-        : candidates.reduce((s, i) => {
-            const unit = i.pre_upgrade_item ? i.pre_upgrade_item.unit_cost : i.unit_cost;
-            return s + i.qty * unit;
-          }, 0);
-    baselineOriginalRoomRef.current = o;
-  }, [guided, items]);
-
-  useEffect(() => {
-    firstUpgradeGuidedRef.current = false;
-    baselineOriginalRoomRef.current = null;
-    guidedCompleteLatchRef.current = false;
-    setShowGuidedComplete(false);
-    setGuidedLoadBubble(false);
-    setGuidedLoadVisible(false);
-    setGuidedLoadDismissed(false);
-    setGuidedUpgradeDelta(null);
-    setGuidedUpgradeFromTo(null);
-  }, [roomSlug]);
 
   useEffect(() => {
     undoHistoryRef.current = [];
@@ -445,13 +369,6 @@ export default function RoomReviewPage() {
   );
 
   useEffect(() => {
-    setHouseholdPendingMult(null);
-    setHouseholdCustomOpen(false);
-    setHouseholdSectionOpen(false);
-    setHouseholdCustomMult(6);
-  }, [roomName]);
-
-  useEffect(() => {
     setLockedKeys(readLocked());
   }, []);
 
@@ -464,10 +381,6 @@ export default function RoomReviewPage() {
     if (!roomSlug) return;
     const key = `suggestions_shown_${roomSlug}`;
     const shown = typeof window !== "undefined" ? localStorage.getItem(key) : null;
-    if (guided) {
-      setSuggestionsModalOpen(false);
-      return;
-    }
     if (!roomName) {
       setSuggestionsModalOpen(false);
       return;
@@ -478,7 +391,7 @@ export default function RoomReviewPage() {
       return;
     }
     setSuggestionsModalOpen(shown == null || reopenSuggestions);
-  }, [roomSlug, roomName, guided, reopenSuggestions]);
+  }, [roomSlug, roomName, reopenSuggestions]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -527,7 +440,7 @@ export default function RoomReviewPage() {
     setRoomTarget(roundRoomGoalSlider(storedGoal ?? def));
 
     const descriptions = roomItems
-      .filter((i) => i.unit_cost >= 500 && isUpgradeCandidate(i))
+      .filter((i) => isUpgradeCandidate(i))
       .map((i) => i.pre_upgrade_item?.description ?? i.description);
     const params = new URLSearchParams();
     params.set("room", name);
@@ -542,61 +455,22 @@ export default function RoomReviewPage() {
     setIsLoading(false);
   }
 
-  /** Tier 1: major items ($500+) — full row. Tier 2: misc — grouped section. */
-  const tier1Sorted = useMemo(
-    () => [...items].filter((i) => i.unit_cost >= 500).sort((a, b) => b.unit_cost - a.unit_cost),
-    [items]
-  );
-  const tier2Sorted = useMemo(
-    () => [...items].filter((i) => i.unit_cost < 500).sort((a, b) => b.unit_cost - a.unit_cost),
-    [items]
-  );
-  const miscOriginalTotal = useMemo(
-    () => tier2Sorted.reduce((s, i) => s + i.qty * i.unit_cost, 0),
-    [tier2Sorted]
-  );
-
-  const householdMultDelta = useCallback(
-    (m: number) =>
-      tier2Sorted.reduce((s, item) => {
-        const line: MiscLine = {
-          description: item.description,
-          qty: item.qty,
-          unit_cost: item.unit_cost,
-        };
-        return s + (miscLineTotal(computeMiscSegments(line, m)) - item.qty * item.unit_cost);
-      }, 0),
-    [tier2Sorted]
-  );
-
-  const householdButtonDeltas = useMemo(
-    () => ({
-      same: householdMultDelta(1),
-      x2: householdMultDelta(2),
-      x3: householdMultDelta(3),
-      custom: householdMultDelta(householdCustomMult),
-    }),
-    [householdMultDelta, householdCustomMult]
-  );
-
-  const householdPreviewLines = useMemo(() => {
-    if (householdPendingMult == null) return [];
-    const m = householdPendingMult;
-    return tier2Sorted.map((item) => {
-      const line: MiscLine = {
-        description: item.description,
-        qty: item.qty,
-        unit_cost: item.unit_cost,
-      };
-      const segs = computeMiscSegments(line, m);
-      const afterTotal = miscLineTotal(segs);
-      const before = item.qty * item.unit_cost;
-      return { item, segs, before, after: afterTotal, delta: afterTotal - before };
-    });
-  }, [tier2Sorted, householdPendingMult]);
-
-  const householdPreviewTotalDelta =
-    householdPendingMult == null ? 0 : householdMultDelta(householdPendingMult);
+  /** Dedupe by description + room; keep higher unit_cost; sort by price desc (display list). */
+  const displayItems = useMemo(() => {
+    const uniqueItems = items.reduce((acc, item) => {
+      const key = `${item.description.toLowerCase().trim()}-${item.room}`;
+      if (!acc.has(key)) {
+        acc.set(key, item);
+      } else {
+        const existing = acc.get(key)!;
+        if (item.unit_cost > existing.unit_cost) {
+          acc.set(key, item);
+        }
+      }
+      return acc;
+    }, new Map<string, ClaimItem>());
+    return Array.from(uniqueItems.values()).sort((a, b) => b.unit_cost - a.unit_cost);
+  }, [items]);
 
   const upgradeCandidates = useMemo(() => items.filter(isUpgradeCandidate), [items]);
 
@@ -635,12 +509,6 @@ export default function RoomReviewPage() {
 
   const progressPct = roomTarget > 0 ? Math.min(100, Math.round((roomTotal / roomTarget) * 100)) : 0;
   const gapRemaining = Math.max(0, roomTarget - roomTotal);
-
-  useEffect(() => {
-    if (!guided || guidedCompleteLatchRef.current || progressPct < 100) return;
-    guidedCompleteLatchRef.current = true;
-    setShowGuidedComplete(true);
-  }, [guided, progressPct]);
 
   const roomNavIndex = useMemo(() => ROOM_ORDER.findIndex((r) => r.slug === roomSlug), [roomSlug]);
   const navPrev = roomNavIndex > 0 ? ROOM_ORDER[roomNavIndex - 1]! : null;
@@ -832,11 +700,6 @@ export default function RoomReviewPage() {
     const afterClaim = [...rest, ...nextItems];
     await saveRoomItems(nextItems);
     fireUpgradeReward(beforeClaim, afterClaim, lineDelta);
-    if (guided && !firstUpgradeGuidedRef.current) {
-      firstUpgradeGuidedRef.current = true;
-      setGuidedUpgradeDelta(lineDelta);
-      setGuidedUpgradeFromTo({ from: item.unit_cost, to: option.price });
-    }
     try {
       await supabase.from("bundle_decisions").upsert(
         {
@@ -996,49 +859,6 @@ export default function RoomReviewPage() {
     setToast(`✓ Added ${formatCurrency(delta)}`);
   }
 
-  async function applyHouseholdMultiplier(m: number) {
-    if (!session?.claim_items || tier2Sorted.length === 0) return;
-    pushUndoSnapshot();
-    const beforeClaim = session.claim_items;
-    const nextRoom: ClaimItem[] = [];
-    for (const ci of items) {
-      if (ci.unit_cost >= 500) {
-        nextRoom.push(ci);
-        continue;
-      }
-      const line: MiscLine = {
-        description: ci.description,
-        qty: ci.qty,
-        unit_cost: ci.unit_cost,
-      };
-      const segs = computeMiscSegments(line, m);
-      const [first, ...rest] = segs;
-      if (!first) {
-        nextRoom.push(ci);
-        continue;
-      }
-      nextRoom.push({
-        ...ci,
-        qty: first.qty,
-        unit_cost: first.unit_cost,
-      });
-      for (const seg of rest) {
-        nextRoom.push({
-          ...ci,
-          qty: seg.qty,
-          unit_cost: seg.unit_cost,
-        });
-      }
-    }
-    const afterClaim = [...beforeClaim.filter((i) => i.room !== roomName), ...nextRoom];
-    await persistRoomItemsSnapshot(nextRoom);
-    const bt = beforeClaim.reduce((s, i) => s + i.qty * i.unit_cost, 0);
-    const at = afterClaim.reduce((s, i) => s + i.qty * i.unit_cost, 0);
-    fireUpgradeReward(beforeClaim, afterClaim, at - bt);
-    setHouseholdPendingMult(null);
-    setToast("Household items updated");
-  }
-
   async function sendSpecificItemRequest() {
     if (!requestText.trim() || !roomName) return;
     setRequestStatus("loading");
@@ -1079,7 +899,6 @@ export default function RoomReviewPage() {
   const showRoomChrome = !!roomName && !isLoading;
 
   const suggestionsModalVisible =
-    !guided &&
     suggestionsModalOpen &&
     !!roomName &&
     !isLoading &&
@@ -1094,6 +913,7 @@ export default function RoomReviewPage() {
           roomSlug={roomSlug}
           roomName={roomName}
           claimItems={session.claim_items ?? []}
+          sessionItems={displayItems}
           list={roomSuggestionList}
           onApply={handleApplySuggestionsFromBanner}
           onDismiss={() => {
@@ -1131,7 +951,7 @@ export default function RoomReviewPage() {
             <div className="h-24 rounded-lg bg-gray-100" />
           </div>
         </div>
-      ) : !roomName || (!items.length && roomSuggestionList.length === 0) ? (
+      ) : !roomName || (!displayItems.length && roomSuggestionList.length === 0) ? (
         <div className="flex flex-1 flex-col items-center justify-center p-8 text-center text-base text-[#6B7280]">
           No items for this room.
           <Link href="/review" className="mt-4 font-medium text-[#2563EB] hover:underline">
@@ -1158,8 +978,7 @@ export default function RoomReviewPage() {
                     <button
                       type="button"
                       onClick={() => {
-                        const q = guided ? "?guided=true" : "";
-                        router.push(`/review/${navPrev.slug}${q}`);
+                        router.push(`/review/${navPrev.slug}`);
                       }}
                       className="min-h-[48px] inline-flex items-center rounded-lg px-2 text-sm font-medium text-[#2563EB] hover:underline md:text-base"
                     >
@@ -1178,8 +997,7 @@ export default function RoomReviewPage() {
                     <button
                       type="button"
                       onClick={() => {
-                        const q = guided ? "?guided=true" : "";
-                        router.push(`/review/${navNext.slug}${q}`);
+                        router.push(`/review/${navNext.slug}`);
                       }}
                       className="min-h-[48px] inline-flex items-center rounded-lg px-2 text-sm font-medium text-[#2563EB] hover:underline md:text-base"
                     >
@@ -1229,7 +1047,7 @@ export default function RoomReviewPage() {
                 >
                   Reset room
                 </button>
-                {roomSuggestionList.length > 0 && !guided ? (
+                {roomSuggestionList.length > 0 ? (
                   <>
                     <span className="text-gray-300">·</span>
                     <button
@@ -1292,27 +1110,28 @@ export default function RoomReviewPage() {
             <section className="rounded-2xl border border-gray-100 bg-white shadow-sm transition-all duration-300">
               <div className="border-b border-gray-100 px-5 py-5 md:px-6">
                 <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">
-                  Upgrade existing items
+                  What&apos;s in this room
                 </h2>
                 <p className="mt-1 text-sm text-[#6B7280]">
-                  Items $500+ with cached upgrade options. Use Upgrade to see replacements.
+                  All lines in this room, highest unit price first. Upgrade when cached options exist (under $100 with no
+                  brand: no upgrade button).
                 </p>
               </div>
 
-              {tier1Sorted.length === 0 ? (
-                <p className="px-5 py-8 text-sm text-[#6B7280] md:px-6">No major items ($500+) in this room.</p>
+              {displayItems.length === 0 ? (
+                <p className="px-5 py-8 text-sm text-[#6B7280] md:px-6">No items in this room yet.</p>
               ) : (
                 <div>
-                  {tier1Sorted.map((item, idx) => {
+                  {displayItems.map((item, idx) => {
                     const lk = lockKeyForItem(item);
                     const locked = lockedKeys.includes(lk);
                     const rowKey = lk;
-                    const showUpgradeFlow = isUpgradeCandidate(item) && item.unit_cost >= 500;
                     const cacheHas =
-                      showUpgradeFlow &&
-                      (cachedDescs.has(norm(item.description)) ||
-                        cachedDescs.has(norm(item.pre_upgrade_item?.description ?? "")));
-                    const showAccordion = showUpgradeFlow && cacheHas;
+                      cachedDescs.has(norm(item.description)) ||
+                      cachedDescs.has(norm(item.pre_upgrade_item?.description ?? ""));
+                    const allowUpgradeUi =
+                      cacheHas && (item.unit_cost >= 100 || !!(item.brand || "").trim());
+                    const showAccordion = allowUpgradeUi;
                     const upgraded = item.source === "upgrade" && !!item.pre_upgrade_item;
                     const pre = item.pre_upgrade_item;
                     const isOpen = openUpgradeKey === rowKey;
@@ -1565,7 +1384,7 @@ export default function RoomReviewPage() {
                                 )}
                               </>
                             ) : null}
-                            {item.unit_cost >= 500 ? <LockButton locked={locked} onToggle={() => toggleLock(lk)} /> : null}
+                            {allowUpgradeUi ? <LockButton locked={locked} onToggle={() => toggleLock(lk)} /> : null}
                           </div>
                         </div>
 
@@ -1627,6 +1446,36 @@ export default function RoomReviewPage() {
                   ))
                 )}
               </div>
+
+              {consumableBundles.length > 0 ? (
+                <div className="mt-10 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+                  <p className="text-xs font-bold uppercase tracking-wide text-gray-900">Restock & consumable packs</p>
+                  <p className="mt-1 text-sm text-[#6B7280]">One-tap add common replenishment lines for this room.</p>
+                  <div className="mt-4 space-y-3">
+                    {consumableBundles.map((b) => (
+                      <div
+                        key={b.bundle_code}
+                        className="flex flex-col gap-2 rounded-xl border border-gray-100 bg-gray-50/80 p-4 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div className="min-w-0">
+                          <p className="font-semibold text-gray-900">{b.name}</p>
+                          <p className="text-xs text-[#6B7280]">
+                            {b.items.length} lines · {formatCurrency(b.total_value)}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={isSaving}
+                          onClick={() => void handleConsumableBundleAdd(b)}
+                          className="min-h-[48px] shrink-0 rounded-xl bg-[#16A34A] px-4 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-40"
+                        >
+                          Add pack
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
 
               {isAdminUser && adminOnlyBundles.length > 0 ? (
                 <div className="mt-10 rounded-2xl border border-dashed border-purple-200 bg-purple-50/40 p-5">
@@ -1694,251 +1543,6 @@ export default function RoomReviewPage() {
               </div>
             </section>
 
-            <section className="mt-12 rounded-2xl border border-gray-100 bg-white shadow-sm">
-              {tier2Sorted.length === 0 ? (
-                <div className="px-5 py-6 text-sm text-[#6B7280] md:px-6">No household items under $500 in this room.</div>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setHouseholdSectionOpen((o) => !o)}
-                    className="flex w-full items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 text-left md:px-6"
-                  >
-                    <span className="text-xs font-bold uppercase tracking-wider text-gray-900">
-                      HOUSEHOLD ITEMS ({tier2Sorted.length} items · {formatCurrency(miscOriginalTotal)})
-                      <span className="ml-2 tabular-nums text-gray-500">
-                        {householdSectionOpen ? "▼" : "▶"}
-                      </span>
-                    </span>
-                    <span className="text-sm tabular-nums text-[#6B7280]">{formatCurrency(miscOriginalTotal)}</span>
-                  </button>
-                  {householdSectionOpen ? (
-                    <div className="space-y-6 px-5 py-6 md:px-6">
-                      <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
-                        {tier2Sorted.map((item, idx) => (
-                          <li
-                            key={`hh-${generateItemId(item)}-${idx}`}
-                            className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-sm"
-                          >
-                            <span className="min-w-0 flex-1 font-medium text-gray-900 [overflow-wrap:anywhere]">
-                              {item.description}
-                            </span>
-                            <span className="shrink-0 tabular-nums text-[#6B7280]">
-                              {formatCurrency(item.unit_cost)} × {item.qty} ={" "}
-                              {formatCurrency(item.unit_cost * item.qty)}
-                            </span>
-                            <button
-                              type="button"
-                              disabled={isSaving}
-                              onClick={() => void handleRemoveItemRow(item)}
-                              className="shrink-0 rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-600 hover:border-red-400 hover:text-red-600 disabled:opacity-40"
-                              aria-label="Remove line"
-                            >
-                              ×
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-
-                      <div>
-                        <p className="text-sm font-semibold text-gray-800">How many of each did you have?</p>
-                        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setHouseholdCustomOpen(false);
-                              setHouseholdPendingMult(1);
-                            }}
-                            className={`min-h-[48px] rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
-                              householdPendingMult === 1 && !householdCustomOpen
-                                ? "border-[#2563EB] bg-blue-50"
-                                : "border-gray-200 bg-white"
-                            }`}
-                          >
-                            Same
-                            {householdPendingMult === 1 && !householdCustomOpen ? (
-                              <span className="mt-1 block text-xs font-normal text-[#16A34A]">✓</span>
-                            ) : (
-                              <span className="mt-1 block text-xs font-normal text-[#6B7280] tabular-nums">
-                                {formatCurrency(householdButtonDeltas.same)}
-                              </span>
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setHouseholdCustomOpen(false);
-                              setHouseholdPendingMult(2);
-                            }}
-                            className={`min-h-[48px] rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
-                              householdPendingMult === 2 && !householdCustomOpen
-                                ? "border-[#2563EB] bg-blue-50"
-                                : "border-gray-200 bg-white"
-                            }`}
-                          >
-                            ×2
-                            <span className="mt-1 block text-xs font-normal text-[#16A34A] tabular-nums">
-                              +{formatCurrency(miscOriginalTotal)}
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setHouseholdCustomOpen(false);
-                              setHouseholdPendingMult(3);
-                            }}
-                            className={`min-h-[48px] rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
-                              householdPendingMult === 3 && !householdCustomOpen
-                                ? "border-[#2563EB] bg-blue-50"
-                                : "border-gray-200 bg-white"
-                            }`}
-                          >
-                            ×3
-                            <span className="mt-1 block text-xs font-normal text-[#16A34A] tabular-nums">
-                              +{formatCurrency(miscOriginalTotal * 2)}
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setHouseholdCustomOpen(true);
-                              const m = householdCustomMult < 4 ? 4 : householdCustomMult;
-                              setHouseholdCustomMult(m);
-                              setHouseholdPendingMult(m);
-                            }}
-                            className={`min-h-[48px] rounded-xl border px-3 py-3 text-left text-sm font-semibold ${
-                              householdCustomOpen ? "border-[#2563EB] bg-blue-50" : "border-gray-200 bg-white"
-                            }`}
-                          >
-                            More ▼
-                            <span className="mt-1 block text-xs font-normal text-[#16A34A] tabular-nums">
-                              +
-                              {formatCurrency(
-                                Math.max(0, householdButtonDeltas.custom - householdButtonDeltas.same)
-                              )}
-                            </span>
-                          </button>
-                        </div>
-                        {householdCustomOpen ? (
-                          <div className="mt-4 rounded-xl border border-gray-100 bg-gray-50 p-4">
-                            <label className="text-xs font-medium text-gray-700">Multiplier 3× – 10×</label>
-                            <input
-                              type="range"
-                              min={3}
-                              max={10}
-                              step={1}
-                              value={householdCustomMult}
-                              onChange={(e) => {
-                                const v = Number(e.target.value);
-                                setHouseholdCustomMult(v);
-                                setHouseholdPendingMult(v);
-                              }}
-                              className="mt-2 h-2 w-full accent-[#2563EB]"
-                            />
-                            <p className="mt-2 text-sm tabular-nums text-gray-800">
-                              {householdCustomMult}× · add{" "}
-                              <span className="font-semibold text-[#16A34A]">
-                                +
-                                {formatCurrency(
-                                  Math.max(0, householdMultDelta(householdCustomMult) - householdButtonDeltas.same)
-                                )}
-                              </span>
-                            </p>
-                          </div>
-                        ) : null}
-                      </div>
-
-                      {householdPendingMult != null ? (
-                        <div className="rounded-xl border border-gray-200 bg-white p-4 text-sm">
-                          {householdPreviewTotalDelta <= 0.005 ? (
-                            <p className="text-[#6B7280]">No dollar change at this level.</p>
-                          ) : (
-                            <>
-                              <p className="font-medium text-gray-900">
-                                Add{" "}
-                                <span className="font-semibold text-[#16A34A] tabular-nums">
-                                  {formatCurrency(householdPreviewTotalDelta)}
-                                </span>{" "}
-                                to your claim for more household items?
-                              </p>
-                              <p className="mt-2 text-xs text-[#6B7280]">
-                                Updates {tier2Sorted.length} lines (ceiling rules may adjust individual rows).
-                              </p>
-                              <ul className="mt-3 max-h-40 space-y-1 overflow-y-auto text-xs text-[#6B7280]">
-                                {householdPreviewLines
-                                  .filter((l) => Math.abs(l.delta) > 0.01)
-                                  .slice(0, 16)
-                                  .map((l, j) => (
-                                    <li key={`${l.item.description}-${j}`} className="[overflow-wrap:anywhere]">
-                                      <span className="font-medium text-gray-800">{l.item.description}</span>{" "}
-                                      {formatCurrency(l.before)} → {formatCurrency(l.after)} (
-                                      <span className="text-[#16A34A]">+{formatCurrency(l.delta)}</span>)
-                                    </li>
-                                  ))}
-                              </ul>
-                              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                                <button
-                                  type="button"
-                                  disabled={isSaving}
-                                  onClick={() =>
-                                    householdPendingMult != null &&
-                                    void applyHouseholdMultiplier(householdPendingMult)
-                                  }
-                                  className="min-h-[48px] flex-1 rounded-xl bg-[#2563EB] py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-                                >
-                                  Confirm +{formatCurrency(householdPreviewTotalDelta)}
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={isSaving}
-                                  onClick={() => setHouseholdPendingMult(null)}
-                                  className="min-h-[48px] flex-1 rounded-xl border border-gray-300 bg-white py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      ) : null}
-
-                      {consumableBundles.length > 0 ? (
-                        <div className="mt-8 border-t border-gray-100 pt-6">
-                          <p className="text-xs font-bold uppercase tracking-wide text-gray-900">
-                            Restock & consumable packs
-                          </p>
-                          <p className="mt-1 text-sm text-[#6B7280]">
-                            One-tap add common replenishment lines for this room.
-                          </p>
-                          <div className="mt-4 space-y-3">
-                            {consumableBundles.map((b) => (
-                              <div
-                                key={b.bundle_code}
-                                className="flex flex-col gap-2 rounded-xl border border-gray-100 bg-gray-50/80 p-4 sm:flex-row sm:items-center sm:justify-between"
-                              >
-                                <div className="min-w-0">
-                                  <p className="font-semibold text-gray-900">{b.name}</p>
-                                  <p className="text-xs text-[#6B7280]">{b.items.length} lines · {formatCurrency(b.total_value)}</p>
-                                </div>
-                                <button
-                                  type="button"
-                                  disabled={isSaving}
-                                  onClick={() => void handleConsumableBundleAdd(b)}
-                                  className="min-h-[48px] shrink-0 rounded-xl bg-[#16A34A] px-4 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-40"
-                                >
-                                  Add pack
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </>
-              )}
-            </section>
-
             <p className="mt-10 text-center text-sm text-[#6B7280]">
               Art and decorative items are managed separately in the Art Collection section.
             </p>
@@ -1999,8 +1603,7 @@ export default function RoomReviewPage() {
               <button
                 type="button"
                 onClick={() => {
-                  const q = guided ? "?guided=true" : "";
-                  if (navPrev) router.push(`/review/${navPrev.slug}${q}`);
+                  if (navPrev) router.push(`/review/${navPrev.slug}`);
                   else router.push("/review");
                 }}
                 className="inline-flex min-h-[48px] items-center rounded-lg border border-gray-200 px-3 text-xs font-medium text-gray-800 transition-colors hover:bg-gray-50 md:text-sm"
@@ -2011,8 +1614,7 @@ export default function RoomReviewPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    const q = guided ? "?guided=true" : "";
-                    router.push(`/review/${navNext.slug}${q}`);
+                    router.push(`/review/${navNext.slug}`);
                   }}
                   className="inline-flex min-h-[48px] items-center rounded-lg bg-[#2563EB] px-4 text-xs font-bold text-white transition-colors hover:bg-blue-700 md:text-sm"
                 >
@@ -2059,138 +1661,6 @@ export default function RoomReviewPage() {
           </div>
         </div>
       ) : null}
-
-      {/* Guided tour — character + bubbles */}
-      {guided && (
-        <>
-          <div
-            className={`fixed bottom-48 right-4 z-[48] origin-bottom-right transition-transform duration-500 ease-out md:bottom-40 ${
-              guidedEnter ? "translate-x-0" : "translate-x-[130%]"
-            }`}
-          >
-            <div className="scale-100 drop-shadow-md sm:scale-[1.25]">
-              <AniGuide
-                expression={showGuidedComplete ? "happy" : guidedUpgradeDelta != null ? "excited" : "excited"}
-                size={80}
-              />
-            </div>
-          </div>
-
-          {guidedLoadBubble && !guidedLoadDismissed && (
-            <div className="fixed bottom-48 right-4 z-[49] flex w-[min(calc(100vw-2rem),320px)] flex-col items-stretch gap-3 sm:bottom-36 sm:right-[5.5rem] sm:max-w-[300px]">
-              <SpeechBubble
-                direction="right"
-                visible={guidedLoadVisible}
-                text={
-                  upgradeCandidates.length > 0
-                    ? `This is the ${roomName}!\nYou have ${upgradeCandidates.length} upgradeable ${upgradeCandidates.length === 1 ? "item" : "items"} worth ${formatCurrency(upgradeSubtotal)}.\nLet's see what we can upgrade! ✨`
-                    : `This is the ${roomName}!\nThere are no lines here that need the upgrade assistant right now — art and small decor belong in Art Collection.\nCheck suggested additions below if any! ✨`
-                }
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  setGuidedLoadDismissed(true);
-                  setGuidedLoadVisible(false);
-                }}
-                className="min-h-[48px] rounded-xl bg-[#2563EB] px-4 text-base font-bold text-white shadow-md transition hover:bg-blue-700"
-              >
-                OK →
-              </button>
-            </div>
-          )}
-
-          {guidedUpgradeDelta != null && guidedUpgradeFromTo && (
-            <div className="fixed bottom-48 right-4 z-[49] flex w-[min(calc(100vw-2rem),320px)] flex-col items-stretch gap-3 sm:bottom-36 sm:right-[5.5rem] sm:max-w-[300px]">
-              <SpeechBubble
-                direction="right"
-                visible
-                text={`Nice! You just upgraded from ${formatCurrency(guidedUpgradeFromTo.from)} → ${formatCurrency(guidedUpgradeFromTo.to)}.\nThat's added to your claim!`}
-              />
-              <p className="text-center text-3xl font-black text-green-600 tabular-nums drop-shadow-sm">
-                +<CountUpMoney value={guidedUpgradeDelta} />
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setGuidedUpgradeDelta(null);
-                  setGuidedUpgradeFromTo(null);
-                }}
-                className="min-h-[48px] rounded-xl bg-[#16A34A] px-4 text-base font-bold text-white shadow-md transition hover:bg-green-700"
-              >
-                Keep going →
-              </button>
-            </div>
-          )}
-
-          {showGuidedComplete && (
-            <div className="fixed bottom-48 right-4 z-[49] flex w-[min(calc(100vw-2rem),340px)] flex-col items-stretch gap-3 rounded-2xl border border-gray-200 bg-white/95 p-4 shadow-xl backdrop-blur-sm sm:bottom-32 sm:right-[5.5rem]">
-              {(() => {
-                const beforeGuide =
-                  baselineOriginalRoomRef.current ??
-                  items
-                    .filter(isUpgradeCandidate)
-                    .reduce((s, i) => {
-                      const u = i.pre_upgrade_item ? i.pre_upgrade_item.unit_cost : i.unit_cost;
-                      return s + i.qty * u;
-                    }, 0);
-                return (
-                  <>
-              <SpeechBubble
-                direction="right"
-                visible
-                text={`Room done! 🎉\n${roomName}: ${formatCurrency(beforeGuide)} → ${formatCurrency(roomTotal)}`}
-              />
-              {(() => {
-                const beforeR = beforeGuide;
-                const added = Math.max(0, roomTotal - beforeR);
-                const pct = beforeR > 0 ? Math.round(((roomTotal - beforeR) / beforeR) * 100) : 100;
-                return (
-                  <div className="rounded-xl border border-gray-100 bg-gray-50 p-3 text-base">
-                    <div className="flex justify-between tabular-nums">
-                      <span className="text-gray-600">Before</span>
-                      <span className="font-semibold">{formatCurrency(beforeR)}</span>
-                    </div>
-                    <div className="mt-1 flex justify-between tabular-nums">
-                      <span className="text-gray-600">After</span>
-                      <span className="font-semibold">{formatCurrency(roomTotal)}</span>
-                    </div>
-                    <div className="mt-2 flex justify-between font-bold text-green-600 tabular-nums">
-                      <span>Added</span>
-                      <span>
-                        +{formatCurrency(added)} ↑ {pct}%
-                      </span>
-                    </div>
-                  </div>
-                );
-              })()}
-              {navNext ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowGuidedComplete(false);
-                    router.push(`/review/${navNext.slug}?guided=true`);
-                  }}
-                  className="flex min-h-[48px] w-full items-center justify-center rounded-xl bg-[#2563EB] px-4 text-center text-base font-bold text-white"
-                >
-                  Next: {navNext.name} →
-                </button>
-              ) : (
-                <Link
-                  href="/review"
-                  onClick={() => setShowGuidedComplete(false)}
-                  className="flex min-h-[48px] items-center justify-center rounded-xl bg-gray-800 px-4 text-center text-base font-bold text-white"
-                >
-                  Back to dashboard →
-                </Link>
-              )}
-                  </>
-                );
-              })()}
-            </div>
-          )}
-        </>
-      )}
 
       {toast && (
         <div className="fixed left-1/2 top-20 z-40 max-w-[min(100vw-2rem,24rem)] -translate-x-1/2 rounded-xl bg-gray-900 px-5 py-3 text-center text-base text-white shadow-xl">

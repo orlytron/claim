@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useState } from "react";
 import type { SuggestedUpgrade } from "../lib/suggested-upgrades";
 import { formatSuggestedUpgradeLineWithClaim } from "../lib/suggested-upgrades";
 import {
   applySuggestionIndices,
+  getSuggestionDelta,
   suggestionCollapsedHiddenCount,
   suggestionCollapsedRowIndices,
-  suggestionDeltaForClaim,
   suggestionSelectedDeltaSum,
 } from "../lib/suggestion-apply-engine";
 import type { ClaimItem } from "../lib/types";
@@ -17,6 +17,7 @@ export type SuggestionConfirmBannerProps = {
   roomSlug: string;
   roomName: string;
   claimItems: ClaimItem[];
+  sessionItems: ClaimItem[];
   list: SuggestedUpgrade[];
   onApply: (nextClaim: ClaimItem[]) => Promise<void>;
   onSkip: () => void;
@@ -30,35 +31,35 @@ export default function SuggestionConfirmBanner({
   roomSlug,
   roomName,
   claimItems,
+  sessionItems,
   list,
   onApply,
   onSkip,
   disabled,
 }: SuggestionConfirmBannerProps) {
   const [expanded, setExpanded] = useState(false);
-  const [checked, setChecked] = useState<Set<number>>(new Set());
+  const [checked, setChecked] = useState<Set<number>>(() => new Set(list.map((_, i) => i)));
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setExpanded(false);
-    const all = new Set(list.map((_, i) => i));
-    setChecked(all);
+    setChecked(new Set(list.map((_, i) => i)));
   }, [roomSlug, list]);
 
   const collapsedIdx = useMemo(
-    () => suggestionCollapsedRowIndices(claimItems, roomName, list),
-    [claimItems, roomName, list]
+    () => suggestionCollapsedRowIndices(claimItems, roomName, list, sessionItems),
+    [claimItems, roomName, list, sessionItems]
   );
   const moreCount = useMemo(
-    () => suggestionCollapsedHiddenCount(claimItems, roomName, list),
-    [claimItems, roomName, list]
+    () => suggestionCollapsedHiddenCount(claimItems, roomName, list, sessionItems),
+    [claimItems, roomName, list, sessionItems]
   );
 
   const rowIndices = expanded ? list.map((_, i) => i) : collapsedIdx;
 
   const selectedTotalDelta = useMemo(
-    () => suggestionSelectedDeltaSum(claimItems, roomName, list, checked),
-    [claimItems, roomName, list, checked]
+    () => suggestionSelectedDeltaSum(claimItems, roomName, list, checked, sessionItems),
+    [claimItems, roomName, list, checked, sessionItems]
   );
 
   function toggle(i: number) {
@@ -87,13 +88,17 @@ export default function SuggestionConfirmBanner({
     <div className="relative z-20 w-full border-b border-amber-200 bg-gradient-to-b from-amber-50 to-amber-50/40 px-4 py-5 md:px-8">
       <div className="mx-auto max-w-[1100px] rounded-2xl border border-amber-200/80 bg-white/95 p-5 shadow-sm md:p-6">
         <p className="text-sm font-bold uppercase tracking-wide text-amber-900">💡 Suggested changes</p>
-        <p className="mt-2 text-sm text-gray-600">
-          Select what to apply. Nothing is added until you confirm.
+        <p className="mt-3 text-base font-semibold text-gray-900">
+          Adding these will increase your claim by{" "}
+          <span className="tabular-nums text-[#16A34A]">
+            {selectedTotalDelta >= 0 ? `+${formatCurrency(selectedTotalDelta)}` : formatCurrency(selectedTotalDelta)}
+          </span>
         </p>
+        <p className="mt-2 text-sm text-gray-600">Uncheck any row to exclude it. Nothing is added until you confirm.</p>
         <ul className="mt-4 space-y-2">
           {rowIndices.map((i) => {
             const line = formatSuggestedUpgradeLineWithClaim(claimItems, roomName, list[i]!);
-            const delta = suggestionDeltaForClaim(claimItems, roomName, list[i]!);
+            const delta = getSuggestionDelta(list[i]!, sessionItems);
             const deltaLabel =
               delta > 0 ? `+${formatCurrency(delta)}` : delta < 0 ? formatCurrency(delta) : formatCurrency(0);
             const deltaClass =
@@ -141,7 +146,7 @@ export default function SuggestionConfirmBanner({
             onClick={onSkip}
             className="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50"
           >
-            Skip — I&apos;ll do this manually
+            Skip for now
           </button>
         </div>
       </div>

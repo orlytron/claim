@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useState } from "react";
 import type { SuggestedUpgrade } from "../lib/suggested-upgrades";
 import { formatSuggestedUpgradeLineWithClaim } from "../lib/suggested-upgrades";
 import {
   applySuggestionIndices,
+  getSuggestionDelta,
   suggestionCollapsedHiddenCount,
   suggestionCollapsedRowIndices,
-  suggestionDeltaForClaim,
   suggestionSelectedDeltaSum,
 } from "../lib/suggestion-apply-engine";
 import type { ClaimItem } from "../lib/types";
@@ -18,6 +18,8 @@ export type SuggestionConfirmModalProps = {
   roomSlug: string;
   roomName: string;
   claimItems: ClaimItem[];
+  /** Room lines for $ deltas (e.g. deduped display list). */
+  sessionItems: ClaimItem[];
   list: SuggestedUpgrade[];
   onApply: (nextClaim: ClaimItem[]) => Promise<void>;
   onDismiss: () => void;
@@ -32,35 +34,36 @@ export default function SuggestionConfirmModal({
   roomSlug,
   roomName,
   claimItems,
+  sessionItems,
   list,
   onApply,
   onDismiss,
   disabled,
 }: SuggestionConfirmModalProps) {
   const [expanded, setExpanded] = useState(false);
-  const [checked, setChecked] = useState<Set<number>>(new Set());
+  const [checked, setChecked] = useState<Set<number>>(() => new Set(list.map((_, i) => i)));
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
     setExpanded(false);
     setChecked(new Set(list.map((_, i) => i)));
   }, [open, roomSlug, list]);
 
   const collapsedIdx = useMemo(
-    () => suggestionCollapsedRowIndices(claimItems, roomName, list),
-    [claimItems, roomName, list]
+    () => suggestionCollapsedRowIndices(claimItems, roomName, list, sessionItems),
+    [claimItems, roomName, list, sessionItems]
   );
   const moreCount = useMemo(
-    () => suggestionCollapsedHiddenCount(claimItems, roomName, list),
-    [claimItems, roomName, list]
+    () => suggestionCollapsedHiddenCount(claimItems, roomName, list, sessionItems),
+    [claimItems, roomName, list, sessionItems]
   );
 
   const rowIndices = expanded ? list.map((_, i) => i) : collapsedIdx;
 
   const selectedTotalDelta = useMemo(
-    () => suggestionSelectedDeltaSum(claimItems, roomName, list, checked),
-    [claimItems, roomName, list, checked]
+    () => suggestionSelectedDeltaSum(claimItems, roomName, list, checked, sessionItems),
+    [claimItems, roomName, list, checked, sessionItems]
   );
 
   function toggle(i: number) {
@@ -111,11 +114,17 @@ export default function SuggestionConfirmModal({
         <p id="suggestion-modal-title" className="pr-10 text-sm font-bold uppercase tracking-wide text-amber-900">
           💡 Suggested changes
         </p>
-        <p className="mt-2 text-sm text-gray-600">Select what to apply. Nothing changes until you tap Apply.</p>
+        <p className="mt-3 text-base font-semibold text-gray-900">
+          Adding these will increase your claim by{" "}
+          <span className="tabular-nums text-[#16A34A]">
+            {selectedTotalDelta >= 0 ? `+${formatCurrency(selectedTotalDelta)}` : formatCurrency(selectedTotalDelta)}
+          </span>
+        </p>
+        <p className="mt-2 text-sm text-gray-600">Uncheck any row to exclude it. Nothing changes until you tap Apply.</p>
         <ul className="mt-4 space-y-2">
           {rowIndices.map((i) => {
             const line = formatSuggestedUpgradeLineWithClaim(claimItems, roomName, list[i]!);
-            const delta = suggestionDeltaForClaim(claimItems, roomName, list[i]!);
+            const delta = getSuggestionDelta(list[i]!, sessionItems);
             const deltaLabel = delta > 0 ? `+${formatCurrency(delta)}` : delta < 0 ? formatCurrency(delta) : formatCurrency(0);
             const deltaClass =
               delta > 0 ? "text-[#16A34A]" : delta < 0 ? "text-red-600" : "text-[#6B7280]";

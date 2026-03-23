@@ -3,7 +3,6 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import AniGuide from "./components/AniGuide";
 import { ClaimItem } from "./lib/types";
 import { getRoomSummary } from "./actions/getRoomSummary";
 import { loadSession, saveSession, RoomSummary } from "./lib/session";
@@ -301,7 +300,6 @@ export default function Home() {
 
         {hydrated && bootPhase === "welcomeBack" && (
           <div className="mx-auto flex max-w-lg flex-col items-center px-4 py-12 text-center">
-            <AniGuide expression="happy" size={80} className="sm:scale-125" />
             <h2 className="mt-6 text-2xl font-bold text-gray-900">Welcome back, David.</h2>
             <p className="mt-2 text-lg text-gray-600">
               Your claim: <span className="font-bold tabular-nums text-gray-900">{formatUsd0(welcomeClaim)}</span>
@@ -331,12 +329,6 @@ export default function Home() {
               >
                 ▶ Continue where I left off
               </Link>
-              <Link
-                href="/onboarding"
-                className="flex min-h-[52px] items-center justify-center rounded-2xl border-2 border-gray-200 bg-white text-base font-bold text-gray-800 shadow-sm transition hover:bg-gray-50"
-              >
-                ↺ Start guided tour again
-              </Link>
             </div>
           </div>
         )}
@@ -344,10 +336,10 @@ export default function Home() {
         {hydrated && bootPhase === "ready" && !showPdfUpload && phase === "idle" && (
           <div className="flex flex-col items-center py-16">
             <Link
-              href="/onboarding"
+              href="/review"
               className="flex min-h-[56px] items-center justify-center rounded-2xl bg-[#2563EB] px-10 text-lg font-bold text-white shadow-md transition hover:bg-blue-700"
             >
-              ▶ Begin →
+              ▶ Continue to review →
             </Link>
             <button
               type="button"

@@ -13,19 +13,25 @@ function stripRevert(i: ClaimItem): ClaimItem {
   return { ...rest };
 }
 
-function findIndex(claim: ClaimItem[], room: string, matchDescription: string): number {
-  const m = norm(matchDescription);
-  return claim.findIndex((i) => i.room === room && norm(i.description) === m);
+function normRoom(r: string): string {
+  return norm(r);
 }
 
-/** Case-insensitive description match within a room (for deltas + display). */
+function findIndex(claim: ClaimItem[], room: string, matchDescription: string): number {
+  const m = norm(matchDescription);
+  const rr = normRoom(room);
+  return claim.findIndex((i) => normRoom(i.room) === rr && norm(i.description) === m);
+}
+
+/** Case-insensitive description + room match (trim / casefold). */
 export function findClaimLineInRoom(
   claim: ClaimItem[],
   room: string,
   matchDescription: string
 ): ClaimItem | undefined {
   const m = norm(matchDescription);
-  return claim.find((i) => i.room === room && norm(i.description) === m);
+  const rr = normRoom(room);
+  return claim.find((i) => normRoom(i.room) === rr && norm(i.description) === m);
 }
 
 function addItemFromSuggestion(p: SuggestedAddItem): ClaimItem {
@@ -67,7 +73,7 @@ function mergeSplitPart(orig: ClaimItem, part: SuggestedSplitPart, partner: Sugg
 function addAlreadyPresent(claim: ClaimItem[], p: SuggestedAddItem): boolean {
   return claim.some(
     (i) =>
-      i.room === p.room &&
+      normRoom(i.room) === normRoom(p.room) &&
       norm(i.description) === norm(p.description) &&
       Math.abs(i.unit_cost - p.unit_cost) < 0.01 &&
       i.qty === p.qty
@@ -184,66 +190,58 @@ export function applyOneSuggestionImmutable(
 }
 
 /**
- * Dollar delta if this suggestion were applied — from explicit formulas + session lines
- * (does not depend on apply succeeding; RENAME/MOVE = 0).
+ * Dollar delta for one suggestion using current lines for this room (pass room-filtered items).
  */
-export function suggestionDeltaForClaim(claim: ClaimItem[], room: string, s: SuggestedUpgrade): number {
-  let delta = 0;
-  switch (s.type) {
+export function getSuggestionDelta(suggestion: SuggestedUpgrade, claimItems: ClaimItem[]): number {
+  const findItem = (desc: string) => claimItems.find((i) => norm(i.description) === norm(desc));
+
+  switch (suggestion.type) {
     case "RENAME":
     case "MOVE":
-      delta = 0;
-      break;
+      return 0;
     case "PRICE": {
-      const orig = findClaimLineInRoom(claim, room, s.match_description);
-      if (!orig) {
-        delta = 0;
-        break;
-      }
-      const newQty = s.new_qty ?? orig.qty;
-      const newUnit = s.new_unit_cost;
-      delta = newQty * newUnit - orig.qty * orig.unit_cost;
-      break;
+      const orig = findItem(suggestion.match_description);
+      if (!orig) return 0;
+      const newCost = suggestion.new_unit_cost ?? orig.unit_cost;
+      const newQty = suggestion.new_qty ?? orig.qty;
+      return newQty * newCost - orig.qty * orig.unit_cost;
     }
     case "QTY": {
-      const orig = findClaimLineInRoom(claim, room, s.match_description);
-      if (!orig) {
-        delta = 0;
-        break;
-      }
-      const unit = s.new_unit_cost ?? orig.unit_cost;
-      delta = s.new_qty * unit - orig.qty * orig.unit_cost;
-      break;
+      const orig = findItem(suggestion.match_description);
+      if (!orig) return 0;
+      const newQty = suggestion.new_qty ?? orig.qty;
+      const newCost = suggestion.new_unit_cost ?? orig.unit_cost;
+      return newQty * newCost - orig.qty * orig.unit_cost;
     }
-    case "ADD":
-      if (addAlreadyPresent(claim, s.item)) delta = 0;
-      else delta = s.item.qty * s.item.unit_cost;
-      break;
+    case "ADD": {
+      const desc = suggestion.item.description;
+      const exists = findItem(desc);
+      if (exists) return 0;
+      return suggestion.item.unit_cost * suggestion.item.qty;
+    }
     case "SPLIT": {
-      const orig = findClaimLineInRoom(claim, room, s.match_description);
-      if (!orig) {
-        delta = 0;
-        break;
-      }
-      delta =
-        s.item_a.unit_cost * s.item_a.qty +
-        s.item_b.unit_cost * s.item_b.qty -
-        orig.qty * orig.unit_cost;
-      break;
+      const orig = findItem(suggestion.match_description);
+      if (!orig) return 0;
+      const newTotal =
+        suggestion.item_a.unit_cost * suggestion.item_a.qty +
+        suggestion.item_b.unit_cost * suggestion.item_b.qty;
+      return newTotal - orig.qty * orig.unit_cost;
     }
     case "REMOVE": {
-      const orig = findClaimLineInRoom(claim, room, s.match_description);
-      if (!orig) {
-        delta = 0;
-        break;
-      }
-      delta = -(orig.qty * orig.unit_cost);
-      break;
+      const orig = findItem(suggestion.match_description);
+      if (!orig) return 0;
+      return -(orig.unit_cost * orig.qty);
     }
     default:
-      delta = 0;
+      return 0;
   }
-  return Math.round(delta * 100) / 100;
+}
+
+/** Dollar delta if applied — full claim + room name (filters by room). */
+export function suggestionDeltaForClaim(claim: ClaimItem[], room: string, s: SuggestedUpgrade): number {
+  const rr = normRoom(room);
+  const roomItems = claim.filter((i) => normRoom(i.room) === rr);
+  return Math.round(getSuggestionDelta(s, roomItems) * 100) / 100;
 }
 
 /** Sum of per-suggestion deltas for checked indices (matches banner/modal “Apply selected” total). */
@@ -251,12 +249,16 @@ export function suggestionSelectedDeltaSum(
   claim: ClaimItem[],
   room: string,
   list: SuggestedUpgrade[],
-  checked: Set<number>
+  checked: Set<number>,
+  /** When set, deltas use these lines (e.g. deduped room list) instead of filtering `claim`. */
+  sessionItems?: ClaimItem[]
 ): number {
+  const rr = normRoom(room);
+  const roomItems = sessionItems ?? claim.filter((i) => normRoom(i.room) === rr);
   let t = 0;
   for (const i of [...checked].sort((a, b) => a - b)) {
     if (i < 0 || i >= list.length) continue;
-    t += suggestionDeltaForClaim(claim, room, list[i]!);
+    t += getSuggestionDelta(list[i]!, roomItems);
   }
   return Math.round(t * 100) / 100;
 }
@@ -264,11 +266,12 @@ export function suggestionSelectedDeltaSum(
 export function suggestionNonZeroDeltaIndices(
   claim: ClaimItem[],
   room: string,
-  list: SuggestedUpgrade[]
+  list: SuggestedUpgrade[],
+  sessionItems?: ClaimItem[]
 ): number[] {
-  return list
-    .map((_, i) => i)
-    .filter((i) => suggestionDeltaForClaim(claim, room, list[i]!) !== 0);
+  const rr = normRoom(room);
+  const roomItems = sessionItems ?? claim.filter((i) => normRoom(i.room) === rr);
+  return list.map((_, i) => i).filter((i) => getSuggestionDelta(list[i]!, roomItems) !== 0);
 }
 
 export function suggestionIsRenameOrMove(s: SuggestedUpgrade): boolean {
@@ -279,18 +282,20 @@ export function suggestionIsRenameOrMove(s: SuggestedUpgrade): boolean {
 export function suggestionCollapsedRowIndices(
   claim: ClaimItem[],
   room: string,
-  list: SuggestedUpgrade[]
+  list: SuggestedUpgrade[],
+  sessionItems?: ClaimItem[]
 ): number[] {
-  const nz = suggestionNonZeroDeltaIndices(claim, room, list);
+  const nz = suggestionNonZeroDeltaIndices(claim, room, list, sessionItems);
   return nz.slice(0, 4);
 }
 
 export function suggestionCollapsedHiddenCount(
   claim: ClaimItem[],
   room: string,
-  list: SuggestedUpgrade[]
+  list: SuggestedUpgrade[],
+  sessionItems?: ClaimItem[]
 ): number {
-  const nz = suggestionNonZeroDeltaIndices(claim, room, list);
+  const nz = suggestionNonZeroDeltaIndices(claim, room, list, sessionItems);
   const hiddenNz = Math.max(0, nz.length - 4);
   const renameMove = list.filter(suggestionIsRenameOrMove).length;
   return hiddenNz + renameMove;

@@ -1131,7 +1131,8 @@ function normLine(s: string): string {
 
 function findClaimLine(claim: ClaimItem[], room: string, matchDescription: string): ClaimItem | undefined {
   const m = normLine(matchDescription);
-  return claim.find((i) => i.room === room && normLine(i.description) === m);
+  const r = normLine(room);
+  return claim.find((i) => normLine(i.room) === r && normLine(i.description) === m);
 }
 
 /** Rich one-liner for modal/banner (uses current claim for before → after). */
