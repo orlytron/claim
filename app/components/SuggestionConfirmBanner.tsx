@@ -151,9 +151,9 @@ export default function SuggestionConfirmBanner({
           onClick={() => void apply()}
           className="rounded-lg bg-amber-800 px-4 py-2.5 text-sm font-bold text-white hover:bg-amber-900 disabled:opacity-40"
         >
-          Apply Selected
+          Apply Selected{"  "}
           {checked.size > 0 ? (
-            <span className="ml-1 tabular-nums">
+            <span className="tabular-nums">
               {selectedTotalDelta >= 0 ? "+" : ""}
               {formatCurrency(selectedTotalDelta)}
             </span>

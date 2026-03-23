@@ -113,7 +113,7 @@ export function getCompleteTierDollarTotal(bundle: Bundle): number {
   return totals[completeIdx] ?? 0;
 }
 
-/** Line descriptions that belong to the Complete tier selection (for “already added” heuristic). */
+/** Line descriptions that belong to the Complete tier selection (for in-claim detection). */
 export function getCompleteTierLineDescriptions(bundle: Bundle): string[] {
   const tiersDef = effectiveTiersDef(bundle);
   const five = isBundleTiers5(tiersDef);

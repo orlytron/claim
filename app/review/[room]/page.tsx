@@ -29,6 +29,7 @@ import { UpgradeOptionsPanel, type UpgradeOption } from "./UpgradeOptionsPanel";
 export type { UpgradeOption };
 import { SUGGESTED_UPGRADES } from "../../lib/suggested-upgrades";
 import { ROOM_ORDER } from "../../lib/room-order";
+import { apiResponseToBundle, type SmartItemRequestBundleJson } from "../../lib/smart-item-request";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -276,22 +277,10 @@ function QtyAdjuster({
 }
 
 function SourceTag({ source }: { source?: ClaimItem["source"] }) {
-  if (!source || source === "original" || source === "suggestion")
-    return (
-      <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[12px] font-medium text-gray-700">
-        original
-      </span>
-    );
   if (source === "upgrade")
     return (
       <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[12px] font-medium text-[#2563EB]">
         ↑ upgraded
-      </span>
-    );
-  if (source === "bundle")
-    return (
-      <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[12px] font-medium text-[#16A34A]">
-        added
       </span>
     );
   if (source === "art")
@@ -455,15 +444,6 @@ function AgeEditorBlock({
           >
             {label}
           </button>
-          <button
-            type="button"
-            disabled={locked || isSaving}
-            onClick={startEdit}
-            className="opacity-0 transition group-hover/row:opacity-100 focus-visible:opacity-100 disabled:opacity-0 border-0 bg-transparent p-0 text-sm leading-none"
-            aria-label="Edit age"
-          >
-            ✏️
-          </button>
         </>
       )}
     </div>
@@ -568,6 +548,9 @@ export default function RoomReviewPage() {
   const [openUpgradeKey, setOpenUpgradeKey] = useState<string | null>(null);
   const [requestText, setRequestText] = useState("");
   const [requestStatus, setRequestStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [smartRequest, setSmartRequest] = useState("");
+  const [smartStatus, setSmartStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [generatedBundle, setGeneratedBundle] = useState<Bundle | null>(null);
   const [qtyFlashKey, setQtyFlashKey] = useState<string | null>(null);
   const [editingAgeKey, setEditingAgeKey] = useState<string | null>(null);
   const [ageDraft, setAgeDraft] = useState("");
@@ -1181,6 +1164,35 @@ export default function RoomReviewPage() {
     }
   }
 
+  const runSmartItemRequest = useCallback(async () => {
+    if (!smartRequest.trim() || !roomName) return;
+    setSmartStatus("loading");
+    try {
+      const res = await fetch("/api/smart-item-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request: smartRequest.trim(),
+          room: roomName,
+          existingItems: items,
+          sessionId,
+        }),
+      });
+      const j = (await res.json()) as {
+        success?: boolean;
+        bundle?: SmartItemRequestBundleJson;
+        error?: string;
+      };
+      if (!j.success || !j.bundle) {
+        throw new Error(j.error || "Could not generate a bundle");
+      }
+      setGeneratedBundle(apiResponseToBundle(j.bundle, roomName));
+      setSmartStatus("success");
+    } catch {
+      setSmartStatus("error");
+    }
+  }, [smartRequest, roomName, items, sessionId]);
+
   function saveTarget() {
     if (!roomName) {
       setEditingTarget(false);
@@ -1774,44 +1786,149 @@ export default function RoomReviewPage() {
               ) : null}
 
               <div className="mt-10 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-                <p className="text-sm font-bold uppercase tracking-wide text-gray-900">💬 Request a specific item</p>
-                <p className="mt-2 text-sm text-[#6B7280]">
-                  Don&apos;t see something? Tell us and we&apos;ll add it.
-                </p>
-                {requestStatus === "success" ? (
-                  <div className="mt-4">
-                    <p className="text-sm font-medium text-[#16A34A]">Request sent — thank you.</p>
+                <p className="text-sm font-bold uppercase tracking-wide text-gray-900">🧠 Remember something else?</p>
+                {smartStatus === "loading" ? (
+                  <div className="mt-4 flex flex-col items-start gap-3 text-sm text-[#6B7280]">
+                    <div className="flex items-center gap-2">
+                      <SmallSpinner />
+                      <span>Identifying items and finding replacement prices…</span>
+                    </div>
+                    <p className="text-xs">This takes about 10 seconds.</p>
+                  </div>
+                ) : smartStatus === "success" && generatedBundle ? (
+                  <div className="mt-4 space-y-4">
+                    <p className="text-sm font-semibold text-gray-900">
+                      ✓ Found: <span className="text-[#16A34A]">{generatedBundle.name}</span>
+                    </p>
+                    <FocusedAdditionCard
+                      key={generatedBundle.bundle_code}
+                      bundle={generatedBundle}
+                      roomName={roomName}
+                      existingItems={session?.claim_items ?? []}
+                      sessionId={sessionId}
+                      disabled={isSaving}
+                      onAdd={(lines) => {
+                        void (async () => {
+                          await handleFocusedBundleAdd(lines);
+                          setGeneratedBundle(null);
+                          setSmartStatus("idle");
+                          setSmartRequest("");
+                        })();
+                      }}
+                    />
                     <button
                       type="button"
-                      className="mt-3 text-sm font-semibold text-[#2563EB] underline"
-                      onClick={() => setRequestStatus("idle")}
+                      className="text-sm font-semibold text-[#2563EB] underline"
+                      onClick={() => {
+                        setGeneratedBundle(null);
+                        setSmartStatus("idle");
+                        setSmartRequest("");
+                      }}
                     >
-                      Send another
+                      Describe something else →
+                    </button>
+                  </div>
+                ) : smartStatus === "error" ? (
+                  <div className="mt-4 space-y-4">
+                    <p className="text-sm text-amber-900">
+                      Couldn&apos;t identify those items. Try describing in more detail, or use the form below to send us
+                      a note.
+                    </p>
+                    <div className="border-t border-gray-100 pt-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Send a note</p>
+                      <textarea
+                        className="mt-2 w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder-gray-400"
+                        rows={3}
+                        placeholder="Description"
+                        value={requestText}
+                        onChange={(e) => {
+                          setRequestText(e.target.value);
+                          if (requestStatus === "error") setRequestStatus("idle");
+                        }}
+                      />
+                      {requestStatus === "error" ? (
+                        <p className="mt-2 text-xs text-red-600">Could not send — try again.</p>
+                      ) : null}
+                      <button
+                        type="button"
+                        disabled={!requestText.trim() || requestStatus === "loading"}
+                        onClick={() => void sendSpecificItemRequest()}
+                        className="mt-3 rounded-lg bg-[#2563EB] px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                      >
+                        {requestStatus === "loading" ? "Sending…" : "Send Request"}
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      className="text-sm font-semibold text-[#2563EB] underline"
+                      onClick={() => {
+                        setSmartStatus("idle");
+                        setSmartRequest("");
+                      }}
+                    >
+                      ← Try smart search again
                     </button>
                   </div>
                 ) : (
                   <>
+                    <p className="mt-2 text-sm text-[#6B7280]">
+                      Describe anything you had and we&apos;ll identify it and find a replacement price — plus suggest what
+                      else would have been with it.
+                    </p>
                     <textarea
                       className="mt-4 w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder-gray-400"
                       rows={3}
-                      placeholder="Description"
-                      value={requestText}
-                      onChange={(e) => {
-                        setRequestText(e.target.value);
-                        if (requestStatus === "error") setRequestStatus("idle");
-                      }}
+                      placeholder="We had a professional espresso machine in the kitchen…"
+                      value={smartRequest}
+                      onChange={(e) => setSmartRequest(e.target.value)}
                     />
-                    {requestStatus === "error" ? (
-                      <p className="mt-2 text-xs text-red-600">Could not send — try again.</p>
-                    ) : null}
                     <button
                       type="button"
-                      disabled={!requestText.trim() || requestStatus === "loading"}
-                      onClick={() => void sendSpecificItemRequest()}
-                      className="mt-4 rounded-lg bg-[#2563EB] px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                      disabled={!smartRequest.trim() || isSaving}
+                      onClick={() => void runSmartItemRequest()}
+                      className="mt-4 min-h-[44px] rounded-lg bg-[#2563EB] px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
                     >
-                      {requestStatus === "loading" ? "Sending…" : "Send Request"}
+                      Find Items →
                     </button>
+                    <div className="mt-6 border-t border-gray-100 pt-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Or send a simple note</p>
+                      {requestStatus === "success" ? (
+                        <div className="mt-2">
+                          <p className="text-sm font-medium text-[#16A34A]">Request sent — thank you.</p>
+                          <button
+                            type="button"
+                            className="mt-2 text-sm font-semibold text-[#2563EB] underline"
+                            onClick={() => setRequestStatus("idle")}
+                          >
+                            Send another
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <textarea
+                            className="mt-2 w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder-gray-400"
+                            rows={2}
+                            placeholder="Description"
+                            value={requestText}
+                            onChange={(e) => {
+                              setRequestText(e.target.value);
+                              if (requestStatus === "error") setRequestStatus("idle");
+                            }}
+                          />
+                          {requestStatus === "error" ? (
+                            <p className="mt-2 text-xs text-red-600">Could not send — try again.</p>
+                          ) : null}
+                          <button
+                            type="button"
+                            disabled={!requestText.trim() || requestStatus === "loading"}
+                            onClick={() => void sendSpecificItemRequest()}
+                            className="mt-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:opacity-40"
+                          >
+                            {requestStatus === "loading" ? "Sending…" : "Send Request"}
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </>
                 )}
               </div>
@@ -1864,7 +1981,7 @@ export default function RoomReviewPage() {
                 <span className="font-semibold text-[#16A34A]">+{formatCurrency(upgradeDeltaSub)}</span>
               </span>
               <span>
-                Added: <span className="font-semibold text-[#16A34A]">+{formatCurrency(addedSub)}</span>
+                Add: <span className="font-semibold text-[#16A34A]">+{formatCurrency(addedSub)}</span>
               </span>
               <span>
                 Total:{" "}

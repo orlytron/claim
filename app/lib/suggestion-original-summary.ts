@@ -100,7 +100,7 @@ function simpleRowForSuggestion(s: SuggestedUpgrade, roomName: string, delta: nu
     case "ADD": {
       const it = s.item;
       const x = it.qty > 1 ? ` ×${it.qty}` : "";
-      return `Added: ${it.description}${x}    +${formatCurrency(delta)}`;
+      return `Add: ${it.description}${x}    +${formatCurrency(delta)}`;
     }
     case "REMOVE": {
       return `Removed: ${s.match_description}    ${formatCurrency(delta)}`;

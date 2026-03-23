@@ -7,6 +7,7 @@ import { supabase } from "../lib/supabase";
 import type { ClaimItem } from "../lib/types";
 import { ORIGINAL_CLAIM_ITEMS, ORIGINAL_TOTAL } from "../lib/original-claim-data";
 import { formatCurrency } from "../lib/utils";
+import type { SmartItemRequestBundleJson } from "../lib/smart-item-request";
 
 export type ParsedArtItem = {
   description: string;
@@ -74,6 +75,7 @@ function Badge({ status }: { status: string }) {
     partial_accept: "bg-emerald-100 text-emerald-800",
     regenerated: "bg-purple-100 text-purple-700",
     pending: "bg-amber-100 text-amber-700",
+    generated: "bg-violet-100 text-violet-800",
     rejected: "bg-gray-100 text-gray-500",
     reviewed: "bg-blue-100 text-blue-700",
     resolved: "bg-slate-200 text-slate-700",
@@ -86,6 +88,26 @@ function Badge({ status }: { status: string }) {
       {status}
     </span>
   );
+}
+
+function parseSmartBundlePreview(raw: string | null): {
+  bundleName: string;
+  essential: number;
+  complete: number;
+  full: number;
+} | null {
+  if (!raw?.trim()) return null;
+  try {
+    const j = JSON.parse(raw) as SmartItemRequestBundleJson;
+    return {
+      bundleName: j.bundle_name || "Bundle",
+      essential: Number(j.tiers?.essential?.total) || 0,
+      complete: Number(j.tiers?.complete?.total) || 0,
+      full: Number(j.tiers?.full?.total) || 0,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function TypeBadge({ type }: { type: "bundle_note" | "suggestion" }) {
@@ -185,6 +207,7 @@ export default function AdminPage() {
 
   const [claimItems, setClaimItems] = useState<ClaimItem[]>([]);
   const [rawSuggestions, setRawSuggestions] = useState<ClientSuggestion[]>([]);
+  const [bundlePreviewJson, setBundlePreviewJson] = useState<string | null>(null);
   const [cacheStats, setCacheStats] = useState<{
     total_cached: number;
     verified_serpapi: number;
@@ -678,29 +701,75 @@ export default function AdminPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {rawSuggestions.map((s) => (
-                      <tr key={s.id} className="align-top hover:bg-gray-50">
-                        <td className="px-4 py-3 text-gray-700">{s.room ?? "—"}</td>
-                        <td className="max-w-md px-4 py-3 text-gray-900">{s.message}</td>
-                        <td className="whitespace-nowrap px-4 py-3 text-right text-xs text-gray-400">
-                          {formatDate(s.created_at)}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <div className="flex flex-col items-end gap-1">
-                            <Badge status={s.status} />
-                            {s.status !== "resolved" ? (
-                              <button
-                                type="button"
-                                onClick={() => void markSuggestionResolved(s.id)}
-                                className="min-h-[36px] rounded-lg border border-gray-200 px-3 text-xs font-semibold text-gray-700 hover:bg-gray-50"
-                              >
-                                Mark resolved
-                              </button>
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                    {rawSuggestions.map((s) => {
+                      const smart = s.status === "generated" ? parseSmartBundlePreview(s.admin_response) : null;
+                      return (
+                        <tr key={s.id} className="align-top hover:bg-gray-50">
+                          <td className="px-4 py-3 text-gray-700">{s.room ?? "—"}</td>
+                          <td className="max-w-lg px-4 py-3 text-gray-900">
+                            {s.status === "generated" ? (
+                              <div className="space-y-2 text-sm">
+                                <p>
+                                  Client said:{" "}
+                                  <span className="font-medium text-gray-800">&quot;{s.message}&quot;</span>
+                                </p>
+                                {smart ? (
+                                  <>
+                                    <p className="text-gray-600">
+                                      Claude generated:{" "}
+                                      <span className="font-semibold text-gray-900">{smart.bundleName}</span>
+                                    </p>
+                                    <p className="text-xs tabular-nums text-gray-600">
+                                      Essential: {formatCurrency(smart.essential)} · Complete:{" "}
+                                      {formatCurrency(smart.complete)} · Full: {formatCurrency(smart.full)}
+                                    </p>
+                                  </>
+                                ) : (
+                                  <p className="text-xs text-amber-800">Claude generated bundle (preview unavailable)</p>
+                                )}
+                                <div className="flex flex-wrap gap-2 pt-1">
+                                  {s.admin_response ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setBundlePreviewJson(s.admin_response)}
+                                      className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-800 hover:bg-violet-100"
+                                    >
+                                      View bundle
+                                    </button>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    onClick={() => void markSuggestionResolved(s.id)}
+                                    className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                                  >
+                                    Mark resolved
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              s.message
+                            )}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right text-xs text-gray-400">
+                            {formatDate(s.created_at)}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <div className="flex flex-col items-end gap-1">
+                              <Badge status={s.status} />
+                              {s.status !== "resolved" && s.status !== "generated" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => void markSuggestionResolved(s.id)}
+                                  className="min-h-[36px] rounded-lg border border-gray-200 px-3 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                                >
+                                  Mark resolved
+                                </button>
+                              ) : null}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -863,6 +932,38 @@ export default function AdminPage() {
           </div>
         </section>
       </main>
+
+      {bundlePreviewJson ? (
+        <div
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Generated bundle JSON"
+        >
+          <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-gray-200 bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+              <p className="text-sm font-semibold text-gray-900">Generated bundle (raw JSON)</p>
+              <button
+                type="button"
+                onClick={() => setBundlePreviewJson(null)}
+                className="rounded-lg p-2 text-lg leading-none text-gray-400 hover:bg-gray-100"
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <pre className="overflow-auto p-4 text-xs text-gray-800">
+              {(() => {
+                try {
+                  return JSON.stringify(JSON.parse(bundlePreviewJson), null, 2);
+                } catch {
+                  return bundlePreviewJson;
+                }
+              })()}
+            </pre>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

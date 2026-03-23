@@ -1160,7 +1160,7 @@ export function formatSuggestedUpgradeLineWithClaim(claim: ClaimItem[], room: st
     case "ADD": {
       const it = s.item;
       const x = it.qty > 1 ? ` ×${it.qty}` : "";
-      return `☑ Added: ${it.description}${x}`;
+      return `☑ Add: ${it.description}${x}`;
     }
     case "SPLIT":
       return `☑ Split: ${s.match_description} → ${s.item_a.description} + ${s.item_b.description}`;
@@ -1186,7 +1186,7 @@ export function formatSuggestedUpgradePreview(s: SuggestedUpgrade): string {
       return `✓ ${s.match_description}: qty → ${s.new_qty}${p}`;
     }
     case "ADD":
-      return `✓ Added: ${s.item.description} ${fmtMoney(s.item.unit_cost)}${s.item.qty > 1 ? ` ×${s.item.qty}` : ""}`;
+      return `✓ Add: ${s.item.description} ${fmtMoney(s.item.unit_cost)}${s.item.qty > 1 ? ` ×${s.item.qty}` : ""}`;
     case "SPLIT":
       return `✓ Split: ${s.match_description} → ${s.item_a.description} + ${s.item_b.description}`;
     case "REMOVE":

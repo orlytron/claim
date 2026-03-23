@@ -212,7 +212,7 @@ export default function SuggestionConfirmModal({
             onClick={() => void apply()}
             className="min-h-[48px] rounded-xl bg-[#2563EB] px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-40"
           >
-            Apply Selected{" "}
+            Apply Selected{"  "}
             <span className="tabular-nums">
               {selectedTotalDelta >= 0 ? "+" : ""}
               {formatCurrency(selectedTotalDelta)}

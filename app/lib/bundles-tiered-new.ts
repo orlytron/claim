@@ -20,8 +20,8 @@ function tiered(
   const fSum = full.reduce((s, x) => s + x.total, 0);
   const tiers: BundleTiers3 = {
     essential: { total: eSum, items: essential },
-    complete: { total: eSum + cSum, items: complete },
-    full: { total: eSum + cSum + fSum, items: full },
+    complete: { total: eSum + cSum, items: [...essential, ...complete] },
+    full: { total: eSum + cSum + fSum, items: [...essential, ...complete, ...full] },
   };
   return {
     room,
