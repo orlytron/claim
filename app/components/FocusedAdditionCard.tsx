@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { Bundle, BundleItem, BundleTiers3, BundleTiers5, BundleTiersDef } from "../lib/bundles-data";
 import { isBundleTiers5 } from "../lib/bundles-data";
 import type { ClaimItem } from "../lib/types";
+import { cleanDescription } from "../lib/clean-description";
 import { formatCurrency } from "../lib/utils";
 import { supabase } from "../lib/supabase";
 
@@ -91,8 +92,9 @@ function effectiveTiersDef(bundle: Bundle): BundleTiersDef {
   return bundle.items.length >= 8 ? autoGenerateTiers5(bundle) : autoGenerateTiers3(bundle);
 }
 
-function tierBlocksList(t: BundleTiersDef): BundleItem[][] {
+function tierBlocksList(t: BundleTiersDef, isExplicit: boolean): BundleItem[][] {
   if (isBundleTiers5(t)) {
+    // 5-tier: always incremental blocks
     return [
       t.essential.items,
       t.enhanced.items,
@@ -101,7 +103,17 @@ function tierBlocksList(t: BundleTiersDef): BundleItem[][] {
       t.ultimate.items,
     ];
   }
-  return [t.essential.items, t.complete.items, t.full.items];
+  // 3-tier
+  if (isExplicit) {
+    // Hand-crafted: each tier IS the full cumulative list for that tier
+    return [
+      t.essential.items,
+      (t as BundleTiers3).complete.items,
+      (t as BundleTiers3).full.items,
+    ];
+  }
+  // Auto-generated: incremental blocks (same slice layout; rowsForTier accumulates)
+  return [t.essential.items, (t as BundleTiers3).complete.items, (t as BundleTiers3).full.items];
 }
 
 function cumulativeTotals(blocks: BundleItem[][]): number[] {
@@ -128,7 +140,15 @@ function firstTierIndexForItem(blocks: BundleItem[][], row: BundleItem): number 
 
 type RowMeta = { row: BundleItem; introducedAt: number; idx: number };
 
-function rowsForTier(blocks: BundleItem[][], tierIdx: number): RowMeta[] {
+function rowsForTier(blocks: BundleItem[][], tierIdx: number, isExplicit: boolean): RowMeta[] {
+  if (isExplicit) {
+    const list = blocks[tierIdx] ?? [];
+    return list.map((row, idx) => ({
+      row,
+      introducedAt: tierIdx,
+      idx,
+    }));
+  }
   const out: RowMeta[] = [];
   let idx = 0;
   for (let b = 0; b <= tierIdx; b++) {
@@ -176,8 +196,11 @@ export default function FocusedAdditionCard({
 
   const tiersDef = useMemo(() => effectiveTiersDef(bundle), [bundle]);
   const five = isBundleTiers5(tiersDef);
-  const blocks = useMemo(() => tierBlocksList(tiersDef), [tiersDef]);
+  const isExplicit = Boolean(bundle.tiers);
+  const blocks = useMemo(() => tierBlocksList(tiersDef, isExplicit), [tiersDef, isExplicit]);
   const cumulativeFive = Boolean(bundle.tiersCumulative && five);
+  /** Hand-crafted 3-tier bundles are cumulative per tier; 5-tier stays incremental unless tiersCumulative. */
+  const explicitThreeTierCumulative = isExplicit && !five;
   const tierCount = blocks.length;
   const maxTierIndex = Math.max(0, tierCount - 1);
 
@@ -193,9 +216,13 @@ export default function FocusedAdditionCard({
   const effectiveTier = Math.min(tierIndex, maxTierIndex);
   const rows = useMemo(() => {
     if (cumulativeFive) return rowsForTierCumulative(blocks, effectiveTier);
-    return rowsForTier(blocks, effectiveTier);
-  }, [cumulativeFive, blocks, effectiveTier]);
+    return rowsForTier(blocks, effectiveTier, explicitThreeTierCumulative);
+  }, [cumulativeFive, blocks, effectiveTier, explicitThreeTierCumulative]);
   const tierTotals = useMemo(() => {
+    if (isExplicit && !isBundleTiers5(tiersDef)) {
+      const t = tiersDef as BundleTiers3;
+      return [t.essential.total, t.complete.total, t.full.total];
+    }
     if (cumulativeFive && isBundleTiers5(tiersDef)) {
       return [
         tiersDef.essential.total,
@@ -206,7 +233,7 @@ export default function FocusedAdditionCard({
       ];
     }
     return cumulativeTotals(blocks);
-  }, [cumulativeFive, tiersDef, blocks]);
+  }, [isExplicit, cumulativeFive, tiersDef, blocks]);
 
   const [checked, setChecked] = useState<Set<string>>(new Set());
   useEffect(() => {
@@ -248,12 +275,15 @@ export default function FocusedAdditionCard({
     if (cumulativeFive) {
       return blocks[effectiveTier] ?? [];
     }
+    if (explicitThreeTierCumulative) {
+      return blocks[effectiveTier] ?? [];
+    }
     const out: BundleItem[] = [];
     for (let b = 0; b <= effectiveTier; b++) {
       out.push(...(blocks[b] ?? []));
     }
     return out;
-  }, [cumulativeFive, blocks, effectiveTier]);
+  }, [cumulativeFive, explicitThreeTierCumulative, blocks, effectiveTier]);
 
   const tierItemCount = currentTierItems.length;
   const tierItemsTotal = useMemo(
@@ -405,20 +435,31 @@ export default function FocusedAdditionCard({
                 onChange={() => toggle(k)}
               />
               <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
-                  <span className="font-medium text-gray-900 [overflow-wrap:anywhere]">
-                    {row.description}
-                    {row.qty > 1 ? <span className="whitespace-nowrap"> ×{row.qty}</span> : null}
-                  </span>
-                  <span className="shrink-0 text-right text-sm font-semibold tabular-nums text-gray-900">
-                    {formatCurrency(ext)}
-                  </span>
+                <div className="flex w-full flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-sm">
+                  {row.qty > 1 ? (
+                    <>
+                      <span className="min-w-0 font-medium text-gray-900 [overflow-wrap:anywhere]">
+                        {cleanDescription(row.description)}
+                        <span className="text-gray-400"> ×{row.qty}</span>
+                        <span className="ml-1 text-xs font-normal text-gray-400 tabular-nums">
+                          {formatCurrency(row.unit_cost)} each
+                        </span>
+                      </span>
+                      <span className="shrink-0 font-semibold tabular-nums text-gray-900">
+                        = {formatCurrency(ext)}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="min-w-0 font-medium text-gray-900 [overflow-wrap:anywhere]">
+                        {cleanDescription(row.description)}
+                      </span>
+                      <span className="shrink-0 font-semibold tabular-nums text-gray-900">
+                        {formatCurrency(row.unit_cost)}
+                      </span>
+                    </>
+                  )}
                 </div>
-                {row.qty > 1 ? (
-                  <p className="mt-0.5 text-xs tabular-nums text-[#6B7280]">
-                    ({formatCurrency(row.unit_cost)} each)
-                  </p>
-                ) : null}
                 {conflict ? (
                   <p className="mt-1 text-xs font-medium text-amber-900">⚠ May have this</p>
                 ) : null}

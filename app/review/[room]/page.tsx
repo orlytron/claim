@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import FocusedAdditionCard from "../../components/FocusedAdditionCard";
@@ -14,6 +14,7 @@ import {
   getFocusedBundlesForRoom,
 } from "../../lib/bundles-client-catalog";
 import { sumPendingCompleteTierFocusedBundles } from "../../lib/focused-bundle-complete-tier";
+import { cleanDescription } from "../../lib/clean-description";
 import { mergeClaimIncoming } from "../../lib/claim-item-merge";
 import { CLAIM_GOAL_DEFAULT, DEFAULT_ROOM_TARGETS } from "../../lib/room-targets";
 import { readRoomGoal, writeRoomGoal } from "../../lib/room-goals";
@@ -336,8 +337,18 @@ function ConsumablePackCard({
             const lineTot = item.total ?? item.qty * item.unit_cost;
             return (
               <li key={`${item.description}-${idx}`} className="flex flex-wrap items-baseline justify-between gap-2 text-gray-800">
-                <span className="min-w-0 [overflow-wrap:anywhere]">{item.description}</span>
-                <span className="shrink-0 tabular-nums font-medium text-gray-900">{formatCurrency(lineTot)}</span>
+                <span className="min-w-0 [overflow-wrap:anywhere]">
+                  {cleanDescription(item.description)}
+                  {item.qty > 1 ? (
+                    <>
+                      <span className="text-gray-400"> ×{item.qty}</span>
+                      <span className="text-xs text-gray-500"> {formatCurrency(item.unit_cost)} each</span>
+                    </>
+                  ) : null}
+                </span>
+                <span className="shrink-0 tabular-nums font-medium text-gray-900">
+                  {item.qty > 1 ? `= ${formatCurrency(lineTot)}` : formatCurrency(item.unit_cost)}
+                </span>
               </li>
             );
           })}
@@ -459,6 +470,75 @@ function AgeEditorBlock({
   );
 }
 
+function ItemPriceRow({
+  item,
+  accent = "default",
+  brand,
+  sourceTag,
+}: {
+  item: ClaimItem;
+  accent?: "default" | "upgrade";
+  brand?: string | null;
+  sourceTag?: ReactNode;
+}) {
+  const d = cleanDescription(item.description);
+  const textColor = accent === "upgrade" ? "text-[#2563EB]" : "text-gray-900";
+  const rightNote = accent === "upgrade" && item.qty === 1 ? " ✓" : "";
+
+  const leftCluster = (
+    <span className="min-w-0 flex flex-1 flex-wrap items-baseline gap-x-2 gap-y-1 [overflow-wrap:anywhere]">
+      <span className={`font-semibold ${textColor}`}>{d}</span>
+      {brand?.trim() ? <span className="text-sm font-medium text-[#6B7280]">{brand}</span> : null}
+      {sourceTag}
+      {item.qty > 1 ? (
+        <>
+          <span className="font-normal text-gray-400">×{item.qty}</span>
+          <span className="text-sm font-normal text-gray-400">{formatCurrency(item.unit_cost)} each</span>
+        </>
+      ) : null}
+    </span>
+  );
+
+  if (item.qty > 1) {
+    return (
+      <div className="flex w-full flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-[17px]">
+        {leftCluster}
+        <span className={`shrink-0 font-bold tabular-nums ${textColor}`}>
+          = {formatCurrency(item.unit_cost * item.qty)}
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex w-full flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-[17px]">
+      {leftCluster}
+      <span className={`shrink-0 font-bold tabular-nums ${textColor}`}>
+        {formatCurrency(item.unit_cost)}
+        {rightNote}
+      </span>
+    </div>
+  );
+}
+
+function PriorItemPriceStrike({ unit_cost, qty, description }: { unit_cost: number; qty: number; description: string }) {
+  const d = cleanDescription(description);
+  if (qty > 1) {
+    return (
+      <p className="text-[17px] text-[#6B7280] line-through [overflow-wrap:anywhere]">
+        {d}
+        <span className="font-normal text-gray-400"> ×{qty}</span>
+        <span className="text-sm font-normal text-gray-400"> {formatCurrency(unit_cost)} each</span>
+        <span className="font-semibold tabular-nums"> = {formatCurrency(unit_cost * qty)}</span>
+      </p>
+    );
+  }
+  return (
+    <p className="text-[17px] text-[#6B7280] line-through [overflow-wrap:anywhere]">
+      {d} <span className="font-semibold tabular-nums">{formatCurrency(unit_cost)}</span>
+    </p>
+  );
+}
+
 export default function RoomReviewPage() {
   const params = useParams<{ room: string }>();
   const roomSlug = params.room;
@@ -478,6 +558,7 @@ export default function RoomReviewPage() {
     return () => clearTimeout(t);
   }, [toast]);
   const [cachedDescs, setCachedDescs] = useState<Set<string>>(new Set());
+  const [premiumMaxByDesc, setPremiumMaxByDesc] = useState<Record<string, number>>({});
   const [lockedKeys, setLockedKeys] = useState<string[]>([]);
   const [roomTarget, setRoomTarget] = useState(0);
   const [claimGoal, setClaimGoal] = useState(CLAIM_GOAL_DEFAULT);
@@ -639,10 +720,12 @@ export default function RoomReviewPage() {
     descriptions.forEach((d) => params.append("desc", d));
     try {
       const r = await fetch(`/api/upgrade-cache-status?${params.toString()}`);
-      const j = (await r.json()) as { cached?: string[] };
+      const j = (await r.json()) as { cached?: string[]; premiumMaxByDesc?: Record<string, number> };
       setCachedDescs(new Set((j.cached ?? []).map(norm)));
+      setPremiumMaxByDesc(j.premiumMaxByDesc ?? {});
     } catch {
       setCachedDescs(new Set());
+      setPremiumMaxByDesc({});
     }
     setIsLoading(false);
     setSessionLoaded(true);
@@ -712,8 +795,23 @@ export default function RoomReviewPage() {
     );
   }, [roomName, session?.claim_items]);
 
-  const projectedRoomTotal = Math.round((roomTotal + pendingFocusedCompleteSum) * 100) / 100;
-  const projectedGapSigned = projectedRoomTotal - roomTarget;
+  const upgradePremiumPotentialDelta = useMemo(() => {
+    if (!items.length) return 0;
+    let s = 0;
+    for (const item of items) {
+      if (!isUpgradeCandidate(item)) continue;
+      const descKey = norm(item.pre_upgrade_item?.description ?? item.description);
+      const maxP = premiumMaxByDesc[descKey];
+      if (typeof maxP !== "number" || maxP <= 0) continue;
+      const delta = (maxP - item.unit_cost) * item.qty;
+      if (delta > 0) s += delta;
+    }
+    return Math.round(s * 100) / 100;
+  }, [items, premiumMaxByDesc]);
+
+  const maximumPossibleRoomTotal =
+    Math.round((roomTotal + pendingFocusedCompleteSum + upgradePremiumPotentialDelta) * 100) / 100;
+  const remainingGapAfterMaximum = maximumPossibleRoomTotal - roomTarget;
 
   const roomNavIndex = useMemo(() => ROOM_ORDER.findIndex((r) => r.slug === roomSlug), [roomSlug]);
   const navPrev = roomNavIndex > 0 ? ROOM_ORDER[roomNavIndex - 1]! : null;
@@ -1139,13 +1237,26 @@ export default function RoomReviewPage() {
       {session && showBanner && showRoomChrome && roomSuggestionList.length > 0 ? (
         <SuggestionConfirmBanner
           roomName={roomName}
-          onApplySuggestions={() => {
+          list={roomSuggestionList}
+          originalItems={ORIGINAL_CLAIM_ITEMS}
+          currentClaimItems={session.claim_items ?? []}
+          sessionId={sessionId}
+          disabled={isSaving}
+          onApplySuggestions={async (nextClaim) => {
+            if (nextClaim) {
+              await handleApplySuggestionsFromBanner(nextClaim);
+            }
             if (typeof window !== "undefined" && roomSlug) {
               localStorage.setItem(`suggestions_shown_${roomSlug}`, "shown");
             }
             setShowBanner(false);
           }}
-          onSkipForNow={() => setShowBanner(false)}
+          onSkipForNow={() => {
+            if (typeof window !== "undefined" && roomSlug) {
+              localStorage.setItem(`suggestions_shown_${roomSlug}`, "shown");
+            }
+            setShowBanner(false);
+          }}
         />
       ) : null}
       {loadError ? (
@@ -1298,42 +1409,47 @@ export default function RoomReviewPage() {
                   <span className="text-[#6B7280]">Gap:</span>
                   <span className="font-semibold text-gray-900">{formatSignedGap(gapSigned)}</span>
                 </div>
-                <div className="pt-2">
-                  <div className="mb-1 flex justify-between text-xs font-medium text-[#6B7280]">
-                    <span>Progress to target</span>
-                    <span className="tabular-nums">{progressPct}%</span>
-                  </div>
-                  <div className="h-3 w-full overflow-hidden rounded-full bg-gray-200">
-                    <div
-                      className="h-full rounded-full bg-[#2563EB] transition-[width] duration-500 ease-out"
-                      style={{ width: `${progressPct}%` }}
-                    />
-                  </div>
-                </div>
-                <div className="mt-4 space-y-1.5 border-t border-gray-200 pt-3 text-xs tabular-nums text-gray-800 md:text-sm">
+                <div className="mt-4 space-y-2 border-t border-gray-200 pt-3 text-xs tabular-nums text-gray-800 md:text-sm">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
+                    What this room could reach
+                  </p>
                   <div className="flex flex-wrap justify-between gap-2">
                     <span className="text-[#6B7280]">Current value:</span>
                     <span className="font-medium text-gray-900">{formatCurrency(roomTotal)}</span>
                   </div>
                   <div className="flex flex-wrap justify-between gap-2">
-                    <span className="text-[#6B7280]">+ If you add all (focused Complete ★):</span>
+                    <span className="min-w-0 text-[#6B7280]">+ Focused additions (Complete ★ all):</span>
                     <span className="font-medium text-[#16A34A]">+{formatCurrency(pendingFocusedCompleteSum)}</span>
                   </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap justify-between gap-2">
+                      <span className="text-[#6B7280]">+ If you upgrade items:</span>
+                      <span className="font-medium text-[#16A34A]">+{formatCurrency(upgradePremiumPotentialDelta)}</span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] leading-snug text-[#9CA3AF]">
+                      (all upgrade options at premium tier)
+                    </p>
+                  </div>
                   <div className="flex flex-wrap justify-between gap-2 font-semibold text-gray-900">
-                    <span>= Projected:</span>
-                    <span>{formatCurrency(projectedRoomTotal)}</span>
+                    <span>Maximum possible:</span>
+                    <span>{formatCurrency(maximumPossibleRoomTotal)}</span>
                   </div>
                   <div className="flex flex-wrap justify-between gap-2">
-                    <span className="text-[#6B7280]">Target:</span>
+                    <span className="text-[#6B7280]">Your target:</span>
                     <span className="font-medium">{formatCurrency(roomTarget)}</span>
                   </div>
                   <div className="flex flex-wrap justify-between gap-2">
-                    <span className="text-[#6B7280]">Still needed:</span>
-                    <span className="font-semibold text-gray-900">{formatSignedGap(projectedGapSigned)}</span>
+                    <span className="text-[#6B7280]">Remaining gap:</span>
+                    <span className="font-semibold text-gray-900">{formatSignedGap(remainingGapAfterMaximum)}</span>
                   </div>
-                  <p className="pt-1 text-sm font-medium text-gray-900">
-                    With recommended additions: {formatCurrency(projectedRoomTotal)} of {formatCurrency(roomTarget)}{" "}
-                    target
+                  <p className="pt-2 text-sm leading-snug text-gray-700">
+                    {maximumPossibleRoomTotal < roomTarget ? (
+                      <>
+                        💡 Art collection and documentation will close the remaining gap.
+                      </>
+                    ) : (
+                      <>✅ This room can reach its target with upgrades and additions.</>
+                    )}
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 border-t border-gray-200 pt-3 text-xs md:text-sm">
@@ -1426,41 +1542,42 @@ export default function RoomReviewPage() {
                           <div className="min-w-0 flex-1">
                             {upgraded && pre ? (
                               <>
-                                <p className="text-[17px] text-[#6B7280] line-through [overflow-wrap:anywhere]">
-                                  {pre.description}{" "}
-                                  <span className="font-semibold tabular-nums">{formatCurrency(pre.unit_cost)}</span>
-                                </p>
-                                <div className="mt-2 flex flex-wrap items-center gap-2">
-                                  <p className="text-[17px] font-bold text-gray-900 [overflow-wrap:anywhere]">{item.description}</p>
-                                  <SourceTag source={item.source} />
-                                </div>
-                                <div className="mt-1 flex flex-wrap items-center gap-3">
-                                  <span className="text-[17px] font-bold tabular-nums text-[#2563EB]">
-                                    {formatCurrency(item.unit_cost)} ✓
-                                  </span>
-                                  <span className="text-[#6B7280]">·</span>
-                                  <QtyAdjuster
-                                    qty={item.qty}
-                                    disabled={locked || isSaving}
-                                    onChange={(q) => void updateItemQty(item, q)}
-                                  />
-                                  {qtyFlashKey === lk ? (
-                                    <span className="text-xs font-medium text-[#16A34A] transition-opacity duration-300">
-                                      Qty updated
-                                    </span>
-                                  ) : null}
-                                  <span className="text-[#6B7280]">·</span>
-                                  <AgeEditorBlock
-                                    lk={lk}
+                                <PriorItemPriceStrike
+                                  description={pre.description}
+                                  unit_cost={pre.unit_cost}
+                                  qty={item.qty}
+                                />
+                                <div className="mt-2 space-y-2">
+                                  <ItemPriceRow
                                     item={item}
-                                    locked={locked}
-                                    isSaving={isSaving}
-                                    editingAgeKey={editingAgeKey}
-                                    ageDraft={ageDraft}
-                                    setAgeDraft={setAgeDraft}
-                                    setEditingAgeKey={setEditingAgeKey}
-                                    onSaveAge={updateItemAge}
+                                    accent="upgrade"
+                                    brand={item.brand}
+                                    sourceTag={<SourceTag source={item.source} />}
                                   />
+                                  <div className="flex flex-wrap items-center gap-3">
+                                    <QtyAdjuster
+                                      qty={item.qty}
+                                      disabled={locked || isSaving}
+                                      onChange={(q) => void updateItemQty(item, q)}
+                                    />
+                                    {qtyFlashKey === lk ? (
+                                      <span className="text-xs font-medium text-[#16A34A] transition-opacity duration-300">
+                                        Qty updated
+                                      </span>
+                                    ) : null}
+                                    <span className="text-[#6B7280]">·</span>
+                                    <AgeEditorBlock
+                                      lk={lk}
+                                      item={item}
+                                      locked={locked}
+                                      isSaving={isSaving}
+                                      editingAgeKey={editingAgeKey}
+                                      ageDraft={ageDraft}
+                                      setAgeDraft={setAgeDraft}
+                                      setEditingAgeKey={setEditingAgeKey}
+                                      onSaveAge={updateItemAge}
+                                    />
+                                  </div>
                                 </div>
                                 <p className="mt-1 text-sm font-bold tabular-nums text-[#16A34A]">
                                   +{formatCurrency((item.unit_cost - pre.unit_cost) * item.qty)} added
@@ -1488,42 +1605,36 @@ export default function RoomReviewPage() {
                               </>
                             ) : (
                               <>
-                                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                                  <p className="text-[17px] font-semibold text-gray-900 [overflow-wrap:anywhere]">
-                                    {item.description}
-                                  </p>
-                                  {item.brand ? (
-                                    <span className="text-sm font-medium text-[#6B7280]">{item.brand}</span>
-                                  ) : null}
-                                  <SourceTag source={item.source} />
-                                </div>
-                                <div className="mt-1 flex flex-wrap items-center gap-3">
-                                  <span className="text-[17px] font-bold tabular-nums text-gray-900">
-                                    {formatCurrency(item.unit_cost)}
-                                  </span>
-                                  <span className="text-[#6B7280]">·</span>
-                                  <QtyAdjuster
-                                    qty={item.qty}
-                                    disabled={locked || isSaving}
-                                    onChange={(q) => void updateItemQty(item, q)}
-                                  />
-                                  {qtyFlashKey === lk ? (
-                                    <span className="text-xs font-medium text-[#16A34A] transition-opacity duration-300">
-                                      Qty updated
-                                    </span>
-                                  ) : null}
-                                  <span className="text-[#6B7280]">·</span>
-                                  <AgeEditorBlock
-                                    lk={lk}
+                                <div className="space-y-2">
+                                  <ItemPriceRow
                                     item={item}
-                                    locked={locked}
-                                    isSaving={isSaving}
-                                    editingAgeKey={editingAgeKey}
-                                    ageDraft={ageDraft}
-                                    setAgeDraft={setAgeDraft}
-                                    setEditingAgeKey={setEditingAgeKey}
-                                    onSaveAge={updateItemAge}
+                                    brand={item.brand}
+                                    sourceTag={<SourceTag source={item.source} />}
                                   />
+                                  <div className="flex flex-wrap items-center gap-3">
+                                    <QtyAdjuster
+                                      qty={item.qty}
+                                      disabled={locked || isSaving}
+                                      onChange={(q) => void updateItemQty(item, q)}
+                                    />
+                                    {qtyFlashKey === lk ? (
+                                      <span className="text-xs font-medium text-[#16A34A] transition-opacity duration-300">
+                                        Qty updated
+                                      </span>
+                                    ) : null}
+                                    <span className="text-[#6B7280]">·</span>
+                                    <AgeEditorBlock
+                                      lk={lk}
+                                      item={item}
+                                      locked={locked}
+                                      isSaving={isSaving}
+                                      editingAgeKey={editingAgeKey}
+                                      ageDraft={ageDraft}
+                                      setAgeDraft={setAgeDraft}
+                                      setEditingAgeKey={setEditingAgeKey}
+                                      onSaveAge={updateItemAge}
+                                    />
+                                  </div>
                                 </div>
                               </>
                             )}
@@ -1716,6 +1827,12 @@ export default function RoomReviewPage() {
 
       {showRoomChrome ? (
         <footer className="fixed bottom-0 inset-x-0 z-30 min-h-[52px] border-t border-gray-200 bg-white py-2 shadow-lg md:py-0">
+          <div className="h-1.5 w-full bg-gray-200">
+            <div
+              className="h-full bg-[#2563EB] transition-[width] duration-500 ease-out"
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
           <div className="mx-auto flex max-w-[1100px] flex-wrap items-center justify-between gap-2 px-4 md:min-h-[56px] md:flex-nowrap md:gap-4 md:px-8">
             <div className="flex shrink-0 items-center gap-1">
               <button

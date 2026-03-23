@@ -61,7 +61,7 @@ function effectiveTiersDef(bundle: Bundle): BundleTiersDef {
   return bundle.items.length >= 8 ? autoGenerateTiers5(bundle) : autoGenerateTiers3(bundle);
 }
 
-function tierBlocksList(t: BundleTiersDef): BundleItem[][] {
+function tierBlocksList(t: BundleTiersDef, isExplicit: boolean): BundleItem[][] {
   if (isBundleTiers5(t)) {
     return [
       t.essential.items,
@@ -71,7 +71,14 @@ function tierBlocksList(t: BundleTiersDef): BundleItem[][] {
       t.ultimate.items,
     ];
   }
-  return [t.essential.items, t.complete.items, t.full.items];
+  if (isExplicit) {
+    return [
+      t.essential.items,
+      (t as BundleTiers3).complete.items,
+      (t as BundleTiers3).full.items,
+    ];
+  }
+  return [t.essential.items, (t as BundleTiers3).complete.items, (t as BundleTiers3).full.items];
 }
 
 function cumulativeTotals(blocks: BundleItem[][]): number[] {
@@ -91,12 +98,16 @@ function normDesc(d: string): string {
 /** Dollar total shown at Complete ★ in FocusedAdditionCard. */
 export function getCompleteTierDollarTotal(bundle: Bundle): number {
   const tiersDef = effectiveTiersDef(bundle);
-  const blocks = tierBlocksList(tiersDef);
   const five = isBundleTiers5(tiersDef);
+  const isExplicit = Boolean(bundle.tiers);
+  const blocks = tierBlocksList(tiersDef, isExplicit);
   const completeIdx = five ? 2 : 1;
   const cumulativeFive = Boolean(bundle.tiersCumulative && five);
   if (cumulativeFive && isBundleTiers5(tiersDef)) {
     return tiersDef.complete.total;
+  }
+  if (isExplicit && !five) {
+    return (tiersDef as BundleTiers3).complete.total;
   }
   const totals = cumulativeTotals(blocks);
   return totals[completeIdx] ?? 0;
@@ -105,11 +116,15 @@ export function getCompleteTierDollarTotal(bundle: Bundle): number {
 /** Line descriptions that belong to the Complete tier selection (for “already added” heuristic). */
 export function getCompleteTierLineDescriptions(bundle: Bundle): string[] {
   const tiersDef = effectiveTiersDef(bundle);
-  const blocks = tierBlocksList(tiersDef);
   const five = isBundleTiers5(tiersDef);
+  const isExplicit = Boolean(bundle.tiers);
+  const blocks = tierBlocksList(tiersDef, isExplicit);
   const completeIdx = five ? 2 : 1;
   const cumulativeFive = Boolean(bundle.tiersCumulative && five);
   if (cumulativeFive) {
+    return (blocks[completeIdx] ?? []).map((i) => i.description);
+  }
+  if (isExplicit && !five) {
     return (blocks[completeIdx] ?? []).map((i) => i.description);
   }
   const out: string[] = [];

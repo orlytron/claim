@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cleanDescription } from "../../lib/clean-description";
 import { ClaimItem } from "../../lib/types";
 import { formatCurrency } from "../../lib/utils";
 
@@ -561,7 +562,7 @@ export function UpgradeOptionsPanel({
       <div className="flex flex-wrap items-start justify-between gap-3 pr-10">
         <p className="text-sm text-[#6B7280]">
           Choose your upgrade for{" "}
-          <span className="font-semibold text-gray-900">{origDesc}</span>:
+          <span className="font-semibold text-gray-900">{cleanDescription(origDesc)}</span>:
         </p>
         <div className="flex flex-col items-end gap-1">
           <button
@@ -595,17 +596,29 @@ export function UpgradeOptionsPanel({
               <p className="text-xs font-bold uppercase tracking-wide text-[#2563EB]">{tierLabel}</p>
               <div
                 className="mt-2 text-[15px] font-semibold leading-snug text-gray-900 [overflow-wrap:anywhere]"
-                title={opt.title}
+                title={cleanDescription(opt.title)}
               >
-                {displayTitle}
+                {cleanDescription(displayTitle)}
               </div>
               <p className="mt-2 text-sm font-medium text-gray-800">{(opt.brand || itemBrand).trim() || "—"}</p>
               <p className="mt-1 text-xs font-medium text-[#6B7280]">
                 {(opt.retailer || "").trim() || "Search online"}
               </p>
               <p className="mt-4 text-[22px] font-bold text-blue-600 tabular-nums">
-                {formatCurrency(opt.price * item.qty)}
+                {item.qty > 1 ? (
+                  <>
+                    {formatCurrency(opt.price)}
+                    <span className="text-base font-semibold text-slate-600"> each</span>
+                  </>
+                ) : (
+                  formatCurrency(opt.price)
+                )}
               </p>
+              {item.qty > 1 ? (
+                <p className="mt-1 text-sm font-semibold tabular-nums text-slate-700">
+                  ×{item.qty} = {formatCurrency(opt.price * item.qty)}
+                </p>
+              ) : null}
               <p className="text-sm font-semibold text-[#16A34A] tabular-nums">
                 +{formatCurrency((opt.price - baseUnit) * item.qty)}
               </p>

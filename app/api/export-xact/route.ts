@@ -5,6 +5,7 @@ import {
   displayRoomForExport,
   sortClaimItemsForExport,
 } from "../../lib/claim-export-shared";
+import { cleanDescription } from "../../lib/clean-description";
 import type { ClaimItem } from "../../lib/types";
 
 function mapCategory(category: string, description: string): string {
@@ -145,7 +146,7 @@ export async function GET(req: NextRequest) {
       displayRoom,
       item.brand || "",
       item.model || "",
-      item.description,
+      cleanDescription(item.description),
       originalVendorColumn(item),
       item.qty,
       ageYears,
