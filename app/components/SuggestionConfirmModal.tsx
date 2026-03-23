@@ -5,6 +5,7 @@ import type { SuggestedUpgrade } from "../lib/suggested-upgrades";
 import { formatSuggestedUpgradeLineWithClaim } from "../lib/suggested-upgrades";
 import {
   applySuggestionIndices,
+  findClaimLineInRoom,
   getSuggestionDelta,
   suggestionCollapsedHiddenCount,
   suggestionCollapsedRowIndices,
@@ -40,6 +41,7 @@ export default function SuggestionConfirmModal({
   onDismiss,
   disabled,
 }: SuggestionConfirmModalProps) {
+  void roomSlug;
   const [expanded, setExpanded] = useState(false);
   const [checked, setChecked] = useState<Set<number>>(() => new Set(list.map((_, i) => i)));
   const [busy, setBusy] = useState(false);
@@ -123,9 +125,54 @@ export default function SuggestionConfirmModal({
         <p className="mt-2 text-sm text-gray-600">Uncheck any row to exclude it. Nothing changes until you tap Apply.</p>
         <ul className="mt-4 space-y-2">
           {rowIndices.map((i) => {
-            const line = formatSuggestedUpgradeLineWithClaim(claimItems, roomName, list[i]!);
-            const delta = getSuggestionDelta(list[i]!, claimItems);
-            const deltaLabel = delta > 0 ? `+${formatCurrency(delta)}` : delta < 0 ? formatCurrency(delta) : formatCurrency(0);
+            const s = list[i]!;
+            if (s.type === "SPLIT") {
+              const orig = findClaimLineInRoom(claimItems, roomName, s.match_description);
+              const origTotal = orig ? orig.qty * orig.unit_cost : 0;
+              const origLineStr = orig
+                ? `${orig.qty} × ${orig.description} @ ${formatCurrency(orig.unit_cost)} = ${formatCurrency(origTotal)}`
+                : "—";
+              const aTot = s.item_a.qty * s.item_a.unit_cost;
+              const bTot = s.item_b.qty * s.item_b.unit_cost;
+              const net = getSuggestionDelta(s, claimItems);
+              const netClass = net >= 0 ? "text-[#16A34A]" : "text-red-600";
+              return (
+                <li key={i} className="rounded-lg border border-gray-100 bg-gray-50/90 px-3 py-2 text-sm">
+                  <div className="flex gap-2">
+                    <input
+                      type="checkbox"
+                      className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
+                      checked={checked.has(i)}
+                      disabled={busy || disabled}
+                      onChange={() => toggle(i)}
+                    />
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <p className="font-medium text-gray-900 [overflow-wrap:anywhere]">
+                        {s.match_description}{" "}
+                        <span className="text-sm font-normal italic text-gray-500">↕ replaced with:</span>
+                      </p>
+                      <p className="pl-2 text-sm text-gray-500 line-through">{origLineStr}</p>
+                      <p className="pl-4 text-sm text-[#16A34A]">
+                        + {s.item_a.description} {s.item_a.qty} × {formatCurrency(s.item_a.unit_cost)}
+                        <span className="ml-2 font-semibold tabular-nums">+{formatCurrency(aTot)}</span>
+                      </p>
+                      <p className="pl-4 text-sm text-[#16A34A]">
+                        + {s.item_b.description} {s.item_b.qty} × {formatCurrency(s.item_b.unit_cost)}
+                        <span className="ml-2 font-semibold tabular-nums">+{formatCurrency(bTot)}</span>
+                      </p>
+                      <p className={`border-t border-gray-200 pt-2 text-sm font-bold tabular-nums ${netClass}`}>
+                        Net change: {net >= 0 ? "+" : ""}
+                        {formatCurrency(net)}
+                      </p>
+                    </div>
+                  </div>
+                </li>
+              );
+            }
+            const line = formatSuggestedUpgradeLineWithClaim(claimItems, roomName, s).replace(/^☑\s*/, "");
+            const delta = getSuggestionDelta(s, claimItems);
+            const deltaLabel =
+              delta > 0 ? `+${formatCurrency(delta)}` : delta < 0 ? formatCurrency(delta) : formatCurrency(0);
             const deltaClass =
               delta > 0 ? "text-[#16A34A]" : delta < 0 ? "text-red-600" : "text-[#6B7280]";
             return (

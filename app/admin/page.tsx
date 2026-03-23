@@ -246,7 +246,7 @@ export default function AdminPage() {
     const { data: dec } = await supabase
       .from("bundle_decisions")
       .select("*")
-      .order("created_at", { ascending: false });
+      .order("id", { ascending: false });
     setDecisions((dec as BundleDecision[]) ?? []);
 
     // Client suggestions

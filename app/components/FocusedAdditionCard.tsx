@@ -243,6 +243,24 @@ export default function FocusedAdditionCard({
     [rows, checked, effectiveTier, cumulativeFive]
   );
 
+  /** Items in the current tier only (not a delta subset) — for accurate counts in the header. */
+  const currentTierItems = useMemo(() => {
+    if (cumulativeFive) {
+      return blocks[effectiveTier] ?? [];
+    }
+    const out: BundleItem[] = [];
+    for (let b = 0; b <= effectiveTier; b++) {
+      out.push(...(blocks[b] ?? []));
+    }
+    return out;
+  }, [cumulativeFive, blocks, effectiveTier]);
+
+  const tierItemCount = currentTierItems.length;
+  const tierItemsTotal = useMemo(
+    () => Math.round(currentTierItems.reduce((s, i) => s + lineTotal(i), 0) * 100) / 100,
+    [currentTierItems]
+  );
+
   const toggle = useCallback((k: string) => {
     setChecked((prev) => {
       const n = new Set(prev);
@@ -478,7 +496,7 @@ export default function FocusedAdditionCard({
       ) : null}
 
       <div className="mt-4 border-t border-gray-100 pt-4 text-sm text-gray-800">
-        <span className="font-semibold">{selectedCount}</span> items selected ·{" "}
+        <span className="font-semibold tabular-nums">{selectedCount}</span> items ·{" "}
         <span className="tabular-nums font-bold text-gray-900">{formatCurrency(checkedTotal)}</span>
       </div>
 

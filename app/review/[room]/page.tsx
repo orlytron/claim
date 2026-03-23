@@ -363,6 +363,101 @@ function ConsumablePackCard({
   );
 }
 
+type AgeEditorBlockProps = {
+  lk: string;
+  item: ClaimItem;
+  locked: boolean;
+  isSaving: boolean;
+  editingAgeKey: string | null;
+  ageDraft: string;
+  setAgeDraft: (s: string) => void;
+  setEditingAgeKey: (k: string | null) => void;
+  onSaveAge: (item: ClaimItem, ageYears: number) => void | Promise<void>;
+};
+
+function AgeEditorBlock({
+  lk,
+  item,
+  locked,
+  isSaving,
+  editingAgeKey,
+  ageDraft,
+  setAgeDraft,
+  setEditingAgeKey,
+  onSaveAge,
+}: AgeEditorBlockProps) {
+  const display = displayAgeYears(item);
+  const label = display < 1 ? "New" : `${display} yrs`;
+
+  function startEdit() {
+    if (locked || isSaving) return;
+    setEditingAgeKey(lk);
+    setAgeDraft(String(displayAgeYears(item)));
+  }
+
+  function save() {
+    const y = Math.min(30, Math.max(0, parseInt(ageDraft, 10) || 0));
+    void onSaveAge(item, y);
+  }
+
+  return (
+    <div className="inline-flex items-center gap-1.5">
+      {editingAgeKey === lk ? (
+        <span className="inline-flex flex-wrap items-center gap-1.5">
+          <input
+            type="number"
+            min={0}
+            max={30}
+            className="w-12 rounded border border-gray-300 bg-white px-2 py-0.5 text-sm tabular-nums text-gray-900"
+            value={ageDraft}
+            onChange={(e) => setAgeDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                save();
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setEditingAgeKey(null);
+              }
+            }}
+            autoFocus
+          />
+          <span className="text-sm text-gray-400">yrs</span>
+          <button
+            type="button"
+            className="rounded px-1.5 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+            aria-label="Save age"
+            onClick={() => save()}
+          >
+            ✓
+          </button>
+        </span>
+      ) : (
+        <>
+          <button
+            type="button"
+            disabled={locked || isSaving}
+            onClick={startEdit}
+            className="border-0 bg-transparent p-0 text-sm text-gray-400 hover:text-gray-600 disabled:opacity-40"
+          >
+            {label}
+          </button>
+          <button
+            type="button"
+            disabled={locked || isSaving}
+            onClick={startEdit}
+            className="opacity-0 transition group-hover/row:opacity-100 focus-visible:opacity-100 disabled:opacity-0 border-0 bg-transparent p-0 text-sm leading-none"
+            aria-label="Edit age"
+          >
+            ✏️
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function RoomReviewPage() {
   const params = useParams<{ room: string }>();
   const roomSlug = params.room;
@@ -1011,20 +1106,13 @@ export default function RoomReviewPage() {
       ) : null}
       {session && showBanner && showRoomChrome && roomSuggestionList.length > 0 ? (
         <SuggestionConfirmBanner
-          roomSlug={roomSlug}
           roomName={roomName}
-          claimItems={session.claim_items ?? []}
-          sessionItems={session.claim_items ?? []}
-          list={roomSuggestionList}
-          onApply={handleApplySuggestionsFromBanner}
-          onSkip={() => setShowBanner(false)}
-          onSkipPermanent={() => {
+          onGotIt={() => {
             if (typeof window !== "undefined" && roomSlug) {
               localStorage.setItem(`suggestions_shown_${roomSlug}`, "shown");
             }
             setShowBanner(false);
           }}
-          disabled={isSaving}
         />
       ) : null}
       {loadError ? (
@@ -1257,7 +1345,7 @@ export default function RoomReviewPage() {
                     return (
                       <div
                         key={`${generateItemId(item)}-${idx}`}
-                        className={`relative border-b border-gray-100 transition-colors duration-300 last:border-b-0 ${rowBg}`}
+                        className={`group/row relative border-b border-gray-100 transition-colors duration-300 last:border-b-0 ${rowBg}`}
                       >
                         <button
                           type="button"
@@ -1296,62 +1384,17 @@ export default function RoomReviewPage() {
                                     </span>
                                   ) : null}
                                   <span className="text-[#6B7280]">·</span>
-                                  {editingAgeKey === lk ? (
-                                    <span className="inline-flex flex-wrap items-center gap-2">
-                                      <input
-                                        type="number"
-                                        min={0}
-                                        max={120}
-                                        className="w-14 rounded border border-gray-300 px-2 py-1 text-sm"
-                                        value={ageDraft}
-                                        onChange={(e) => setAgeDraft(e.target.value)}
-                                      />
-                                      <span className="text-sm text-[#6B7280]">years</span>
-                                      <button
-                                        type="button"
-                                        className="text-sm font-semibold text-[#2563EB]"
-                                        onClick={() =>
-                                          void updateItemAge(
-                                            item,
-                                            Math.min(120, Math.max(0, parseInt(ageDraft, 10) || 0))
-                                          )
-                                        }
-                                      >
-                                        Save
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="text-sm text-[#6B7280]"
-                                        onClick={() => setEditingAgeKey(null)}
-                                      >
-                                        Cancel
-                                      </button>
-                                    </span>
-                                  ) : (
-                                    <span
-                                      role="button"
-                                      tabIndex={0}
-                                      onKeyDown={(e) => {
-                                        if (e.key === "Enter" || e.key === " ") {
-                                          e.preventDefault();
-                                          if (!locked && !isSaving) {
-                                            setEditingAgeKey(lk);
-                                            setAgeDraft(String(item.age_years ?? 0));
-                                          }
-                                        }
-                                      }}
-                                      onClick={() => {
-                                        if (locked || isSaving) return;
-                                        setEditingAgeKey(lk);
-                                        setAgeDraft(String(item.age_years ?? 0));
-                                      }}
-                                      className={`cursor-pointer text-base font-medium text-gray-900 underline decoration-[#2563EB] decoration-2 underline-offset-2 ${locked || isSaving ? "opacity-40" : ""}`}
-                                    >
-                                      {displayAgeYears(item) < 1
-                                        ? "New / < 1 year"
-                                        : `${displayAgeYears(item)} years`}
-                                    </span>
-                                  )}
+                                  <AgeEditorBlock
+                                    lk={lk}
+                                    item={item}
+                                    locked={locked}
+                                    isSaving={isSaving}
+                                    editingAgeKey={editingAgeKey}
+                                    ageDraft={ageDraft}
+                                    setAgeDraft={setAgeDraft}
+                                    setEditingAgeKey={setEditingAgeKey}
+                                    onSaveAge={updateItemAge}
+                                  />
                                 </div>
                                 <p className="mt-1 text-sm font-bold tabular-nums text-[#16A34A]">
                                   +{formatCurrency((item.unit_cost - pre.unit_cost) * item.qty)} added
@@ -1404,62 +1447,17 @@ export default function RoomReviewPage() {
                                     </span>
                                   ) : null}
                                   <span className="text-[#6B7280]">·</span>
-                                  {editingAgeKey === lk ? (
-                                    <span className="inline-flex flex-wrap items-center gap-2">
-                                      <input
-                                        type="number"
-                                        min={0}
-                                        max={120}
-                                        className="w-14 rounded border border-gray-300 px-2 py-1 text-sm"
-                                        value={ageDraft}
-                                        onChange={(e) => setAgeDraft(e.target.value)}
-                                      />
-                                      <span className="text-sm text-[#6B7280]">years</span>
-                                      <button
-                                        type="button"
-                                        className="text-sm font-semibold text-[#2563EB]"
-                                        onClick={() =>
-                                          void updateItemAge(
-                                            item,
-                                            Math.min(120, Math.max(0, parseInt(ageDraft, 10) || 0))
-                                          )
-                                        }
-                                      >
-                                        Save
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="text-sm text-[#6B7280]"
-                                        onClick={() => setEditingAgeKey(null)}
-                                      >
-                                        Cancel
-                                      </button>
-                                    </span>
-                                  ) : (
-                                    <span
-                                      role="button"
-                                      tabIndex={0}
-                                      onKeyDown={(e) => {
-                                        if (e.key === "Enter" || e.key === " ") {
-                                          e.preventDefault();
-                                          if (!locked && !isSaving) {
-                                            setEditingAgeKey(lk);
-                                            setAgeDraft(String(item.age_years ?? 0));
-                                          }
-                                        }
-                                      }}
-                                      onClick={() => {
-                                        if (locked || isSaving) return;
-                                        setEditingAgeKey(lk);
-                                        setAgeDraft(String(item.age_years ?? 0));
-                                      }}
-                                      className={`cursor-pointer text-base font-medium text-gray-900 underline decoration-[#2563EB] decoration-2 underline-offset-2 ${locked || isSaving ? "opacity-40" : ""}`}
-                                    >
-                                      {displayAgeYears(item) < 1
-                                        ? "New / < 1 year"
-                                        : `${displayAgeYears(item)} years`}
-                                    </span>
-                                  )}
+                                  <AgeEditorBlock
+                                    lk={lk}
+                                    item={item}
+                                    locked={locked}
+                                    isSaving={isSaving}
+                                    editingAgeKey={editingAgeKey}
+                                    ageDraft={ageDraft}
+                                    setAgeDraft={setAgeDraft}
+                                    setEditingAgeKey={setEditingAgeKey}
+                                    onSaveAge={updateItemAge}
+                                  />
                                 </div>
                               </>
                             )}

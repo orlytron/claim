@@ -1,174 +1,118 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
-import type { SuggestedUpgrade } from "../lib/suggested-upgrades";
-import { formatSuggestedUpgradeLineWithClaim } from "../lib/suggested-upgrades";
-import {
-  applySuggestionIndices,
-  getSuggestionDelta,
-  suggestionCollapsedHiddenCount,
-  suggestionCollapsedRowIndices,
-  suggestionSelectedDeltaSum,
-} from "../lib/suggestion-apply-engine";
-import type { ClaimItem } from "../lib/types";
+import { useMemo, useState } from "react";
+import { SUGGESTED_UPGRADES } from "../lib/suggested-upgrades";
+import { buildRoomSuggestionSummary } from "../lib/suggestion-original-summary";
 import { formatCurrency } from "../lib/utils";
 
 export type SuggestionConfirmBannerProps = {
-  roomSlug: string;
   roomName: string;
-  claimItems: ClaimItem[];
-  /** Full claim lines (same as claimItems) — used for delta matching across all rooms. */
-  sessionItems: ClaimItem[];
-  list: SuggestedUpgrade[];
-  onApply: (nextClaim: ClaimItem[]) => Promise<void>;
-  onSkip: () => void;
-  /** Persist dismiss so the banner does not reappear for this room. */
-  onSkipPermanent: () => void;
-  disabled?: boolean;
+  onGotIt: () => void;
 };
 
 /**
- * First-visit banner: client confirms which scripted suggestions to apply (nothing auto-applies).
+ * Informational “already applied” summary vs original claim — no apply / no checkboxes.
  */
-export default function SuggestionConfirmBanner({
-  roomSlug,
-  roomName,
-  claimItems,
-  sessionItems,
-  list,
-  onApply,
-  onSkip,
-  onSkipPermanent,
-  disabled,
-}: SuggestionConfirmBannerProps) {
+export default function SuggestionConfirmBanner({ roomName, onGotIt }: SuggestionConfirmBannerProps) {
   const [expanded, setExpanded] = useState(false);
-  const [checked, setChecked] = useState<Set<number>>(() => new Set(list.map((_, i) => i)));
-  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    console.log("Banner items count:", sessionItems.length);
-    const first = list[0];
-    if (first) {
-      console.log("First suggestion delta:", getSuggestionDelta(first, sessionItems));
-    }
-  }, [list, sessionItems]);
+  const { main, meta, totalDelta, hasSuggestions } = useMemo(() => {
+    const list = SUGGESTED_UPGRADES[roomName] ?? [];
+    const sum = buildRoomSuggestionSummary(roomName, list);
+    return { ...sum, hasSuggestions: list.length > 0 };
+  }, [roomName]);
 
-  useLayoutEffect(() => {
-    setExpanded(false);
-    setChecked(new Set(list.map((_, i) => i)));
-  }, [roomSlug, list]);
+  const visibleMain = expanded ? main : main.slice(0, 4);
+  const moreCount = Math.max(0, main.length - 4);
+  const showMetaSection = meta.length > 0 && (expanded || main.length === 0);
 
-  const collapsedIdx = useMemo(
-    () => suggestionCollapsedRowIndices(claimItems, roomName, list, sessionItems),
-    [claimItems, roomName, list, sessionItems]
-  );
-  const moreCount = useMemo(
-    () => suggestionCollapsedHiddenCount(claimItems, roomName, list, sessionItems),
-    [claimItems, roomName, list, sessionItems]
-  );
-
-  const rowIndices = expanded ? list.map((_, i) => i) : collapsedIdx;
-
-  const selectedTotalDelta = useMemo(
-    () => suggestionSelectedDeltaSum(claimItems, roomName, list, checked, sessionItems),
-    [claimItems, roomName, list, checked, sessionItems]
-  );
-
-  function toggle(i: number) {
-    setChecked((prev) => {
-      const n = new Set(prev);
-      if (n.has(i)) n.delete(i);
-      else n.add(i);
-      return n;
-    });
-  }
-
-  async function apply() {
-    if (busy || disabled) return;
-    const idx = [...checked].filter((i) => i >= 0 && i < list.length).sort((a, b) => a - b);
-    if (idx.length === 0) return;
-    setBusy(true);
-    try {
-      const next = applySuggestionIndices(claimItems, roomName, idx, list);
-      await onApply(next);
-    } finally {
-      setBusy(false);
-    }
-  }
+  if (!hasSuggestions || (main.length === 0 && meta.length === 0)) return null;
 
   return (
-    <div className="relative z-20 w-full border-b border-amber-200 bg-gradient-to-b from-amber-50 to-amber-50/40 px-4 py-5 md:px-8">
-      <div className="mx-auto max-w-[1100px] rounded-2xl border border-amber-200/80 bg-white/95 p-5 shadow-sm md:p-6">
-        <p className="text-sm font-bold uppercase tracking-wide text-amber-900">💡 Suggested changes</p>
-        <p className="mt-3 text-base font-semibold text-gray-900">
-          Adding these will increase your claim by{" "}
-          <span className="tabular-nums text-[#16A34A]">
-            {selectedTotalDelta >= 0 ? `+${formatCurrency(selectedTotalDelta)}` : formatCurrency(selectedTotalDelta)}
-          </span>
-        </p>
-        <p className="mt-2 text-sm text-gray-600">Uncheck any row to exclude it. Nothing is added until you confirm.</p>
-        <ul className="mt-4 space-y-2">
-          {rowIndices.map((i) => {
-            const line = formatSuggestedUpgradeLineWithClaim(claimItems, roomName, list[i]!);
-            const delta = getSuggestionDelta(list[i]!, sessionItems);
-            const deltaLabel =
-              delta > 0 ? `+${formatCurrency(delta)}` : delta < 0 ? formatCurrency(delta) : formatCurrency(0);
-            const deltaClass =
-              delta > 0 ? "text-[#16A34A]" : delta < 0 ? "text-red-600" : "text-[#6B7280]";
-            return (
-              <li
-                key={i}
-                className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-100 bg-gray-50/80 px-3 py-2 text-sm"
-              >
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
-                  checked={checked.has(i)}
-                  disabled={busy || disabled}
-                  onChange={() => toggle(i)}
-                />
-                <span className="min-w-0 flex-1 text-gray-900 [overflow-wrap:anywhere]">{line}</span>
-                <span className={`shrink-0 text-sm font-semibold tabular-nums ${deltaClass}`}>{deltaLabel}</span>
-              </li>
-            );
+    <div className="relative z-20 w-full border-b border-emerald-200 bg-gradient-to-b from-emerald-50/90 to-white px-4 py-5 md:px-8">
+      <div className="mx-auto max-w-[1100px] rounded-2xl border border-emerald-200/80 bg-white p-5 shadow-sm md:p-6">
+        <p className="text-sm font-bold uppercase tracking-wide text-emerald-900">✅ We updated this room for you</p>
+        <p className="mt-3 text-base text-gray-700">Based on your lifestyle we made these improvements:</p>
+
+        <ul className="mt-4 space-y-3 text-sm text-gray-900">
+          {visibleMain.map((row, idx) => {
+            if (row.kind === "simple") {
+              return (
+                <li key={`m-${idx}`} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 tabular-nums">
+                  <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{row.text}</span>
+                </li>
+              );
+            }
+            if (row.kind === "split") {
+              const d = row.detail;
+              const net = row.delta;
+              const netClass = net >= 0 ? "text-[#16A34A]" : "text-red-600";
+              return (
+                <li key={`m-${idx}`} className="rounded-lg border border-gray-100 bg-gray-50/80 px-3 py-2">
+                  <p className="font-medium text-gray-900 [overflow-wrap:anywhere]">
+                    {d.matchLabel}{" "}
+                    <span className="text-sm font-normal italic text-gray-500">↕ replaced with:</span>
+                  </p>
+                  <p className="mt-2 pl-2 text-sm text-gray-500 line-through">{d.originalLine}</p>
+                  {d.partLines.map((p, j) => (
+                    <p key={j} className="mt-1 pl-4 text-sm text-[#16A34A]">
+                      + {p.label}
+                      <span className="ml-2 font-semibold tabular-nums">+{formatCurrency(p.lineTotal)}</span>
+                    </p>
+                  ))}
+                  <p className={`mt-2 border-t border-gray-200 pt-2 pl-2 text-sm font-bold tabular-nums ${netClass}`}>
+                    Net change: {net >= 0 ? "+" : ""}
+                    {formatCurrency(net)}
+                  </p>
+                </li>
+              );
+            }
+            return null;
           })}
         </ul>
+
         {!expanded && moreCount > 0 ? (
           <button
             type="button"
             onClick={() => setExpanded(true)}
             className="mt-3 text-sm font-semibold text-[#2563EB] hover:underline"
           >
-            ▶ +{moreCount} more (click to expand)
+            ▶ +{moreCount} more
           </button>
         ) : null}
-        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-          <button
-            type="button"
-            disabled={busy || disabled || checked.size === 0}
-            onClick={() => void apply()}
-            className="rounded-lg bg-[#2563EB] px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-40"
-          >
-            ✓ Apply selected{" "}
-            {selectedTotalDelta >= 0 ? `+${formatCurrency(selectedTotalDelta)}` : formatCurrency(selectedTotalDelta)}
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onSkip}
-            className="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50"
-          >
-            Skip for now
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onSkipPermanent}
-            className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-950 hover:bg-amber-100"
-          >
-            Skip and don&apos;t show again
-          </button>
-        </div>
+
+        {showMetaSection ? (
+          <div className={`${main.length > 0 ? "mt-5 border-t border-gray-200 pt-4" : "mt-4"}`}>
+            <p className="text-xs font-bold uppercase tracking-wide text-gray-500">
+              {main.length === 0 ? "Updates (no dollar change)" : "Also updated (no value change)"}
+            </p>
+            <ul className="mt-2 space-y-1 text-sm text-gray-600">
+              {meta.map((row, i) => (
+                <li key={`meta-${i}`} className="[overflow-wrap:anywhere]">
+                  {row.text}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {main.length > 0 ? (
+          <p className="mt-5 text-base font-bold text-gray-900">
+            {totalDelta >= 0 ? "Total added:" : "Net change:"}{" "}
+            <span className={`tabular-nums ${totalDelta >= 0 ? "text-[#16A34A]" : "text-red-600"}`}>
+              {totalDelta >= 0 ? "+" : ""}
+              {formatCurrency(totalDelta)}
+            </span>
+          </p>
+        ) : null}
+
+        <button
+          type="button"
+          onClick={onGotIt}
+          className="mt-5 min-h-[48px] w-full rounded-xl bg-[#2563EB] text-base font-bold text-white shadow-sm transition hover:bg-blue-700 sm:w-auto sm:px-8"
+        >
+          Got it, let&apos;s go →
+        </button>
       </div>
     </div>
   );

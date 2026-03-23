@@ -9,10 +9,59 @@ export function defaultAge(unit_cost: number): number {
   return 4;
 }
 
+/** Heuristic age for display only when DB still has 0 — not persisted until user saves. */
+export function getRealisticAge(unit_cost: number, category: string, description: string): number {
+  const d = description.toLowerCase();
+
+  if (category === "Electronics") {
+    if (unit_cost > 1000) return 2;
+    return 1;
+  }
+
+  if (category === "Furniture") {
+    if (unit_cost > 5000) return 8;
+    if (unit_cost > 2000) return 5;
+    return 3;
+  }
+
+  if (category === "Appliances") {
+    if (unit_cost > 5000) return 6;
+    return 3;
+  }
+
+  if (category === "Clothing") return 1;
+
+  if (category === "Sports") {
+    if (unit_cost > 1000) return 3;
+    return 2;
+  }
+
+  if (category === "Collectibles") return 0;
+
+  if (category === "Kitchen") {
+    if (unit_cost > 500) return 4;
+    return 2;
+  }
+
+  if (category === "Textiles") return 2;
+
+  if (unit_cost > 5000) return 7;
+  if (unit_cost > 1000) return 4;
+  if (unit_cost > 200) return 2;
+  if (d.length > 0) return 1;
+  return 1;
+}
+
 /** Age shown in UI when line still has 0 in session but user hasn’t set a real age. */
-export function displayAgeYears(item: { age_years: number; age_months?: number; unit_cost: number }): number {
+export function displayAgeYears(item: {
+  age_years: number;
+  age_months?: number;
+  unit_cost: number;
+  category?: string;
+  description?: string;
+}): number {
   if (item.age_years === 0 && (item.age_months ?? 0) === 0) {
-    return defaultAge(item.unit_cost);
+    return getRealisticAge(item.unit_cost, item.category ?? "", item.description ?? "");
   }
   return item.age_years;
 }
