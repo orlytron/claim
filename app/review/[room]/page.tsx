@@ -225,24 +225,6 @@ function SmallSpinner() {
   );
 }
 
-function LockButton({ locked, onToggle }: { locked: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className={`shrink-0 rounded-lg p-2 text-sm leading-none transition-all duration-200 ${
-        locked
-          ? "bg-blue-50 text-[#2563EB] ring-1 ring-blue-200 hover:bg-blue-100"
-          : "text-[#9CA3AF] hover:bg-gray-100"
-      }`}
-      title={locked ? "Unlock row (allow bundle replacements)" : "Lock row (keep this line as-is for bundles)"}
-      aria-pressed={locked}
-    >
-      🔒
-    </button>
-  );
-}
-
 function QtyAdjuster({
   qty,
   disabled,
@@ -455,11 +437,14 @@ function ItemPriceRow({
   accent = "default",
   brand,
   sourceTag,
+  hidePrice,
 }: {
   item: ClaimItem;
   accent?: "default" | "upgrade";
   brand?: string | null;
   sourceTag?: ReactNode;
+  /** When true, only the title/qty-each line (no right-side amount). */
+  hidePrice?: boolean;
 }) {
   const d = cleanDescription(item.description);
   const textColor = accent === "upgrade" ? "text-[#2563EB]" : "text-gray-900";
@@ -479,6 +464,12 @@ function ItemPriceRow({
     </span>
   );
 
+  if (hidePrice) {
+    return (
+      <div className="flex w-full flex-wrap items-baseline gap-x-2 gap-y-1 text-[17px]">{leftCluster}</div>
+    );
+  }
+
   if (item.qty > 1) {
     return (
       <div className="flex w-full flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-[17px]">
@@ -496,6 +487,20 @@ function ItemPriceRow({
         {formatCurrency(item.unit_cost)}
         {rightNote}
       </span>
+    </div>
+  );
+}
+
+function RightPriceColumn({ item }: { item: ClaimItem }) {
+  return (
+    <div className="shrink-0 text-right">
+      {item.qty > 1 ? (
+        <span className="text-[17px] font-bold tabular-nums text-gray-900">
+          = {formatCurrency(item.unit_cost * item.qty)}
+        </span>
+      ) : (
+        <span className="text-[17px] font-bold tabular-nums text-gray-900">{formatCurrency(item.unit_cost)}</span>
+      )}
     </div>
   );
 }
@@ -1549,7 +1554,7 @@ export default function RoomReviewPage() {
                         >
                           ×
                         </button>
-                        <div className="flex min-h-[72px] flex-col gap-3 px-4 py-4 pr-12 md:flex-row md:items-center md:justify-between md:px-6 md:pr-14">
+                        <div className="flex min-h-[72px] items-center gap-4 px-4 py-4 pr-12 md:px-6 md:pr-14">
                           <div className="min-w-0 flex-1">
                             {upgraded && pre ? (
                               <>
@@ -1564,6 +1569,7 @@ export default function RoomReviewPage() {
                                     accent="upgrade"
                                     brand={item.brand}
                                     sourceTag={<SourceTag source={item.source} />}
+                                    hidePrice
                                   />
                                   <div className="flex flex-wrap items-center gap-3">
                                     <QtyAdjuster
@@ -1593,98 +1599,84 @@ export default function RoomReviewPage() {
                                 <p className="mt-1 text-sm font-bold tabular-nums text-[#16A34A]">
                                   +{formatCurrency((item.unit_cost - pre.unit_cost) * item.qty)} added
                                 </p>
-                                <div className="mt-2 flex flex-wrap gap-4">
-                                  <button
-                                    type="button"
-                                    disabled={locked || isSaving}
-                                    onClick={() =>
-                                      isOpen ? setOpenUpgradeKey(null) : setOpenUpgradeKey(rowKey)
-                                    }
-                                    className="text-sm font-medium text-[#2563EB] underline decoration-[#2563EB]/30 underline-offset-2 transition-colors hover:decoration-[#2563EB] disabled:opacity-40"
-                                  >
-                                    {isOpen ? "✕ Close" : "Change"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={locked || isSaving}
-                                    onClick={() => void handleRevert(item)}
-                                    className="text-sm font-medium text-[#6B7280] underline decoration-gray-300 underline-offset-2 disabled:opacity-40"
-                                  >
-                                    Revert
-                                  </button>
-                                </div>
                               </>
                             ) : (
-                              <>
-                                <div className="space-y-2">
-                                  <ItemPriceRow
-                                    item={item}
-                                    brand={item.brand}
-                                    sourceTag={<SourceTag source={item.source} />}
+                              <div className="space-y-2">
+                                <ItemPriceRow
+                                  item={item}
+                                  brand={item.brand}
+                                  sourceTag={<SourceTag source={item.source} />}
+                                  hidePrice
+                                />
+                                <div className="flex flex-wrap items-center gap-3">
+                                  <QtyAdjuster
+                                    qty={item.qty}
+                                    disabled={locked || isSaving}
+                                    onChange={(q) => void updateItemQty(item, q)}
                                   />
-                                  <div className="flex flex-wrap items-center gap-3">
-                                    <QtyAdjuster
-                                      qty={item.qty}
-                                      disabled={locked || isSaving}
-                                      onChange={(q) => void updateItemQty(item, q)}
-                                    />
-                                    {qtyFlashKey === lk ? (
-                                      <span className="text-xs font-medium text-[#16A34A] transition-opacity duration-300">
-                                        Qty updated
-                                      </span>
-                                    ) : null}
-                                    <span className="text-[#6B7280]">·</span>
-                                    <AgeEditorBlock
-                                      lk={lk}
-                                      item={item}
-                                      locked={locked}
-                                      isSaving={isSaving}
-                                      editingAgeKey={editingAgeKey}
-                                      ageDraft={ageDraft}
-                                      setAgeDraft={setAgeDraft}
-                                      setEditingAgeKey={setEditingAgeKey}
-                                      onSaveAge={updateItemAge}
-                                    />
-                                  </div>
+                                  {qtyFlashKey === lk ? (
+                                    <span className="text-xs font-medium text-[#16A34A] transition-opacity duration-300">
+                                      Qty updated
+                                    </span>
+                                  ) : null}
+                                  <span className="text-[#6B7280]">·</span>
+                                  <AgeEditorBlock
+                                    lk={lk}
+                                    item={item}
+                                    locked={locked}
+                                    isSaving={isSaving}
+                                    editingAgeKey={editingAgeKey}
+                                    ageDraft={ageDraft}
+                                    setAgeDraft={setAgeDraft}
+                                    setEditingAgeKey={setEditingAgeKey}
+                                    onSaveAge={updateItemAge}
+                                  />
                                 </div>
-                              </>
+                              </div>
                             )}
                           </div>
-                          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                          <div className="flex w-32 shrink-0 flex-col items-center justify-center md:w-40">
                             {showAccordion && !upgraded ? (
-                              <>
+                              isOpen ? (
                                 <button
                                   type="button"
-                                  disabled={locked || isSaving}
                                   onClick={() => setOpenUpgradeKey(null)}
-                                  className="inline-flex h-10 items-center justify-center rounded-lg border-2 border-gray-300 bg-white px-3 text-sm font-semibold text-gray-700 transition-all duration-200 hover:border-gray-400 hover:bg-gray-50 disabled:opacity-40"
+                                  className="text-sm font-semibold text-gray-500 hover:text-gray-700"
                                 >
-                                  Keep ✓
+                                  ✕ Close
                                 </button>
-                                {isOpen ? (
-                                  <button
-                                    type="button"
-                                    disabled={locked || isSaving}
-                                    onClick={() => setOpenUpgradeKey(null)}
-                                    className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-lg border-2 border-gray-400 bg-white px-3 text-sm font-semibold text-gray-700 transition-all duration-200 hover:bg-gray-50 disabled:opacity-40"
-                                  >
-                                    {isSaving ? <SmallSpinner /> : null}
-                                    ✕ Close
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    disabled={locked || isSaving}
-                                    onClick={() => setOpenUpgradeKey(rowKey)}
-                                    className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-lg border-2 border-[#2563EB] bg-white px-3 text-sm font-semibold text-[#2563EB] transition-all duration-200 hover:bg-blue-50 disabled:opacity-40"
-                                  >
-                                    <span aria-hidden>↑</span> Upgrade
-                                  </button>
-                                )}
-                              </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled={isSaving}
+                                  onClick={() => setOpenUpgradeKey(rowKey)}
+                                  className="inline-flex items-center gap-1.5 rounded-lg border-2 border-[#2563EB] bg-white px-4 py-2 text-sm font-semibold text-[#2563EB] hover:bg-blue-50 disabled:opacity-40"
+                                >
+                                  <span aria-hidden>↑</span> Upgrade
+                                </button>
+                              )
                             ) : null}
-                            {allowUpgradeUi ? <LockButton locked={locked} onToggle={() => toggleLock(lk)} /> : null}
+                            {upgraded ? (
+                              <div className="flex flex-col items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => (isOpen ? setOpenUpgradeKey(null) : setOpenUpgradeKey(rowKey))}
+                                  className="text-sm font-semibold text-[#2563EB]"
+                                >
+                                  {isOpen ? "✕ Close" : "Change"}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isSaving}
+                                  onClick={() => void handleRevert(item)}
+                                  className="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-40"
+                                >
+                                  Revert
+                                </button>
+                              </div>
+                            ) : null}
                           </div>
+                          <RightPriceColumn item={item} />
                         </div>
 
                         {showAccordion ? (
@@ -1831,33 +1823,9 @@ export default function RoomReviewPage() {
                 ) : smartStatus === "error" ? (
                   <div className="mt-4 space-y-4">
                     <p className="text-sm text-amber-900">
-                      Couldn&apos;t identify those items. Try describing in more detail, or use the form below to send us
-                      a note.
+                      Couldn&apos;t identify those items. Try describing in more detail, or send us a note using the link
+                      below.
                     </p>
-                    <div className="border-t border-gray-100 pt-4">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Send a note</p>
-                      <textarea
-                        className="mt-2 w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder-gray-400"
-                        rows={3}
-                        placeholder="Description"
-                        value={requestText}
-                        onChange={(e) => {
-                          setRequestText(e.target.value);
-                          if (requestStatus === "error") setRequestStatus("idle");
-                        }}
-                      />
-                      {requestStatus === "error" ? (
-                        <p className="mt-2 text-xs text-red-600">Could not send — try again.</p>
-                      ) : null}
-                      <button
-                        type="button"
-                        disabled={!requestText.trim() || requestStatus === "loading"}
-                        onClick={() => void sendSpecificItemRequest()}
-                        className="mt-3 rounded-lg bg-[#2563EB] px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-                      >
-                        {requestStatus === "loading" ? "Sending…" : "Send Request"}
-                      </button>
-                    </div>
                     <button
                       type="button"
                       className="text-sm font-semibold text-[#2563EB] underline"
@@ -1890,46 +1858,42 @@ export default function RoomReviewPage() {
                     >
                       Find Items →
                     </button>
-                    <div className="mt-6 border-t border-gray-100 pt-4">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Or send a simple note</p>
-                      {requestStatus === "success" ? (
-                        <div className="mt-2">
-                          <p className="text-sm font-medium text-[#16A34A]">Request sent — thank you.</p>
-                          <button
-                            type="button"
-                            className="mt-2 text-sm font-semibold text-[#2563EB] underline"
-                            onClick={() => setRequestStatus("idle")}
-                          >
-                            Send another
-                          </button>
-                        </div>
-                      ) : (
-                        <>
-                          <textarea
-                            className="mt-2 w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder-gray-400"
-                            rows={2}
-                            placeholder="Description"
-                            value={requestText}
-                            onChange={(e) => {
-                              setRequestText(e.target.value);
-                              if (requestStatus === "error") setRequestStatus("idle");
-                            }}
-                          />
-                          {requestStatus === "error" ? (
-                            <p className="mt-2 text-xs text-red-600">Could not send — try again.</p>
-                          ) : null}
-                          <button
-                            type="button"
-                            disabled={!requestText.trim() || requestStatus === "loading"}
-                            onClick={() => void sendSpecificItemRequest()}
-                            className="mt-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:opacity-40"
-                          >
-                            {requestStatus === "loading" ? "Sending…" : "Send Request"}
-                          </button>
-                        </>
-                      )}
-                    </div>
                   </>
+                )}
+              </div>
+
+              <div className="mt-6">
+                {requestStatus === "success" ? (
+                  <p className="text-sm text-[#16A34A]">Note sent ✓</p>
+                ) : (
+                  <details className="group">
+                    <summary className="cursor-pointer list-none text-sm text-[#6B7280] hover:text-gray-900">
+                      <span>Can&apos;t find it? Send us a note →</span>
+                    </summary>
+                    <div className="mt-3 space-y-2">
+                      <textarea
+                        className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder-gray-400"
+                        rows={2}
+                        placeholder="Describe the item..."
+                        value={requestText}
+                        onChange={(e) => {
+                          setRequestText(e.target.value);
+                          if (requestStatus === "error") setRequestStatus("idle");
+                        }}
+                      />
+                      {requestStatus === "error" ? (
+                        <p className="text-xs text-red-600">Could not send — try again.</p>
+                      ) : null}
+                      <button
+                        type="button"
+                        disabled={!requestText.trim() || requestStatus === "loading"}
+                        onClick={() => void sendSpecificItemRequest()}
+                        className="rounded-lg bg-gray-800 px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
+                      >
+                        {requestStatus === "loading" ? "Sending…" : "Send"}
+                      </button>
+                    </div>
+                  </details>
                 )}
               </div>
             </section>

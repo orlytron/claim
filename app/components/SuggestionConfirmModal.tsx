@@ -2,15 +2,12 @@
 
 import { useLayoutEffect, useMemo, useState } from "react";
 import type { SuggestedUpgrade } from "../lib/suggested-upgrades";
-import { formatSuggestedUpgradeLineWithClaim } from "../lib/suggested-upgrades";
 import {
   applySuggestionIndices,
-  findClaimLineInRoom,
   getSuggestionDelta,
-  suggestionCollapsedHiddenCount,
-  suggestionCollapsedRowIndices,
   suggestionSelectedDeltaSum,
 } from "../lib/suggestion-apply-engine";
+import { formatSuggestionLine, suggestionDeltaColumn } from "../lib/suggestion-format-line";
 import type { ClaimItem } from "../lib/types";
 import { formatCurrency } from "../lib/utils";
 
@@ -26,10 +23,6 @@ export type SuggestionConfirmModalProps = {
   onDismiss: () => void;
   disabled?: boolean;
 };
-
-function lineLabel(claim: ClaimItem[], room: string, s: SuggestedUpgrade): string {
-  return formatSuggestedUpgradeLineWithClaim(claim, room, s).replace(/^☑\s*/, "").trim();
-}
 
 /**
  * Centered modal — nothing applies until the user clicks Apply Selected.
@@ -56,16 +49,12 @@ export default function SuggestionConfirmModal({
     setChecked(new Set(list.map((_, i) => i)));
   }, [open, roomSlug, list]);
 
-  const collapsedIdx = useMemo(
-    () => suggestionCollapsedRowIndices(claimItems, roomName, list, sessionItems),
-    [claimItems, roomName, list, sessionItems]
+  const rowIndices = expanded ? list.map((_, i) => i) : list.slice(0, 4).map((_, i) => i);
+  const moreCount = expanded ? 0 : Math.max(0, list.length - 4);
+  const correctionCount = useMemo(
+    () => list.filter((s) => s.type === "RENAME" || s.type === "MOVE").length,
+    [list]
   );
-  const moreCount = useMemo(
-    () => suggestionCollapsedHiddenCount(claimItems, roomName, list, sessionItems),
-    [claimItems, roomName, list, sessionItems]
-  );
-
-  const rowIndices = expanded ? list.map((_, i) => i) : collapsedIdx;
 
   const selectedTotalDelta = useMemo(
     () => suggestionSelectedDeltaSum(claimItems, roomName, list, checked, sessionItems),
@@ -111,7 +100,6 @@ export default function SuggestionConfirmModal({
         <button
           type="button"
           onClick={onDismiss}
-          disabled={busy}
           className="absolute right-3 top-3 rounded-lg p-2 text-lg leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-700"
           aria-label="Close"
         >
@@ -126,51 +114,8 @@ export default function SuggestionConfirmModal({
           {rowIndices.map((i) => {
             const s = list[i]!;
             const delta = getSuggestionDelta(s, claimItems);
-            const deltaLabel =
-              delta > 0 ? `+${formatCurrency(delta)}` : delta < 0 ? formatCurrency(delta) : formatCurrency(0);
-            const deltaClass =
-              delta > 0 ? "text-[#16A34A]" : delta < 0 ? "text-red-600" : "text-[#6B7280]";
-
-            if (s.type === "SPLIT") {
-              const orig = findClaimLineInRoom(claimItems, roomName, s.match_description);
-              const origTotal = orig ? orig.qty * orig.unit_cost : 0;
-              const origLineStr = orig
-                ? `${orig.qty} × ${orig.description} @ ${formatCurrency(orig.unit_cost)} = ${formatCurrency(origTotal)}`
-                : "—";
-              const aTot = s.item_a.qty * s.item_a.unit_cost;
-              const bTot = s.item_b.qty * s.item_b.unit_cost;
-              return (
-                <li key={i} className="rounded-lg border border-gray-100 bg-gray-50/90 px-3 py-2 text-sm">
-                  <div className="flex gap-2">
-                    <input
-                      type="checkbox"
-                      className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-[#2563EB]"
-                      checked={checked.has(i)}
-                      disabled={busy || disabled}
-                      onChange={() => toggle(i)}
-                    />
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <p className="font-medium text-gray-900 [overflow-wrap:anywhere]">
-                        {s.match_description}{" "}
-                        <span className="text-sm font-normal italic text-gray-500">↕ replaced with:</span>
-                      </p>
-                      <p className="pl-2 text-sm text-gray-500 line-through">{origLineStr}</p>
-                      <p className="pl-4 text-sm text-[#16A34A]">
-                        + {s.item_a.description} {s.item_a.qty} × {formatCurrency(s.item_a.unit_cost)}
-                        <span className="ml-2 font-semibold tabular-nums">+{formatCurrency(aTot)}</span>
-                      </p>
-                      <p className="pl-4 text-sm text-[#16A34A]">
-                        + {s.item_b.description} {s.item_b.qty} × {formatCurrency(s.item_b.unit_cost)}
-                        <span className="ml-2 font-semibold tabular-nums">+{formatCurrency(bTot)}</span>
-                      </p>
-                    </div>
-                    <span className={`shrink-0 self-start text-sm font-bold tabular-nums ${deltaClass}`}>{deltaLabel}</span>
-                  </div>
-                </li>
-              );
-            }
-
-            const line = lineLabel(claimItems, roomName, s);
+            const { text: deltaText, className: deltaClass } = suggestionDeltaColumn(s, delta, "modal");
+            const line = formatSuggestionLine(s, delta);
             return (
               <li
                 key={i}
@@ -184,11 +129,16 @@ export default function SuggestionConfirmModal({
                   onChange={() => toggle(i)}
                 />
                 <span className="min-w-0 flex-1 text-gray-900 [overflow-wrap:anywhere]">{line}</span>
-                <span className={`shrink-0 text-sm font-semibold tabular-nums ${deltaClass}`}>{deltaLabel}</span>
+                <span className={`shrink-0 text-sm font-semibold tabular-nums ${deltaClass}`}>{deltaText}</span>
               </li>
             );
           })}
         </ul>
+        {correctionCount > 0 ? (
+          <p className="mt-3 text-xs text-gray-600">
+            Also included: {correctionCount} description correction{correctionCount === 1 ? "" : "s"} (no dollar impact)
+          </p>
+        ) : null}
         {!expanded && moreCount > 0 ? (
           <button
             type="button"

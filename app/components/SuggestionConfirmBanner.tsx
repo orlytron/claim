@@ -2,12 +2,12 @@
 
 import { useLayoutEffect, useMemo, useState } from "react";
 import type { SuggestedUpgrade } from "../lib/suggested-upgrades";
-import { formatSuggestedUpgradeLineWithClaim } from "../lib/suggested-upgrades";
 import {
   applySuggestionIndices,
   getSuggestionDelta,
   suggestionSelectedDeltaSum,
 } from "../lib/suggestion-apply-engine";
+import { formatSuggestionLine, suggestionDeltaColumn } from "../lib/suggestion-format-line";
 import type { ClaimItem } from "../lib/types";
 import { formatCurrency } from "../lib/utils";
 
@@ -20,10 +20,6 @@ export type SuggestionConfirmBannerProps = {
   onApplySuggestions: (nextClaim?: ClaimItem[]) => Promise<void>;
   onSkipForNow: () => void;
 };
-
-function lineLabel(claim: ClaimItem[], room: string, s: SuggestedUpgrade): string {
-  return formatSuggestedUpgradeLineWithClaim(claim, room, s).replace(/^☑\s*/, "").trim();
-}
 
 /**
  * First-visit banner: checkboxes + live totals vs current claim; Apply runs only on button click.
@@ -53,6 +49,10 @@ export default function SuggestionConfirmBanner({
   );
 
   const hiddenCount = Math.max(0, list.length - 4);
+  const correctionCount = useMemo(
+    () => list.filter((s) => s.type === "RENAME" || s.type === "MOVE").length,
+    [list]
+  );
 
   const rowsToRender = useMemo(() => {
     const slice = expanded ? list : list.slice(0, 4);
@@ -60,9 +60,9 @@ export default function SuggestionConfirmBanner({
       s,
       i,
       d: getSuggestionDelta(s, currentClaimItems),
-      label: lineLabel(currentClaimItems, roomName, s),
+      label: formatSuggestionLine(s, getSuggestionDelta(s, currentClaimItems)),
     }));
-  }, [expanded, list, currentClaimItems, roomName]);
+  }, [expanded, list, currentClaimItems]);
 
   async function apply() {
     if (busy || disabled) return;
@@ -97,34 +97,36 @@ export default function SuggestionConfirmBanner({
       </div>
 
       <ul className="mt-3 space-y-1.5">
-        {rowsToRender.map(({ s, i, d, label }) => (
-          <li key={i} className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="mt-0.5 h-4 w-4 shrink-0 rounded border-amber-300 accent-amber-800"
-              checked={checked.has(i)}
-              disabled={busy || disabled}
-              onChange={() => {
-                setChecked((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(i)) next.delete(i);
-                  else next.add(i);
-                  return next;
-                });
-              }}
-            />
-            <span className="min-w-0 flex-1 text-amber-950 [overflow-wrap:anywhere]">{label}</span>
-            <span
-              className={`shrink-0 text-sm font-bold tabular-nums ${
-                d > 0 ? "text-green-700" : d < 0 ? "text-red-600" : "text-amber-800/70"
-              }`}
-            >
-              {d > 0 ? "+" : ""}
-              {formatCurrency(d)}
-            </span>
-          </li>
-        ))}
+        {rowsToRender.map(({ s, i, d, label }) => {
+          const { text: deltaText, className: deltaCls } = suggestionDeltaColumn(s, d, "banner");
+          return (
+            <li key={i} className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-amber-300 accent-amber-800"
+                checked={checked.has(i)}
+                disabled={busy || disabled}
+                onChange={() => {
+                  setChecked((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(i)) next.delete(i);
+                    else next.add(i);
+                    return next;
+                  });
+                }}
+              />
+              <span className="min-w-0 flex-1 text-amber-950 [overflow-wrap:anywhere]">{label}</span>
+              <span className={`shrink-0 text-sm font-bold tabular-nums ${deltaCls}`}>{deltaText}</span>
+            </li>
+          );
+        })}
       </ul>
+
+      {correctionCount > 0 ? (
+        <p className="mt-2 text-xs text-amber-800/90">
+          Also included: {correctionCount} description correction{correctionCount === 1 ? "" : "s"} (no dollar impact)
+        </p>
+      ) : null}
 
       {hiddenCount > 0 ? (
         <button
