@@ -13,6 +13,7 @@ import {
   getConsumableBundlesForRoom,
   getFocusedBundlesForRoom,
 } from "../../lib/bundles-client-catalog";
+import { sumPendingCompleteTierFocusedBundles } from "../../lib/focused-bundle-complete-tier";
 import { mergeClaimIncoming } from "../../lib/claim-item-merge";
 import { CLAIM_GOAL_DEFAULT, DEFAULT_ROOM_TARGETS } from "../../lib/room-targets";
 import { readRoomGoal, writeRoomGoal } from "../../lib/room-goals";
@@ -480,8 +481,9 @@ export default function RoomReviewPage() {
   const [lockedKeys, setLockedKeys] = useState<string[]>([]);
   const [roomTarget, setRoomTarget] = useState(0);
   const [claimGoal, setClaimGoal] = useState(CLAIM_GOAL_DEFAULT);
-  const [editTarget, setEditTarget] = useState(false);
+  const [editingTarget, setEditingTarget] = useState(false);
   const [targetInput, setTargetInput] = useState("");
+  const targetEditInputRef = useRef<HTMLInputElement>(null);
   const [openUpgradeKey, setOpenUpgradeKey] = useState<string | null>(null);
   const [requestText, setRequestText] = useState("");
   const [requestStatus, setRequestStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
@@ -565,6 +567,19 @@ export default function RoomReviewPage() {
     const shown = typeof window !== "undefined" ? localStorage.getItem(key) : null;
     if (!shown) setShowBanner(true);
   }, [sessionLoaded, roomSlug, roomName, claimItemCount]);
+
+  useEffect(() => {
+    if (!editingTarget) {
+      setTargetInput(String(roomTarget));
+    }
+  }, [roomTarget, editingTarget]);
+
+  useEffect(() => {
+    if (editingTarget) {
+      targetEditInputRef.current?.focus();
+      targetEditInputRef.current?.select();
+    }
+  }, [editingTarget]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -687,6 +702,18 @@ export default function RoomReviewPage() {
 
   const progressPct = roomTarget > 0 ? Math.min(100, Math.round((roomTotal / roomTarget) * 100)) : 0;
   const gapSigned = roomTotal - roomTarget;
+
+  const pendingFocusedCompleteSum = useMemo(() => {
+    if (!roomName || !session?.claim_items) return 0;
+    return sumPendingCompleteTierFocusedBundles(
+      roomName,
+      session.claim_items,
+      getFocusedBundlesForRoom(roomName)
+    );
+  }, [roomName, session?.claim_items]);
+
+  const projectedRoomTotal = Math.round((roomTotal + pendingFocusedCompleteSum) * 100) / 100;
+  const projectedGapSigned = projectedRoomTotal - roomTarget;
 
   const roomNavIndex = useMemo(() => ROOM_ORDER.findIndex((r) => r.slug === roomSlug), [roomSlug]);
   const navPrev = roomNavIndex > 0 ? ROOM_ORDER[roomNavIndex - 1]! : null;
@@ -1056,13 +1083,18 @@ export default function RoomReviewPage() {
     }
   }
 
-  function saveTargetFromEdit() {
-    const raw = parseInt(targetInput.replace(/\D/g, ""), 10);
-    if (Number.isNaN(raw) || raw < 0) return;
-    const v = roundRoomGoalSlider(raw);
-    setRoomTarget(v);
-    writeRoomGoal(sessionId, roomName, v);
-    setEditTarget(false);
+  function saveTarget() {
+    if (!roomName) {
+      setEditingTarget(false);
+      return;
+    }
+    const raw = parseInt(String(targetInput).replace(/\D/g, ""), 10);
+    if (!Number.isNaN(raw) && raw > 0) {
+      const v = roundRoomGoalSlider(raw);
+      writeRoomGoal(sessionId, roomName, v);
+      setRoomTarget(v);
+    }
+    setEditingTarget(false);
   }
 
   if (!hydrated) {
@@ -1107,12 +1139,13 @@ export default function RoomReviewPage() {
       {session && showBanner && showRoomChrome && roomSuggestionList.length > 0 ? (
         <SuggestionConfirmBanner
           roomName={roomName}
-          onGotIt={() => {
+          onApplySuggestions={() => {
             if (typeof window !== "undefined" && roomSlug) {
               localStorage.setItem(`suggestions_shown_${roomSlug}`, "shown");
             }
             setShowBanner(false);
           }}
+          onSkipForNow={() => setShowBanner(false)}
         />
       ) : null}
       {loadError ? (
@@ -1208,20 +1241,58 @@ export default function RoomReviewPage() {
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2 tabular-nums">
                   <span className="text-[#6B7280]">Target:</span>
-                  <span className="inline-flex flex-wrap items-center gap-2 font-semibold text-gray-900">
-                    {formatCurrency(roomTarget)}
-                    <button
-                      type="button"
-                      className="text-base leading-none text-[#2563EB]"
-                      onClick={() => {
-                        setTargetInput(String(roomTarget));
-                        setEditTarget(true);
-                      }}
-                      aria-label="Edit target"
-                    >
-                      ✏️ Edit target
-                    </button>
-                  </span>
+                  {editingTarget ? (
+                    <span className="inline-flex flex-wrap items-center gap-2">
+                      <input
+                        ref={targetEditInputRef}
+                        type="number"
+                        min={1}
+                        className="w-40 max-w-[55vw] rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm font-semibold tabular-nums text-gray-900"
+                        value={targetInput}
+                        onChange={(e) => setTargetInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") saveTarget();
+                          if (e.key === "Escape") {
+                            setEditingTarget(false);
+                            setTargetInput(String(roomTarget));
+                          }
+                        }}
+                        autoFocus
+                      />
+                      <button
+                        type="button"
+                        onClick={() => saveTarget()}
+                        className="rounded-lg bg-[#2563EB] px-3 py-1.5 text-sm font-bold text-white hover:bg-blue-700"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingTarget(false);
+                          setTargetInput(String(roomTarget));
+                        }}
+                        className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <span className="inline-flex flex-wrap items-center gap-2 font-semibold text-gray-900">
+                      {formatCurrency(roomTarget)}
+                      <button
+                        type="button"
+                        className="text-base leading-none text-[#2563EB] hover:opacity-80"
+                        onClick={() => {
+                          setTargetInput(String(roomTarget));
+                          setEditingTarget(true);
+                        }}
+                        aria-label="Edit target"
+                      >
+                        ✏️
+                      </button>
+                    </span>
+                  )}
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2 tabular-nums">
                   <span className="text-[#6B7280]">Gap:</span>
@@ -1238,6 +1309,32 @@ export default function RoomReviewPage() {
                       style={{ width: `${progressPct}%` }}
                     />
                   </div>
+                </div>
+                <div className="mt-4 space-y-1.5 border-t border-gray-200 pt-3 text-xs tabular-nums text-gray-800 md:text-sm">
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <span className="text-[#6B7280]">Current value:</span>
+                    <span className="font-medium text-gray-900">{formatCurrency(roomTotal)}</span>
+                  </div>
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <span className="text-[#6B7280]">+ If you add all (focused Complete ★):</span>
+                    <span className="font-medium text-[#16A34A]">+{formatCurrency(pendingFocusedCompleteSum)}</span>
+                  </div>
+                  <div className="flex flex-wrap justify-between gap-2 font-semibold text-gray-900">
+                    <span>= Projected:</span>
+                    <span>{formatCurrency(projectedRoomTotal)}</span>
+                  </div>
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <span className="text-[#6B7280]">Target:</span>
+                    <span className="font-medium">{formatCurrency(roomTarget)}</span>
+                  </div>
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <span className="text-[#6B7280]">Still needed:</span>
+                    <span className="font-semibold text-gray-900">{formatSignedGap(projectedGapSigned)}</span>
+                  </div>
+                  <p className="pt-1 text-sm font-medium text-gray-900">
+                    With recommended additions: {formatCurrency(projectedRoomTotal)} of {formatCurrency(roomTarget)}{" "}
+                    target
+                  </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 border-t border-gray-200 pt-3 text-xs md:text-sm">
                   <button
@@ -1265,37 +1362,6 @@ export default function RoomReviewPage() {
                   ) : null}
                 </div>
               </div>
-
-              {editTarget && (
-                <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-                  <label className="text-sm font-medium text-gray-700">
-                    New target:{" "}
-                    <span className="text-[#6B7280]">($)</span>
-                  </label>
-                  <input
-                    className="w-full max-w-xs rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm tabular-nums"
-                    value={targetInput}
-                    onChange={(e) => setTargetInput(e.target.value)}
-                    placeholder="350000"
-                  />
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={saveTargetFromEdit}
-                      className="rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white transition-all duration-200 hover:bg-blue-700"
-                    >
-                      Save
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEditTarget(false)}
-                      className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
 
               <p className="mt-6 text-xs leading-relaxed text-[#6B7280] md:text-sm">
                 Upgrade existing items below, then add bundles to reach your target.

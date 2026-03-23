@@ -339,69 +339,54 @@ export default function FocusedAdditionCard({
     ? (["Essential", "Enhanced", "Complete ★", "Full", "Ultimate"] as const)
     : (["Essential", "Complete ★", "Full"] as const);
 
-  const currentTierLabel = labelRow[Math.min(effectiveTier, labelRow.length - 1)] ?? labelRow[0];
-  const currentTierPrice = tierTotals[effectiveTier] ?? 0;
-
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
       <div className="min-w-0">
         <p className="text-lg font-semibold text-gray-900 [overflow-wrap:anywhere]">{bundle.name}</p>
         <p className="mt-1 text-sm text-[#6B7280] [overflow-wrap:anywhere]">{bundle.description}</p>
+        <p className="mt-2 text-sm font-medium tabular-nums text-gray-600">
+          {tierItemCount} items · {formatCurrency(tierItemsTotal)}
+        </p>
       </div>
 
       {tierCount > 1 ? (
-        <div className="mt-5">
+        <div className="mt-5 overflow-x-auto pb-1 [-webkit-overflow-scrolling:touch]">
           <div
-            className={`grid gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-[#6B7280] sm:text-[11px] ${
-              five ? "grid-cols-5" : "grid-cols-3"
-            }`}
-          >
-            {labelRow.map((lab, i) => (
-              <span
-                key={lab}
-                className={`text-center ${effectiveTier === i ? "text-[#2563EB]" : ""} ${i > maxTierIndex ? "opacity-30" : ""}`}
-              >
-                {lab}
-                {lab.includes("★") ? <span className="sr-only"> recommended</span> : null}
-              </span>
-            ))}
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={maxTierIndex}
-            step={1}
-            value={effectiveTier}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              setTierIndex(Math.min(Math.max(0, v), maxTierIndex));
-            }}
-            disabled={disabled || added}
-            className="mt-2 h-3 w-full accent-[#2563EB]"
+            className={`grid gap-2 ${five ? "min-w-[420px] grid-cols-5 sm:min-w-0" : "grid-cols-3"}`}
+            role="tablist"
             aria-label="Bundle tier"
-          />
-          <div
-            className={`mt-1 grid gap-0.5 px-0.5 text-[10px] font-semibold tabular-nums text-gray-900 sm:text-xs ${
-              five ? "grid-cols-5" : "grid-cols-3"
-            }`}
           >
-            {tierTotals.map((t, i) => (
-              <span key={i} className={`text-center ${i > maxTierIndex ? "opacity-30" : ""}`}>
-                {formatCurrency(t)}
-              </span>
-            ))}
+          {labelRow.slice(0, maxTierIndex + 1).map((lab, i) => {
+            const active = effectiveTier === i;
+            const total = tierTotals[i] ?? 0;
+            return (
+              <div key={lab} className="flex min-w-0 flex-col items-center gap-1.5">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  disabled={disabled || added}
+                  onClick={() => setTierIndex(i)}
+                  className={`w-full min-h-[44px] rounded-lg border-2 px-1.5 py-2 text-center text-[10px] font-bold leading-tight transition sm:text-xs ${
+                    active
+                      ? "border-[#2563EB] bg-[#2563EB] text-white shadow-sm"
+                      : "border-gray-300 bg-white text-gray-600 hover:border-gray-400"
+                  } disabled:opacity-40`}
+                >
+                  {lab}
+                  {lab.includes("★") ? <span className="sr-only"> recommended tier</span> : null}
+                </button>
+                <span className="text-[10px] font-semibold tabular-nums text-gray-800 sm:text-xs">{formatCurrency(total)}</span>
+              </div>
+            );
+          })}
           </div>
-          <p className="mt-3 text-center text-sm font-bold text-gray-900">
-            {currentTierLabel.replace("★", "★ ")}{" "}
-            <span className="tabular-nums font-bold text-[#2563EB]">{formatCurrency(currentTierPrice)}</span>
-          </p>
         </div>
       ) : null}
 
       <ul className="mt-5 space-y-2">
         {rows.map((r) => {
           const k = lineKey(r, effectiveTier, cumulativeFive);
-          const isNew = r.introducedAt === effectiveTier && effectiveTier > 0;
           const conflict = singletonInClaim(r.row.description, existingItems);
           const row = r.row;
           const ext = lineTotal(row);
@@ -424,9 +409,6 @@ export default function FocusedAdditionCard({
                   <span className="font-medium text-gray-900 [overflow-wrap:anywhere]">
                     {row.description}
                     {row.qty > 1 ? <span className="whitespace-nowrap"> ×{row.qty}</span> : null}
-                    {isNew ? (
-                      <span className="ml-2 whitespace-nowrap text-[11px] font-bold text-blue-600">★ New</span>
-                    ) : null}
                   </span>
                   <span className="shrink-0 text-right text-sm font-semibold tabular-nums text-gray-900">
                     {formatCurrency(ext)}

@@ -7,13 +7,20 @@ import { formatCurrency } from "../lib/utils";
 
 export type SuggestionConfirmBannerProps = {
   roomName: string;
-  onGotIt: () => void;
+  /** Primary dismiss — typically persists “seen” and closes. */
+  onApplySuggestions: () => void;
+  /** Dismiss without persisting seen state. */
+  onSkipForNow: () => void;
 };
 
 /**
- * Informational “already applied” summary vs original claim — no apply / no checkboxes.
+ * Informational summary vs original claim (suggestions already reflected in data).
  */
-export default function SuggestionConfirmBanner({ roomName, onGotIt }: SuggestionConfirmBannerProps) {
+export default function SuggestionConfirmBanner({
+  roomName,
+  onApplySuggestions,
+  onSkipForNow,
+}: SuggestionConfirmBannerProps) {
   const [expanded, setExpanded] = useState(false);
 
   const { main, meta, totalDelta, hasSuggestions } = useMemo(() => {
@@ -29,10 +36,12 @@ export default function SuggestionConfirmBanner({ roomName, onGotIt }: Suggestio
   if (!hasSuggestions || (main.length === 0 && meta.length === 0)) return null;
 
   return (
-    <div className="relative z-20 w-full border-b border-emerald-200 bg-gradient-to-b from-emerald-50/90 to-white px-4 py-5 md:px-8">
-      <div className="mx-auto max-w-[1100px] rounded-2xl border border-emerald-200/80 bg-white p-5 shadow-sm md:p-6">
-        <p className="text-sm font-bold uppercase tracking-wide text-emerald-900">✅ We updated this room for you</p>
-        <p className="mt-3 text-base text-gray-700">Based on your lifestyle we made these improvements:</p>
+    <div className="relative z-20 w-full border-b border-amber-200 bg-gradient-to-b from-amber-50/90 to-white px-4 py-5 md:px-8">
+      <div className="mx-auto max-w-[1100px] rounded-2xl border border-amber-200/80 bg-white p-5 shadow-sm md:p-6">
+        <p className="text-sm font-bold uppercase tracking-wide text-amber-950">Suggested changes for this room</p>
+        <p className="mt-3 text-base text-gray-700">
+          Based on your lifestyle profile, we recommend these updates
+        </p>
 
         <ul className="mt-4 space-y-3 text-sm text-gray-900">
           {visibleMain.map((row, idx) => {
@@ -84,7 +93,7 @@ export default function SuggestionConfirmBanner({ roomName, onGotIt }: Suggestio
         {showMetaSection ? (
           <div className={`${main.length > 0 ? "mt-5 border-t border-gray-200 pt-4" : "mt-4"}`}>
             <p className="text-xs font-bold uppercase tracking-wide text-gray-500">
-              {main.length === 0 ? "Updates (no dollar change)" : "Also updated (no value change)"}
+              {main.length === 0 ? "Suggested changes based on your profile" : "Also updated (no value change)"}
             </p>
             <ul className="mt-2 space-y-1 text-sm text-gray-600">
               {meta.map((row, i) => (
@@ -98,7 +107,7 @@ export default function SuggestionConfirmBanner({ roomName, onGotIt }: Suggestio
 
         {main.length > 0 ? (
           <p className="mt-5 text-base font-bold text-gray-900">
-            {totalDelta >= 0 ? "Total added:" : "Net change:"}{" "}
+            {totalDelta >= 0 ? "Total to add:" : "Net change:"}{" "}
             <span className={`tabular-nums ${totalDelta >= 0 ? "text-[#16A34A]" : "text-red-600"}`}>
               {totalDelta >= 0 ? "+" : ""}
               {formatCurrency(totalDelta)}
@@ -106,13 +115,25 @@ export default function SuggestionConfirmBanner({ roomName, onGotIt }: Suggestio
           </p>
         ) : null}
 
-        <button
-          type="button"
-          onClick={onGotIt}
-          className="mt-5 min-h-[48px] w-full rounded-xl bg-[#2563EB] text-base font-bold text-white shadow-sm transition hover:bg-blue-700 sm:w-auto sm:px-8"
-        >
-          Got it, let&apos;s go →
-        </button>
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <button
+            type="button"
+            onClick={onApplySuggestions}
+            className="min-h-[48px] rounded-xl bg-[#2563EB] px-6 text-base font-bold text-white shadow-sm transition hover:bg-blue-700"
+          >
+            Apply Suggestions
+            {main.length > 0 && totalDelta > 0 ? (
+              <span className="tabular-nums"> +{formatCurrency(totalDelta)}</span>
+            ) : null}
+          </button>
+          <button
+            type="button"
+            onClick={onSkipForNow}
+            className="min-h-[48px] rounded-xl border border-gray-300 bg-white px-6 text-base font-semibold text-gray-800 hover:bg-gray-50"
+          >
+            Skip for now
+          </button>
+        </div>
       </div>
     </div>
   );

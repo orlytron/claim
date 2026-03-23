@@ -117,7 +117,7 @@ export default function SuggestionConfirmModal({
           💡 Suggested changes
         </p>
         <p className="mt-3 text-base font-semibold text-gray-900">
-          Adding these will increase your claim by{" "}
+          Based on your lifestyle profile, we recommend these updates — total to add:{" "}
           <span className="tabular-nums text-[#16A34A]">
             {selectedTotalDelta >= 0 ? `+${formatCurrency(selectedTotalDelta)}` : formatCurrency(selectedTotalDelta)}
           </span>

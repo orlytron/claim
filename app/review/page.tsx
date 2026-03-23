@@ -19,6 +19,11 @@ function formatSignedGap(value: number): string {
   return formatCurrency(0);
 }
 
+function progressBracket(pct: number): string {
+  const filled = Math.min(10, Math.max(0, Math.round((pct / 100) * 10)));
+  return `[${"█".repeat(filled)}${"░".repeat(10 - filled)}]`;
+}
+
 const ROOMS: { name: string; slug: string; display?: string }[] = [
   { name: "Living Room", slug: "living-room" },
   { name: "Kitchen", slug: "kitchen" },
@@ -43,7 +48,7 @@ function Toast({ message, onDismiss }: { message: string; onDismiss: () => void 
 }
 
 function SimpleRoomCard({
-  room,
+  room: _room,
   slug,
   display,
   current,
@@ -55,25 +60,29 @@ function SimpleRoomCard({
   current: number;
   target: number;
 }) {
+  void _room;
   const pct = target > 0 ? Math.min(100, Math.round((current / target) * 100)) : 0;
   const gap = current - target;
-  const label = display ?? room;
+  const label = display ?? _room;
+  const href = `/review/${slug}`;
   return (
-    <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-      <h3 className="text-lg font-bold text-gray-900">{label}</h3>
-      <div className="mt-3 space-y-1 text-sm tabular-nums">
-        <div className="flex justify-between gap-2">
-          <span className="text-[#6B7280]">Current:</span>
-          <span className="font-semibold text-gray-900">{formatCurrency(current)}</span>
-        </div>
-        <div className="flex justify-between gap-2">
-          <span className="text-[#6B7280]">Target:</span>
-          <span className="font-semibold text-gray-900">{formatCurrency(target)}</span>
-        </div>
+    <Link
+      href={href}
+      className="block rounded-2xl border border-gray-200 bg-white p-5 shadow-sm transition hover:border-[#2563EB]/35 hover:shadow-md"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <h3 className="text-lg font-bold text-gray-900">{label}</h3>
+        <span className="shrink-0 text-lg leading-none text-[#2563EB]" title="Edit target in room" aria-hidden>
+          ✏️
+        </span>
       </div>
+      <p className="mt-2 text-base font-semibold tabular-nums text-gray-900">
+        {formatCurrency(current)}{" "}
+        <span className="text-sm font-normal text-[#6B7280]">of {formatCurrency(target)} target</span>
+      </p>
       <div className="mt-4">
         <div className="mb-1 flex justify-between text-xs font-medium text-gray-500">
-          <span>Progress</span>
+          <span className="tabular-nums font-mono text-[11px] text-gray-600">{progressBracket(pct)}</span>
           <span className="tabular-nums">{pct}%</span>
         </div>
         <div className="h-2.5 w-full overflow-hidden rounded-full bg-gray-200">
@@ -86,13 +95,10 @@ function SimpleRoomCard({
       <p className="mt-3 text-sm tabular-nums text-gray-800">
         Gap: <span className="font-semibold">{formatSignedGap(gap)}</span>
       </p>
-      <Link
-        href={`/review/${slug}`}
-        className="mt-4 flex min-h-[48px] items-center justify-center rounded-xl bg-[#2563EB] text-base font-bold text-white transition hover:bg-blue-700"
-      >
+      <div className="mt-4 flex min-h-[48px] items-center justify-center rounded-xl bg-[#2563EB] text-base font-bold text-white">
         Enter Room →
-      </Link>
-    </div>
+      </div>
+    </Link>
   );
 }
 
@@ -381,26 +387,6 @@ export default function ReviewDashboard() {
 
           <div className="space-y-4">
             <h2 className="text-base font-bold uppercase tracking-wider text-gray-400">Rooms</h2>
-            <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-              <h3 className="text-sm font-bold uppercase tracking-wide text-gray-400">Total across all rooms</h3>
-              <div className="mt-3 space-y-2 text-sm tabular-nums">
-                <div className="flex justify-between gap-2">
-                  <span className="text-[#6B7280]">Sum of targets</span>
-                  <span className="font-semibold text-gray-900">{formatCurrency(dashboardSums.sumTargets)}</span>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <span className="text-[#6B7280]">Sum of current</span>
-                  <span className="font-semibold text-gray-900">{formatCurrency(dashboardSums.sumCurrent)}</span>
-                </div>
-                <div className="flex justify-between gap-2 border-t border-gray-100 pt-2 font-semibold text-gray-900">
-                  <span>Overall gap</span>
-                  <span>{formatSignedGap(dashboardSums.overallGap)}</span>
-                </div>
-              </div>
-              <p className="mt-3 text-xs text-gray-500">
-                Planning guide only — adjust targets in each room. Does not need to match your global goal exactly.
-              </p>
-            </div>
             {ROOMS.map((room) => {
               const target = readRoomGoal(sessionId, room.name) ?? DEFAULT_ROOM_TARGETS[room.name] ?? 0;
               const current = roomTotals[room.name] ?? 0;
@@ -415,6 +401,40 @@ export default function ReviewDashboard() {
                 />
               );
             })}
+
+            <div className="relative my-8">
+              <div className="absolute inset-x-0 top-1/2 border-t border-gray-300" aria-hidden />
+              <p className="relative mx-auto w-max bg-white px-3 text-center text-xs font-medium uppercase tracking-wider text-gray-400">
+                All rooms combined
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+              <div className="space-y-2 text-sm tabular-nums">
+                <div className="flex justify-between gap-2">
+                  <span className="text-[#6B7280]">Current total:</span>
+                  <span className="font-semibold text-gray-900">{formatCurrency(dashboardSums.sumCurrent)}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="text-[#6B7280]">Sum of targets:</span>
+                  <span className="font-semibold text-gray-900">{formatCurrency(dashboardSums.sumTargets)}</span>
+                </div>
+                <div className="flex justify-between gap-2 border-t border-gray-100 pt-2 font-semibold text-gray-900">
+                  <span>Gap remaining:</span>
+                  <span>{formatSignedGap(dashboardSums.overallGap)}</span>
+                </div>
+                <div className="flex justify-between gap-2 pt-1 text-[#6B7280]">
+                  <span>Art collection:</span>
+                  <span className="font-medium text-gray-800">
+                    {formatCurrency(ART_RESERVED_PLACEHOLDER)} (placeholder)
+                  </span>
+                </div>
+              </div>
+              <p className="mt-3 text-xs text-gray-500">
+                Planning guide only — adjust targets per room (✏️ on each card). Does not need to match your global
+                goal exactly.
+              </p>
+            </div>
           </div>
 
           <section className="mt-10 rounded-2xl border-2 border-dashed border-amber-200 bg-amber-50/40 px-5 py-6">

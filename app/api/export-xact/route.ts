@@ -7,6 +7,32 @@ import {
 } from "../../lib/claim-export-shared";
 import type { ClaimItem } from "../../lib/types";
 
+function mapCategory(category: string, description: string): string {
+  const c = (category || "").toLowerCase();
+  const d = (description || "").toLowerCase();
+
+  if (c === "electronics" || c === "appliances") return "ELEC";
+  if (c === "furniture") return "FURN";
+  if (c === "clothing") return "CLTH";
+  if (c === "kitchen") return "KITC";
+  if (c === "sports") return "SPRT";
+  if (c === "collectibles" || c === "jewelry" || c === "watches") return "COLL";
+  if (c === "art") return "ARTW";
+  if (c === "textiles") return "TEXT";
+  if (c === "books") return "BOOK";
+  if (c === "lighting") return "LGHT";
+  if (c === "decorative") return "DECO";
+  if (c === "personal care") return "HLTH";
+  if (c === "pet") return "MISC";
+  if (c === "tools") return "TOOL";
+
+  if (d.includes("tv") || d.includes("camera") || d.includes("computer")) return "ELEC";
+  if (d.includes("sofa") || d.includes("chair") || d.includes("table")) return "FURN";
+  if (d.includes("shirt") || d.includes("jacket") || d.includes("pants")) return "CLTH";
+
+  return "MISC";
+}
+
 function vendorFromUrl(url: string | undefined): string {
   if (!url) return "";
   try {
@@ -127,7 +153,7 @@ export async function GET(req: NextRequest) {
       item.condition || "Average",
       item.unit_cost,
       lineTotal,
-      item.category || "",
+      mapCategory(item.category || "", item.description || ""),
       "",
     ]);
   }
