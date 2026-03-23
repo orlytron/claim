@@ -34,8 +34,8 @@ function tiers(
   const f = sumLinesBI(fItems);
   return {
     essential: { total: e, items: eItems },
-    complete: { total: e + c, items: cItems },
-    full: { total: e + c + f, items: fItems },
+    complete: { total: e + c, items: [...eItems, ...cItems] },
+    full: { total: e + c + f, items: [...eItems, ...cItems, ...fItems] },
   };
 }
 
