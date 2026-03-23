@@ -7,7 +7,7 @@ export const DEFAULT_ROOM_TARGETS: Record<string, number> = {
   "Bedroom Rafe": 110_000,
   Patio: 80_000,
   Garage: 120_000,
-  "Bathroom Master": 60_000,
+  "Bathroom Master": 150_000,
   "Bathroom White": 40_000,
   Art: 300_000,
 };

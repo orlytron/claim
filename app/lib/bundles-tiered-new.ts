@@ -50,7 +50,7 @@ export const TIERED_FOCUS_BUNDLES: Bundle[] = [
       bi("Sonos Sub Mini", "Sonos", 430, 1, "Electronics"),
       bi("TV wall mount articulating full-motion", "Sanus", 180, 1, "Electronics"),
       bi("HDMI 2.1 cable certified 6ft", "AudioQuest", 45, 4, "Electronics"),
-      bi("Speaker stand pair height-adjustable", "Sanus", 125, 2, "Electronics"),
+      bi("Speaker stand height-adjustable", "Sanus", 125, 2, "Electronics"),
     ],
     [
       bi("Sony Bravia XR 65in OLED 4K", "Sony", 2799, 1, "Electronics"),
@@ -85,7 +85,7 @@ export const TIERED_FOCUS_BUNDLES: Bundle[] = [
     "Textiles & Soft Goods",
     "Drapes, throws, and layered soft finishes",
     [
-      bi("Rogers & Goffigon custom drapes pair", "Rogers & Goffigon", 3800, 1, "Textiles"),
+      bi("Rogers & Goffigon custom drapes", "Rogers & Goffigon", 3800, 1, "Textiles"),
       bi("Parachute linen throw pillow", "Parachute", 120, 8, "Textiles"),
       bi("Sferra cashmere throw blanket", "Sferra", 680, 1, "Textiles"),
     ],
@@ -296,7 +296,7 @@ export const TIERED_FOCUS_BUNDLES: Bundle[] = [
     [
       bi("California Closets upgrade shelving", "California Closets", 1400, 1, "Furniture"),
       bi("Hat display rack wall", "", 180, 3, "Furniture"),
-      bi("Cedar shoe tree pair", "", 18, 8, "Household"),
+      bi("Cedar shoe tree", "", 18, 8, "Household"),
       bi("Accessory drawer insert set", "", 280, 1, "Furniture"),
     ],
     [bi("Custom millwork walk-in closet", "", 4800, 1, "Furniture")]

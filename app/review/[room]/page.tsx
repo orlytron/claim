@@ -273,7 +273,7 @@ function QtyAdjuster({
 }
 
 function SourceTag({ source }: { source?: ClaimItem["source"] }) {
-  if (!source || source === "original")
+  if (!source || source === "original" || source === "suggestion")
     return (
       <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[12px] font-medium text-gray-700">
         original
@@ -297,13 +297,69 @@ function SourceTag({ source }: { source?: ClaimItem["source"] }) {
         🎨 art
       </span>
     );
-  if (source === "suggestion")
-    return (
-      <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[12px] font-medium text-amber-800">
-        suggested
-      </span>
-    );
   return null;
+}
+
+function formatSignedGap(value: number): string {
+  if (value < 0) return `−${formatCurrency(Math.abs(value))}`;
+  if (value > 0) return `+${formatCurrency(value)}`;
+  return formatCurrency(0);
+}
+
+function ConsumablePackCard({
+  bundle: b,
+  disabled,
+  onAdd,
+}: {
+  bundle: Bundle;
+  disabled?: boolean;
+  onAdd: (b: Bundle) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = b.items;
+  const visible = expanded ? lines : lines.slice(0, 3);
+  const moreCount = Math.max(0, lines.length - 3);
+
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:flex-row sm:items-start sm:justify-between">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <p className="font-semibold text-gray-900">
+            <span aria-hidden>📦</span> {b.name}
+          </p>
+          <span className="shrink-0 text-sm font-bold tabular-nums text-gray-900">{formatCurrency(b.total_value)}</span>
+        </div>
+        <ul className="mt-3 space-y-2 text-sm">
+          {visible.map((item, idx) => {
+            const lineTot = item.total ?? item.qty * item.unit_cost;
+            return (
+              <li key={`${item.description}-${idx}`} className="flex flex-wrap items-baseline justify-between gap-2 text-gray-800">
+                <span className="min-w-0 [overflow-wrap:anywhere]">{item.description}</span>
+                <span className="shrink-0 tabular-nums font-medium text-gray-900">{formatCurrency(lineTot)}</span>
+              </li>
+            );
+          })}
+        </ul>
+        {moreCount > 0 ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((e) => !e)}
+            className="mt-2 text-sm font-semibold text-[#2563EB] hover:underline"
+          >
+            {expanded ? "▲ Show less" : `▶ Show ${moreCount} more item${moreCount === 1 ? "" : "s"}`}
+          </button>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onAdd(b)}
+        className="min-h-[48px] shrink-0 self-stretch rounded-xl bg-[#16A34A] px-4 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-40 sm:self-center"
+      >
+        + Add package
+      </button>
+    </div>
+  );
 }
 
 export default function RoomReviewPage() {
@@ -508,7 +564,7 @@ export default function RoomReviewPage() {
   const roomSuggestionList = useMemo(() => SUGGESTED_UPGRADES[roomName] ?? [], [roomName]);
 
   const progressPct = roomTarget > 0 ? Math.min(100, Math.round((roomTotal / roomTarget) * 100)) : 0;
-  const gapRemaining = Math.max(0, roomTarget - roomTotal);
+  const gapSigned = roomTotal - roomTarget;
 
   const roomNavIndex = useMemo(() => ROOM_ORDER.findIndex((r) => r.slug === roomSlug), [roomSlug]);
   const navPrev = roomNavIndex > 0 ? ROOM_ORDER[roomNavIndex - 1]! : null;
@@ -1012,93 +1068,104 @@ export default function RoomReviewPage() {
               </h1>
               <div className="mt-3 h-px w-full bg-gray-200" />
 
-              <p className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-2 text-sm text-[#6B7280] md:text-base">
-                <span>
-                  Original <span className="font-semibold tabular-nums text-gray-900">{formatCurrency(originalRoomValue)}</span>
-                </span>
-                <span className="text-gray-300">·</span>
-                <span>
-                  Current <span className="font-semibold tabular-nums text-gray-900">{formatCurrency(roomTotal)}</span>
-                </span>
-                <span className="text-gray-300">·</span>
-                <span className="inline-flex flex-wrap items-center gap-1">
-                  Target{" "}
-                  <span className="font-semibold tabular-nums text-gray-900">{formatCurrency(roomTarget)}</span>
-                  <button
-                    type="button"
-                    className="text-base leading-none"
-                    onClick={() => {
-                      setTargetInput(String(roomTarget));
-                      setEditTarget(true);
-                    }}
-                    aria-label="Edit room goal"
-                  >
-                    ✏️
-                  </button>
-                </span>
-                <span className="text-gray-300">·</span>
-                <span>
-                  Gap <span className="font-semibold tabular-nums text-gray-900">{formatCurrency(gapRemaining)}</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setShowResetConfirm(true)}
-                  className="ml-1 text-xs font-medium text-[#2563EB] underline-offset-2 hover:underline"
-                >
-                  Reset room
-                </button>
-                {roomSuggestionList.length > 0 ? (
-                  <>
-                    <span className="text-gray-300">·</span>
+              <div className="mt-5 space-y-2 rounded-xl border border-gray-200 bg-gray-50 px-4 py-4 text-sm md:text-base">
+                <div className="flex flex-wrap items-center justify-between gap-2 tabular-nums">
+                  <span className="text-[#6B7280]">Current:</span>
+                  <span className="font-semibold text-gray-900">{formatCurrency(roomTotal)}</span>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 tabular-nums">
+                  <span className="text-[#6B7280]">Target:</span>
+                  <span className="inline-flex flex-wrap items-center gap-2 font-semibold text-gray-900">
+                    {formatCurrency(roomTarget)}
                     <button
                       type="button"
+                      className="text-base leading-none text-[#2563EB]"
                       onClick={() => {
-                        setReopenSuggestions(true);
-                        setSuggestionsModalOpen(true);
+                        setTargetInput(String(roomTarget));
+                        setEditTarget(true);
                       }}
-                      className="text-xs font-semibold text-amber-800 underline-offset-2 hover:underline"
+                      aria-label="Edit target"
                     >
-                      View initial suggestions
+                      ✏️ Edit target
                     </button>
-                  </>
-                ) : null}
-              </p>
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 tabular-nums">
+                  <span className="text-[#6B7280]">Gap:</span>
+                  <span className="font-semibold text-gray-900">{formatSignedGap(gapSigned)}</span>
+                </div>
+                <div className="pt-2">
+                  <div className="mb-1 flex justify-between text-xs font-medium text-[#6B7280]">
+                    <span>Progress to target</span>
+                    <span className="tabular-nums">{progressPct}%</span>
+                  </div>
+                  <div className="h-3 w-full overflow-hidden rounded-full bg-gray-200">
+                    <div
+                      className="h-full rounded-full bg-[#2563EB] transition-[width] duration-500 ease-out"
+                      style={{ width: `${progressPct}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 border-t border-gray-200 pt-3 text-xs md:text-sm">
+                  <button
+                    type="button"
+                    onClick={() => setShowResetConfirm(true)}
+                    className="font-medium text-[#2563EB] underline-offset-2 hover:underline"
+                  >
+                    Reset room
+                  </button>
+                  {roomSuggestionList.length > 0 ? (
+                    <>
+                      <span className="text-gray-300">·</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReopenSuggestions(true);
+                          setSuggestionsModalOpen(true);
+                        }}
+                        className="font-semibold text-amber-800 underline-offset-2 hover:underline"
+                      >
+                        View initial suggestions
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+              </div>
 
               {editTarget && (
-                <div className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl border border-gray-200 bg-gray-50/80 p-4 shadow-sm">
+                <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+                  <label className="text-sm font-medium text-gray-700">
+                    New target:{" "}
+                    <span className="text-[#6B7280]">($)</span>
+                  </label>
                   <input
-                    className="min-w-[140px] flex-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+                    className="w-full max-w-xs rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm tabular-nums"
                     value={targetInput}
                     onChange={(e) => setTargetInput(e.target.value)}
                     placeholder="350000"
                   />
-                  <button
-                    type="button"
-                    onClick={saveTargetFromEdit}
-                    className="rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white transition-all duration-200 hover:bg-blue-700"
-                  >
-                    Save
-                  </button>
-                  <button type="button" onClick={() => setEditTarget(false)} className="text-sm text-[#6B7280] hover:text-gray-900">
-                    Cancel
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={saveTargetFromEdit}
+                      className="rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white transition-all duration-200 hover:bg-blue-700"
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditTarget(false)}
+                      className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
               )}
 
-              <div className="mt-8">
-                <div className="mb-2 flex justify-between text-sm">
-                  <span className="font-medium text-gray-800">{progressPct}%</span>
-                </div>
-                <div className="h-3 w-full overflow-hidden rounded-full bg-gray-200">
-                  <div
-                    className="h-full rounded-full bg-[#2563EB] transition-[width] duration-500 ease-out"
-                    style={{ width: `${progressPct}%` }}
-                  />
-                </div>
-                <p className="mt-2 text-xs leading-relaxed text-[#6B7280] md:text-sm">
-                  Upgrade existing items below, then add new items to reach your goal
-                </p>
-              </div>
+              <p className="mt-6 text-xs leading-relaxed text-[#6B7280] md:text-sm">
+                Upgrade existing items below, then add bundles to reach your target.
+              </p>
 
             </div>
           </header>
@@ -1451,27 +1518,14 @@ export default function RoomReviewPage() {
                 <div className="mt-10 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
                   <p className="text-xs font-bold uppercase tracking-wide text-gray-900">Restock & consumable packs</p>
                   <p className="mt-1 text-sm text-[#6B7280]">One-tap add common replenishment lines for this room.</p>
-                  <div className="mt-4 space-y-3">
+                  <div className="mt-4 space-y-4">
                     {consumableBundles.map((b) => (
-                      <div
+                      <ConsumablePackCard
                         key={b.bundle_code}
-                        className="flex flex-col gap-2 rounded-xl border border-gray-100 bg-gray-50/80 p-4 sm:flex-row sm:items-center sm:justify-between"
-                      >
-                        <div className="min-w-0">
-                          <p className="font-semibold text-gray-900">{b.name}</p>
-                          <p className="text-xs text-[#6B7280]">
-                            {b.items.length} lines · {formatCurrency(b.total_value)}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          disabled={isSaving}
-                          onClick={() => void handleConsumableBundleAdd(b)}
-                          className="min-h-[48px] shrink-0 rounded-xl bg-[#16A34A] px-4 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-40"
-                        >
-                          Add pack
-                        </button>
-                      </div>
+                        bundle={b}
+                        disabled={isSaving}
+                        onAdd={(pack) => void handleConsumableBundleAdd(pack)}
+                      />
                     ))}
                   </div>
                 </div>
@@ -1635,7 +1689,7 @@ export default function RoomReviewPage() {
       ) : null}
 
       {showResetConfirm ? (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-500/25 p-4 backdrop-blur-[1px]">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl" role="dialog" aria-modal="true">
             <p className="text-base font-semibold text-gray-900">Reset this room?</p>
             <p className="mt-2 text-sm text-[#6B7280]">
@@ -1663,9 +1717,9 @@ export default function RoomReviewPage() {
       ) : null}
 
       {toast && (
-        <div className="fixed left-1/2 top-20 z-40 max-w-[min(100vw-2rem,24rem)] -translate-x-1/2 rounded-xl bg-gray-900 px-5 py-3 text-center text-base text-white shadow-xl">
+        <div className="fixed left-1/2 top-20 z-40 max-w-[min(100vw-2rem,24rem)] -translate-x-1/2 rounded-xl border border-gray-200 bg-white px-5 py-3 text-center text-base text-gray-900 shadow-lg">
           {toast}
-          <button type="button" className="ml-3 text-green-400" onClick={() => setToast(null)}>
+          <button type="button" className="ml-3 font-semibold text-[#16A34A]" onClick={() => setToast(null)}>
             ✓
           </button>
         </div>

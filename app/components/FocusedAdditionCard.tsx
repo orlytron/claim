@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { Bundle, BundleItem, BundleTiers3, BundleTiers5, BundleTiersDef } from "../lib/bundles-data";
 import { isBundleTiers5 } from "../lib/bundles-data";
@@ -155,14 +155,6 @@ function lineKey(r: RowMeta, tierUiIdx: number, cumulative: boolean) {
   return `${r.introducedAt}-${r.idx}-${r.row.description}-${r.row.unit_cost}-${r.row.qty}`;
 }
 
-function lastNonEmptyTierIndex(blocks: BundleItem[][]): number {
-  let last = 0;
-  blocks.forEach((b, i) => {
-    if (b.length > 0) last = i;
-  });
-  return last;
-}
-
 export type FocusedAdditionCardProps = {
   bundle: Bundle;
   roomName: string;
@@ -186,16 +178,19 @@ export default function FocusedAdditionCard({
   const five = isBundleTiers5(tiersDef);
   const blocks = useMemo(() => tierBlocksList(tiersDef), [tiersDef]);
   const cumulativeFive = Boolean(bundle.tiersCumulative && five);
-  const maxTierIdx = lastNonEmptyTierIndex(blocks);
-  const effectiveMax = blocks.every((b) => b.length === 0) ? 0 : maxTierIdx;
+  const tierCount = blocks.length;
+  const maxTierIndex = Math.max(0, tierCount - 1);
 
-  const [tierIdx, setTierIdx] = useState(0);
-  useEffect(() => {
-    const def = five ? 2 : 1;
-    setTierIdx(Math.min(def, effectiveMax));
-  }, [bundle.bundle_code, five, effectiveMax]);
+  const [tierIndex, setTierIndex] = useState(0);
+  const bundleCodeRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (bundleCodeRef.current === bundle.bundle_code) return;
+    bundleCodeRef.current = bundle.bundle_code;
+    const defaultTier = five ? 2 : 1;
+    setTierIndex(Math.min(defaultTier, maxTierIndex));
+  }, [bundle.bundle_code, five, maxTierIndex]);
 
-  const effectiveTier = Math.min(tierIdx, effectiveMax);
+  const effectiveTier = Math.min(tierIndex, maxTierIndex);
   const rows = useMemo(() => {
     if (cumulativeFive) return rowsForTierCumulative(blocks, effectiveTier);
     return rowsForTier(blocks, effectiveTier);
@@ -326,6 +321,9 @@ export default function FocusedAdditionCard({
     ? (["Essential", "Enhanced", "Complete ★", "Full", "Ultimate"] as const)
     : (["Essential", "Complete ★", "Full"] as const);
 
+  const currentTierLabel = labelRow[Math.min(effectiveTier, labelRow.length - 1)] ?? labelRow[0];
+  const currentTierPrice = tierTotals[effectiveTier] ?? 0;
+
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
       <div className="min-w-0">
@@ -333,7 +331,7 @@ export default function FocusedAdditionCard({
         <p className="mt-1 text-sm text-[#6B7280] [overflow-wrap:anywhere]">{bundle.description}</p>
       </div>
 
-      {effectiveMax > 0 ? (
+      {tierCount > 1 ? (
         <div className="mt-5">
           <div
             className={`grid gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-[#6B7280] sm:text-[11px] ${
@@ -343,9 +341,7 @@ export default function FocusedAdditionCard({
             {labelRow.map((lab, i) => (
               <span
                 key={lab}
-                className={`text-center ${effectiveTier === i ? "text-[#2563EB]" : ""} ${
-                  i > effectiveMax ? "opacity-30" : ""
-                }`}
+                className={`text-center ${effectiveTier === i ? "text-[#2563EB]" : ""} ${i > maxTierIndex ? "opacity-30" : ""}`}
               >
                 {lab}
                 {lab.includes("★") ? <span className="sr-only"> recommended</span> : null}
@@ -355,10 +351,13 @@ export default function FocusedAdditionCard({
           <input
             type="range"
             min={0}
-            max={effectiveMax}
+            max={maxTierIndex}
             step={1}
             value={effectiveTier}
-            onChange={(e) => setTierIdx(Number(e.target.value))}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setTierIndex(Math.min(Math.max(0, v), maxTierIndex));
+            }}
             disabled={disabled || added}
             className="mt-2 h-3 w-full accent-[#2563EB]"
             aria-label="Bundle tier"
@@ -369,11 +368,15 @@ export default function FocusedAdditionCard({
             }`}
           >
             {tierTotals.map((t, i) => (
-              <span key={i} className={`text-center ${i > effectiveMax ? "opacity-30" : ""}`}>
+              <span key={i} className={`text-center ${i > maxTierIndex ? "opacity-30" : ""}`}>
                 {formatCurrency(t)}
               </span>
             ))}
           </div>
+          <p className="mt-3 text-center text-sm font-bold text-gray-900">
+            {currentTierLabel.replace("★", "★ ")}{" "}
+            <span className="tabular-nums font-bold text-[#2563EB]">{formatCurrency(currentTierPrice)}</span>
+          </p>
         </div>
       ) : null}
 
@@ -467,7 +470,7 @@ export default function FocusedAdditionCard({
             type="button"
             disabled={busy || !cDesc.trim()}
             onClick={() => void addCustom()}
-            className="mt-3 rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-40"
+            className="mt-3 rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
           >
             Add to Set
           </button>

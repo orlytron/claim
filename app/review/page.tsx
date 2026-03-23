@@ -13,6 +13,12 @@ import { readRoomGoal } from "../lib/room-goals";
 const ART_ROOM = "Art Collection";
 const ART_RESERVED_PLACEHOLDER = 300_000;
 
+function formatSignedGap(value: number): string {
+  if (value < 0) return `−${formatCurrency(Math.abs(value))}`;
+  if (value > 0) return `+${formatCurrency(value)}`;
+  return formatCurrency(0);
+}
+
 const ROOMS: { name: string; slug: string; display?: string }[] = [
   { name: "Living Room", slug: "living-room" },
   { name: "Kitchen", slug: "kitchen" },
@@ -40,36 +46,35 @@ function SimpleRoomCard({
   room,
   slug,
   display,
-  original,
   current,
   target,
 }: {
   room: string;
   slug: string;
   display?: string;
-  original: number;
   current: number;
   target: number;
 }) {
   const pct = target > 0 ? Math.min(100, Math.round((current / target) * 100)) : 0;
+  const gap = current - target;
   const label = display ?? room;
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
       <h3 className="text-lg font-bold text-gray-900">{label}</h3>
-      <div className="mt-3 grid grid-cols-2 gap-3 text-sm tabular-nums">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Original</p>
-          <p className="mt-0.5 font-semibold text-gray-900">{formatCurrency(original)}</p>
+      <div className="mt-3 space-y-1 text-sm tabular-nums">
+        <div className="flex justify-between gap-2">
+          <span className="text-[#6B7280]">Current:</span>
+          <span className="font-semibold text-gray-900">{formatCurrency(current)}</span>
         </div>
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Current</p>
-          <p className="mt-0.5 font-semibold text-[#2563EB]">{formatCurrency(current)}</p>
+        <div className="flex justify-between gap-2">
+          <span className="text-[#6B7280]">Target:</span>
+          <span className="font-semibold text-gray-900">{formatCurrency(target)}</span>
         </div>
       </div>
       <div className="mt-4">
         <div className="mb-1 flex justify-between text-xs font-medium text-gray-500">
-          <span>Room progress</span>
-          <span>{pct}%</span>
+          <span>Progress</span>
+          <span className="tabular-nums">{pct}%</span>
         </div>
         <div className="h-2.5 w-full overflow-hidden rounded-full bg-gray-200">
           <div
@@ -78,6 +83,9 @@ function SimpleRoomCard({
           />
         </div>
       </div>
+      <p className="mt-3 text-sm tabular-nums text-gray-800">
+        Gap: <span className="font-semibold">{formatSignedGap(gap)}</span>
+      </p>
       <Link
         href={`/review/${slug}`}
         className="mt-4 flex min-h-[48px] items-center justify-center rounded-xl bg-[#2563EB] text-base font-bold text-white transition hover:bg-blue-700"
@@ -171,19 +179,16 @@ export default function ReviewDashboard() {
     return t;
   }, [sessionItems]);
 
-  /** Baseline PDF-style value per room (pre-upgrade unit costs where applicable). */
-  const roomOriginal = useMemo(() => {
-    const t: Record<string, number> = {};
-    for (const item of sessionItems) {
-      const r = item.room || "Uncategorized";
-      if (item.source === "upgrade" && item.pre_upgrade_item) {
-        t[r] = (t[r] ?? 0) + item.qty * item.pre_upgrade_item.unit_cost;
-      } else if (!item.source || item.source === "original") {
-        t[r] = (t[r] ?? 0) + item.qty * item.unit_cost;
-      }
+  const dashboardSums = useMemo(() => {
+    let sumTargets = 0;
+    let sumCurrent = 0;
+    for (const r of ROOMS) {
+      const tgt = readRoomGoal(sessionId, r.name) ?? DEFAULT_ROOM_TARGETS[r.name] ?? 0;
+      sumTargets += tgt;
+      sumCurrent += roomTotals[r.name] ?? 0;
     }
-    return t;
-  }, [sessionItems]);
+    return { sumTargets, sumCurrent, overallGap: sumCurrent - sumTargets };
+  }, [sessionId, roomTotals]);
 
   const lineItemsTotal = useMemo(
     () => sessionItems.reduce((sum, item) => sum + item.qty * item.unit_cost, 0),
@@ -376,17 +381,35 @@ export default function ReviewDashboard() {
 
           <div className="space-y-4">
             <h2 className="text-base font-bold uppercase tracking-wider text-gray-400">Rooms</h2>
+            <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+              <h3 className="text-sm font-bold uppercase tracking-wide text-gray-400">Total across all rooms</h3>
+              <div className="mt-3 space-y-2 text-sm tabular-nums">
+                <div className="flex justify-between gap-2">
+                  <span className="text-[#6B7280]">Sum of targets</span>
+                  <span className="font-semibold text-gray-900">{formatCurrency(dashboardSums.sumTargets)}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="text-[#6B7280]">Sum of current</span>
+                  <span className="font-semibold text-gray-900">{formatCurrency(dashboardSums.sumCurrent)}</span>
+                </div>
+                <div className="flex justify-between gap-2 border-t border-gray-100 pt-2 font-semibold text-gray-900">
+                  <span>Overall gap</span>
+                  <span>{formatSignedGap(dashboardSums.overallGap)}</span>
+                </div>
+              </div>
+              <p className="mt-3 text-xs text-gray-500">
+                Planning guide only — adjust targets in each room. Does not need to match your global goal exactly.
+              </p>
+            </div>
             {ROOMS.map((room) => {
               const target = readRoomGoal(sessionId, room.name) ?? DEFAULT_ROOM_TARGETS[room.name] ?? 0;
               const current = roomTotals[room.name] ?? 0;
-              const original = roomOriginal[room.name] ?? 0;
               return (
                 <SimpleRoomCard
                   key={room.slug}
                   room={room.name}
                   slug={room.slug}
                   display={room.display}
-                  original={original}
                   current={current}
                   target={target}
                 />

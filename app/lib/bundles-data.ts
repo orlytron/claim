@@ -80,7 +80,7 @@ export const BUNDLES_DATA: Bundle[] = [
     tier: "A", sweet_spot: false, plausibility: "green", total_value: 17495,
     description: "Modest quality lift. Same aesthetic, better materials.",
     items: [
-      { description: "Table lamp pair", brand: "Arteriors Home", qty: 2, unit_cost: 680, total: 1360, category: "Lighting" },
+      { description: "Table lamp", brand: "Arteriors Home", qty: 2, unit_cost: 680, total: 1360, category: "Lighting" },
       { description: "Wool accent pillows", brand: "Society Limonta", qty: 6, unit_cost: 180, total: 1080, category: "Textiles" },
       { description: "Jute area rug 8x10", brand: "Dash & Albert", qty: 1, unit_cost: 1200, total: 1200, category: "Furniture" },
       { description: "Linen window panels", brand: "Pottery Barn custom", qty: 4, unit_cost: 320, total: 1280, category: "Furniture" },
@@ -99,7 +99,7 @@ export const BUNDLES_DATA: Bundle[] = [
     tier: "B", sweet_spot: false, plausibility: "green", total_value: 42740,
     description: "Clean lines, natural materials, LA sensibility.",
     items: [
-      { description: "Arc floor lamp pair", brand: "Allied Maker", qty: 2, unit_cost: 3200, total: 6400, category: "Lighting" },
+      { description: "Arc floor lamp", brand: "Allied Maker", qty: 2, unit_cost: 3200, total: 6400, category: "Lighting" },
       { description: "Hand-knotted wool rug 9x12", brand: "Patterson Flynn Martin", qty: 1, unit_cost: 8500, total: 8500, category: "Furniture" },
       { description: "Linen Roman shades custom", brand: "The Shade Store", qty: 4, unit_cost: 1200, total: 4800, category: "Furniture" },
       { description: "Ceramic table lamps", brand: "Christopher Spitzmiller", qty: 2, unit_cost: 1850, total: 3700, category: "Lighting" },
@@ -211,7 +211,7 @@ export const BUNDLES_DATA: Bundle[] = [
       { description: "Cast iron complete cookware set", brand: "Staub", qty: 1, unit_cost: 1800, total: 1800, category: "Kitchen" },
       { description: "5000MCD knife set 7pc Japan", brand: "Miyabi", qty: 1, unit_cost: 1200, total: 1200, category: "Kitchen" },
       { description: "A3500 Ascent blender", brand: "Vitamix", qty: 1, unit_cost: 650, total: 650, category: "Appliances" },
-      { description: "Custom pendant light pair", brand: "Roll & Hill", qty: 2, unit_cost: 6200, total: 12400, category: "Lighting" },
+      { description: "Custom pendant light", brand: "Roll & Hill", qty: 2, unit_cost: 6200, total: 12400, category: "Lighting" },
       { description: "Complete porcelain dinnerware set", brand: "Mud Australia", qty: 1, unit_cost: 1800, total: 1800, category: "Kitchen" },
       { description: "Universal wine glasses", brand: "Zalto", qty: 12, unit_cost: 85, total: 1020, category: "Kitchen" },
       { description: "Butcher block cutting board 24x18", brand: "John Boos", qty: 1, unit_cost: 580, total: 580, category: "Kitchen" },
@@ -228,12 +228,12 @@ export const BUNDLES_DATA: Bundle[] = [
     items: [
       { description: "GS3 espresso machine", brand: "La Marzocco", qty: 1, unit_cost: 9000, total: 9000, category: "Appliances" },
       { description: "Sub-Zero 36in French door refrigerator", brand: "Sub-Zero", qty: 1, unit_cost: 14500, total: 14500, category: "Appliances" },
-      { description: "Circuit pendant light pair", brand: "Apparatus Studio", qty: 2, unit_cost: 8400, total: 16800, category: "Lighting" },
+      { description: "Circuit pendant light", brand: "Apparatus Studio", qty: 2, unit_cost: 8400, total: 16800, category: "Lighting" },
       { description: "M'Cook complete copper cookware", brand: "Mauviel", qty: 1, unit_cost: 2800, total: 2800, category: "Kitchen" },
       { description: "Custom chef knives", brand: "Bob Kramer", qty: 4, unit_cost: 800, total: 3200, category: "Kitchen" },
       { description: "Naxos 12-place dinnerware", brand: "Bernardaud", qty: 1, unit_cost: 4200, total: 4200, category: "Kitchen" },
       { description: "Sub-Zero 147-bottle wine refrigerator", brand: "Sub-Zero", qty: 1, unit_cost: 6800, total: 6800, category: "Appliances" },
-      { description: "Crystal glasses set 12pc", brand: "Baccarat", qty: 12, unit_cost: 185, total: 2220, category: "Kitchen" },
+      { description: "Crystal glasses", brand: "Baccarat", qty: 12, unit_cost: 185, total: 2220, category: "Kitchen" },
       { description: "Outdoor kitchen stools", brand: "Minotti", qty: 4, unit_cost: 1800, total: 7200, category: "Furniture" },
       { description: "Original kitchen oil painting", brand: "", qty: 1, unit_cost: 6500, total: 6500, category: "Art" },
       { description: "Custom Turkish kilim kitchen rug", brand: "", qty: 1, unit_cost: 4800, total: 4800, category: "Furniture" },
@@ -687,9 +687,9 @@ export const BUNDLES_DATA: Bundle[] = [
     total_value: 398,
     description: "Hosting essentials for a Pacific Palisades home",
     items: [
-      { description: "Fever Tree Premium Tonic Water 24-pack", brand: "Fever Tree", qty: 3, unit_cost: 22, total: 66, category: "consumables" },
-      { description: "San Pellegrino Sparkling Water 24-pack", brand: "San Pellegrino", qty: 3, unit_cost: 28, total: 84, category: "consumables" },
-      { description: "Linen Cocktail Napkins Set of 12", brand: "", qty: 4, unit_cost: 35, total: 140, category: "consumables" },
+      { description: "Fever Tree Premium Tonic Water", brand: "Fever Tree", qty: 3, unit_cost: 22, total: 66, category: "consumables" },
+      { description: "San Pellegrino Sparkling Water", brand: "San Pellegrino", qty: 3, unit_cost: 28, total: 84, category: "consumables" },
+      { description: "Linen Cocktail Napkins", brand: "", qty: 4, unit_cost: 35, total: 140, category: "consumables" },
       { description: "Woodford Reserve Cocktail Cherries", brand: "Woodford Reserve", qty: 4, unit_cost: 18, total: 72, category: "consumables" },
       { description: "Cocktail Picks Stainless Set", brand: "", qty: 3, unit_cost: 12, total: 36, category: "consumables" },
     ],
@@ -708,7 +708,7 @@ export const BUNDLES_DATA: Bundle[] = [
       { description: "Assouline Luxury Coffee Table Book", brand: "Assouline", qty: 3, unit_cost: 85, total: 255, category: "consumables" },
       { description: "Taschen Art Monograph", brand: "Taschen", qty: 2, unit_cost: 65, total: 130, category: "consumables" },
       { description: "Phaidon Design Classics Volume", brand: "Phaidon", qty: 2, unit_cost: 55, total: 110, category: "consumables" },
-      { description: "Disposable Camera 3-pack", brand: "Kodak", qty: 4, unit_cost: 38, total: 152, category: "consumables" },
+      { description: "Disposable Camera", brand: "Kodak", qty: 4, unit_cost: 38, total: 152, category: "consumables" },
     ],
   },
 
@@ -742,9 +742,9 @@ export const BUNDLES_DATA: Bundle[] = [
     items: [
       { description: "Method All-Purpose Spray Cleaner", brand: "Method", qty: 8, unit_cost: 5, total: 40, category: "consumables" },
       { description: "Seventh Generation Dish Soap", brand: "Seventh Generation", qty: 12, unit_cost: 6, total: 72, category: "consumables" },
-      { description: "Bounty Select-A-Size 8-Roll Pack", brand: "Bounty", qty: 4, unit_cost: 22, total: 88, category: "consumables" },
+      { description: "Bounty Select-A-Size", brand: "Bounty", qty: 4, unit_cost: 22, total: 88, category: "consumables" },
       { description: "If You Care Parchment Paper Roll", brand: "If You Care", qty: 6, unit_cost: 8, total: 48, category: "consumables" },
-      { description: "Ecover Dishwasher Tablets 25-pack", brand: "Ecover", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
+      { description: "Ecover Dishwasher Tablets", brand: "Ecover", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
     ],
   },
 
@@ -761,7 +761,7 @@ export const BUNDLES_DATA: Bundle[] = [
       { description: "Stumptown Hair Bender Whole Bean Coffee 12oz", brand: "Stumptown", qty: 6, unit_cost: 18, total: 108, category: "consumables" },
       { description: "Blue Bottle Coffee Whole Bean 12oz", brand: "Blue Bottle", qty: 4, unit_cost: 22, total: 88, category: "consumables" },
       { description: "Harney & Sons Fine Tea Sampler Set", brand: "Harney & Sons", qty: 4, unit_cost: 28, total: 112, category: "consumables" },
-      { description: "Chemex Bonded Filters Square 100-pack", brand: "Chemex", qty: 3, unit_cost: 12, total: 36, category: "consumables" },
+      { description: "Chemex Bonded Filters Square", brand: "Chemex", qty: 3, unit_cost: 12, total: 36, category: "consumables" },
     ],
   },
 
@@ -809,11 +809,11 @@ export const BUNDLES_DATA: Bundle[] = [
     total_value: 396,
     description: "On-set production essentials for a working filmmaker",
     items: [
-      { description: "Rosco Color Correction Gel Pack", brand: "Rosco", qty: 3, unit_cost: 28, total: 84, category: "consumables" },
-      { description: "Duracell AA Optimum 20-pack", brand: "Duracell", qty: 6, unit_cost: 15, total: 90, category: "consumables" },
+      { description: "Rosco Color Correction Gel", brand: "Rosco", qty: 3, unit_cost: 28, total: 84, category: "consumables" },
+      { description: "Duracell AA Optimum", brand: "Duracell", qty: 6, unit_cost: 15, total: 90, category: "consumables" },
       { description: "Anker USB-C Braided Cable 6ft", brand: "Anker", qty: 6, unit_cost: 20, total: 120, category: "consumables" },
       { description: "Pelican SD Card Case Wallet", brand: "Pelican", qty: 3, unit_cost: 18, total: 54, category: "consumables" },
-      { description: "Dry Erase Markers Assorted 8-pack", brand: "Expo", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
+      { description: "Dry Erase Markers Assorted", brand: "Expo", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
     ],
   },
 
@@ -833,7 +833,7 @@ export const BUNDLES_DATA: Bundle[] = [
       { description: "1994 Donruss Complete Set", brand: "Donruss", qty: 1, unit_cost: 30, total: 30, category: "collectibles" },
       { description: "1994 Score Complete Set", brand: "Score", qty: 1, unit_cost: 25, total: 25, category: "collectibles" },
       { description: "1994 Bowman Complete Set", brand: "Bowman", qty: 1, unit_cost: 40, total: 40, category: "collectibles" },
-      { description: "Ultra Pro Card Sleeves 100-pack", brand: "Ultra Pro", qty: 4, unit_cost: 8, total: 32, category: "consumables" },
+      { description: "Ultra Pro Card Sleeves", brand: "Ultra Pro", qty: 4, unit_cost: 8, total: 32, category: "consumables" },
     ],
   },
 
@@ -866,7 +866,7 @@ export const BUNDLES_DATA: Bundle[] = [
     items: [
       { description: "Sex Wax Original Cool Water Surf Wax", brand: "Sex Wax", qty: 12, unit_cost: 3, total: 36, category: "consumables" },
       { description: "Sticky Bumps Original Basecoat Wax", brand: "Sticky Bumps", qty: 6, unit_cost: 5, total: 30, category: "consumables" },
-      { description: "FCS Fin Screw & Key Pack", brand: "FCS", qty: 4, unit_cost: 8, total: 32, category: "consumables" },
+      { description: "FCS Fin Screw & Key", brand: "FCS", qty: 4, unit_cost: 8, total: 32, category: "consumables" },
       { description: "Creatures of Leisure Regular Comp Leash 6ft", brand: "Creatures of Leisure", qty: 2, unit_cost: 38, total: 76, category: "consumables" },
       { description: "Dakine Wax Comb", brand: "Dakine", qty: 4, unit_cost: 6, total: 24, category: "consumables" },
     ],
@@ -884,9 +884,9 @@ export const BUNDLES_DATA: Bundle[] = [
     items: [
       { description: "Viz Media Manga Volume Premium Edition", brand: "Viz Media", qty: 8, unit_cost: 22, total: 176, category: "collectibles" },
       { description: "Funko Pop Protector Case Hard Stack", brand: "Funko", qty: 12, unit_cost: 8, total: 96, category: "consumables" },
-      { description: "Acid-Free Comic Bags Current Size 100-pack", brand: "BCW", qty: 2, unit_cost: 15, total: 30, category: "consumables" },
-      { description: "Backing Boards Current Size 100-pack", brand: "BCW", qty: 2, unit_cost: 12, total: 24, category: "consumables" },
-      { description: "Display Shelf Risers Set of 4", brand: "", qty: 4, unit_cost: 18, total: 72, category: "consumables" },
+      { description: "Acid-Free Comic Bags Current Size", brand: "BCW", qty: 2, unit_cost: 15, total: 30, category: "consumables" },
+      { description: "Backing Boards Current Size", brand: "BCW", qty: 2, unit_cost: 12, total: 24, category: "consumables" },
+      { description: "Display Shelf Risers", brand: "", qty: 4, unit_cost: 18, total: 72, category: "consumables" },
     ],
   },
 
@@ -904,7 +904,7 @@ export const BUNDLES_DATA: Bundle[] = [
       { description: "The Laundress Delicate Wash 16oz", brand: "The Laundress", qty: 4, unit_cost: 22, total: 88, category: "consumables" },
       { description: "Steamery Cirrus No2 Fabric Spray", brand: "Steamery", qty: 4, unit_cost: 28, total: 112, category: "consumables" },
       { description: "Dryel Home Dry Cleaning Kit", brand: "Dryel", qty: 4, unit_cost: 18, total: 72, category: "consumables" },
-      { description: "Cedar Blocks Closet Protector 8-pack", brand: "Household Essentials", qty: 3, unit_cost: 15, total: 45, category: "consumables" },
+      { description: "Cedar Blocks Closet Protector", brand: "Household Essentials", qty: 3, unit_cost: 15, total: 45, category: "consumables" },
     ],
   },
 
@@ -920,8 +920,8 @@ export const BUNDLES_DATA: Bundle[] = [
     items: [
       { description: "Magnetic Floating Hat Display Wall Mount", brand: "", qty: 6, unit_cost: 18, total: 108, category: "consumables" },
       { description: "Clear Stackable Shoe Box Display", brand: "IRIS USA", qty: 12, unit_cost: 8, total: 96, category: "consumables" },
-      { description: "Velvet Slim Hangers 50-pack", brand: "Zober", qty: 2, unit_cost: 22, total: 44, category: "consumables" },
-      { description: "Cedar Wood Shoe Trees Pair", brand: "Stratton", qty: 4, unit_cost: 18, total: 72, category: "consumables" },
+      { description: "Velvet Slim Hangers", brand: "Zober", qty: 2, unit_cost: 22, total: 44, category: "consumables" },
+      { description: "Cedar Wood Shoe Trees", brand: "Stratton", qty: 4, unit_cost: 18, total: 72, category: "consumables" },
     ],
   },
 
@@ -935,7 +935,7 @@ export const BUNDLES_DATA: Bundle[] = [
     total_value: 358,
     description: "Card storage and display for serious collector",
     items: [
-      { description: "Ultra Pro 9-Pocket Binder Pages 100-pack", brand: "Ultra Pro", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
+      { description: "Ultra Pro 9-Pocket Binder Pages", brand: "Ultra Pro", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
       { description: "BCW Card Storage Box 800-count", brand: "BCW", qty: 4, unit_cost: 15, total: 60, category: "consumables" },
       { description: "Grading Submission Sleeves Pro-Mold", brand: "Pro-Mold", qty: 3, unit_cost: 18, total: 54, category: "consumables" },
       { description: "Beckett Basketball Card Price Guide Annual", brand: "Beckett", qty: 2, unit_cost: 28, total: 56, category: "consumables" },
@@ -954,9 +954,9 @@ export const BUNDLES_DATA: Bundle[] = [
     description: "Basketball and athletic supplies",
     items: [
       { description: "Spalding NBA Official Game Basketball", brand: "Spalding", qty: 2, unit_cost: 85, total: 170, category: "consumables" },
-      { description: "Ball Pump with Needle 10-pack", brand: "Nike", qty: 2, unit_cost: 15, total: 30, category: "consumables" },
-      { description: "Nike Dri-FIT Athletic Socks 6-pack", brand: "Nike", qty: 4, unit_cost: 22, total: 88, category: "consumables" },
-      { description: "Under Armour Performance Socks 6-pack", brand: "Under Armour", qty: 4, unit_cost: 18, total: 72, category: "consumables" },
+      { description: "Ball Pump with Needle", brand: "Nike", qty: 2, unit_cost: 15, total: 30, category: "consumables" },
+      { description: "Nike Dri-FIT Athletic Socks", brand: "Nike", qty: 4, unit_cost: 22, total: 88, category: "consumables" },
+      { description: "Under Armour Performance Socks", brand: "Under Armour", qty: 4, unit_cost: 18, total: 72, category: "consumables" },
     ],
   },
 
@@ -972,9 +972,9 @@ export const BUNDLES_DATA: Bundle[] = [
     items: [
       { description: "Leuchtturm1917 Hardcover Notebook A5 Black", brand: "Leuchtturm1917", qty: 6, unit_cost: 28, total: 168, category: "consumables" },
       { description: "Moleskine Professional Large Notebook", brand: "Moleskine", qty: 4, unit_cost: 28, total: 112, category: "consumables" },
-      { description: "Muji Gel Pen 0.5mm 10-pack", brand: "Muji", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
-      { description: "Sharpie Markers Variety 24-pack", brand: "Sharpie", qty: 3, unit_cost: 18, total: 54, category: "consumables" },
-      { description: "Post-it Super Sticky Notes 12-pack", brand: "Post-it", qty: 4, unit_cost: 18, total: 72, category: "consumables" },
+      { description: "Muji Gel Pen 0.5mm", brand: "Muji", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
+      { description: "Sharpie Markers Variety", brand: "Sharpie", qty: 3, unit_cost: 18, total: 54, category: "consumables" },
+      { description: "Post-it Super Sticky Notes", brand: "Post-it", qty: 4, unit_cost: 18, total: 72, category: "consumables" },
     ],
   },
 
@@ -989,8 +989,8 @@ export const BUNDLES_DATA: Bundle[] = [
     description: "Technology consumables for a filmmaker's office",
     items: [
       { description: "Anker USB-C Braided Cable 6ft", brand: "Anker", qty: 6, unit_cost: 22, total: 132, category: "consumables" },
-      { description: "Duracell AA Optimum 20-pack", brand: "Duracell", qty: 4, unit_cost: 15, total: 60, category: "consumables" },
-      { description: "Duracell AAA Optimum 20-pack", brand: "Duracell", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
+      { description: "Duracell AA Optimum", brand: "Duracell", qty: 4, unit_cost: 15, total: 60, category: "consumables" },
+      { description: "Duracell AAA Optimum", brand: "Duracell", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
       { description: "iKlear Laptop Cleaning Kit", brand: "iKlear", qty: 3, unit_cost: 18, total: 54, category: "consumables" },
       { description: "Cable Management Box Organizer", brand: "JOTO", qty: 2, unit_cost: 25, total: 50, category: "consumables" },
     ],
@@ -1024,9 +1024,9 @@ export const BUNDLES_DATA: Bundle[] = [
     total_value: 375,
     description: "Serious tennis player consumables — regular player",
     items: [
-      { description: "Penn Pro Extra Duty Tennis Balls 4-pack", brand: "Penn", qty: 12, unit_cost: 9, total: 108, category: "consumables" },
-      { description: "Wilson Ultra Wrap Overgrip 30-pack", brand: "Wilson", qty: 3, unit_cost: 18, total: 54, category: "consumables" },
-      { description: "Babolat VS Touch Overgrip 3-pack", brand: "Babolat", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
+      { description: "Penn Pro Extra Duty Tennis Balls", brand: "Penn", qty: 12, unit_cost: 9, total: 108, category: "consumables" },
+      { description: "Wilson Ultra Wrap Overgrip", brand: "Wilson", qty: 3, unit_cost: 18, total: 54, category: "consumables" },
+      { description: "Babolat VS Touch Overgrip", brand: "Babolat", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
       { description: "Tourna Grip Original XL Overgrip", brand: "Tourna", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
       { description: "Wilson String Set Synthetic Gut", brand: "Wilson", qty: 4, unit_cost: 18, total: 72, category: "consumables" },
       { description: "Gamma Tennis Ball Hopper 72-ball", brand: "Gamma", qty: 1, unit_cost: 45, total: 45, category: "consumables" },
@@ -1061,10 +1061,10 @@ export const BUNDLES_DATA: Bundle[] = [
     total_value: 330,
     description: "David's garage tennis supply backup stock",
     items: [
-      { description: "Penn Championship Extra Duty Balls 4-pack", brand: "Penn", qty: 12, unit_cost: 9, total: 108, category: "consumables" },
-      { description: "Wilson Pro Overgrip 30-pack", brand: "Wilson", qty: 3, unit_cost: 18, total: 54, category: "consumables" },
-      { description: "Babolat VS Touch Overgrip 3-pack", brand: "Babolat", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
-      { description: "Head Vibration Dampener 2-pack", brand: "Head", qty: 6, unit_cost: 8, total: 48, category: "consumables" },
+      { description: "Penn Championship Extra Duty Balls", brand: "Penn", qty: 12, unit_cost: 9, total: 108, category: "consumables" },
+      { description: "Wilson Pro Overgrip", brand: "Wilson", qty: 3, unit_cost: 18, total: 54, category: "consumables" },
+      { description: "Babolat VS Touch Overgrip", brand: "Babolat", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
+      { description: "Head Vibration Dampener", brand: "Head", qty: 6, unit_cost: 8, total: 48, category: "consumables" },
       { description: "Luxilon ALU Power Rough String Set", brand: "Luxilon", qty: 4, unit_cost: 18, total: 72, category: "consumables" },
     ],
   },
@@ -1081,7 +1081,7 @@ export const BUNDLES_DATA: Bundle[] = [
     items: [
       { description: "Titleist Pro V1 Golf Balls Dozen", brand: "Titleist", qty: 4, unit_cost: 55, total: 220, category: "consumables" },
       { description: "TaylorMade TP5 Golf Balls Dozen", brand: "TaylorMade", qty: 2, unit_cost: 48, total: 96, category: "consumables" },
-      { description: "Pride Professional Tees 250-pack", brand: "Pride", qty: 4, unit_cost: 8, total: 32, category: "consumables" },
+      { description: "Pride Professional Tees", brand: "Pride", qty: 4, unit_cost: 8, total: 32, category: "consumables" },
       { description: "Callaway Golf Glove Mens Medium", brand: "Callaway", qty: 4, unit_cost: 18, total: 72, category: "consumables" },
       { description: "Titleist Club Glove Cart Bag Towel", brand: "Titleist", qty: 3, unit_cost: 18, total: 54, category: "consumables" },
     ],
@@ -1134,8 +1134,8 @@ export const BUNDLES_DATA: Bundle[] = [
     description: "Hardware and maintenance essentials",
     items: [
       { description: "WD-40 Multi-Use Product 14.4oz", brand: "WD-40", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
-      { description: "3M Command Strips Variety Pack", brand: "3M", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
-      { description: "Duracell AA Optimum 20-pack", brand: "Duracell", qty: 4, unit_cost: 15, total: 60, category: "consumables" },
+      { description: "3M Command Strips Variety", brand: "3M", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
+      { description: "Duracell AA Optimum", brand: "Duracell", qty: 4, unit_cost: 15, total: 60, category: "consumables" },
       { description: "Streamlight Protac HL LED Flashlight", brand: "Streamlight", qty: 2, unit_cost: 22, total: 44, category: "consumables" },
     ],
   },
@@ -1153,7 +1153,7 @@ export const BUNDLES_DATA: Bundle[] = [
       { description: "La Mer Moisturizing Cream 1oz", brand: "La Mer", qty: 2, unit_cost: 95, total: 190, category: "consumables" },
       { description: "Augustinus Bader The Rich Cream 50ml", brand: "Augustinus Bader", qty: 1, unit_cost: 185, total: 185, category: "consumables" },
       { description: "Sisley Black Rose Cream Mask 60ml", brand: "Sisley", qty: 1, unit_cost: 165, total: 165, category: "consumables" },
-      { description: "Valmont Prime Renewing Pack 75ml", brand: "Valmont", qty: 2, unit_cost: 95, total: 190, category: "consumables" },
+      { description: "Valmont Prime Renewing 75ml", brand: "Valmont", qty: 2, unit_cost: 95, total: 190, category: "consumables" },
       { description: "Dr. Barbara Sturm Hyaluronic Serum 30ml", brand: "Dr. Barbara Sturm", qty: 1, unit_cost: 145, total: 145, category: "consumables" },
     ],
   },
@@ -1184,7 +1184,7 @@ export const BUNDLES_DATA: Bundle[] = [
     total_value: 592,
     description: "Premium personal care essentials",
     items: [
-      { description: "Cocofloss Coconut Oil Floss 3-pack", brand: "Cocofloss", qty: 4, unit_cost: 36, total: 144, category: "consumables" },
+      { description: "Cocofloss Coconut Oil Floss", brand: "Cocofloss", qty: 4, unit_cost: 36, total: 144, category: "consumables" },
       { description: "Aesop Reverence Hand Wash Pump 500ml", brand: "Aesop", qty: 4, unit_cost: 38, total: 152, category: "consumables" },
       { description: "Aesop Resurrection Aromatique Hand Balm", brand: "Aesop", qty: 3, unit_cost: 42, total: 126, category: "consumables" },
       { description: "Frette Luxury Guest Hand Towel", brand: "Frette", qty: 2, unit_cost: 85, total: 170, category: "consumables" },
@@ -1204,7 +1204,7 @@ export const BUNDLES_DATA: Bundle[] = [
       { description: "Method Body Wash Ylang Ylang 18oz", brand: "Method", qty: 8, unit_cost: 8, total: 64, category: "consumables" },
       { description: "Nécessaire The Body Lotion 8.4oz", brand: "Nécessaire", qty: 4, unit_cost: 25, total: 100, category: "consumables" },
       { description: "Tom's of Maine Toothpaste 4oz", brand: "Tom's of Maine", qty: 12, unit_cost: 6, total: 72, category: "consumables" },
-      { description: "Cocofloss Variety 3-pack", brand: "Cocofloss", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
+      { description: "Cocofloss Variety", brand: "Cocofloss", qty: 4, unit_cost: 12, total: 48, category: "consumables" },
     ],
   },
 
