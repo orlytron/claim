@@ -1116,7 +1116,7 @@ export default function RoomReviewPage() {
       }
       setReopenSuggestions(false);
       setSuggestionsModalOpen(false);
-      setToast("Applied selected suggestions");
+      setToast("Updates saved");
     } finally {
       setIsSaving(false);
     }
@@ -1238,7 +1238,6 @@ export default function RoomReviewPage() {
         <SuggestionConfirmBanner
           roomName={roomName}
           list={roomSuggestionList}
-          originalItems={ORIGINAL_CLAIM_ITEMS}
           currentClaimItems={session.claim_items ?? []}
           sessionId={sessionId}
           disabled={isSaving}

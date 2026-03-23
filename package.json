@@ -15,7 +15,8 @@
     "smart-upgrades": "npx ts-node --project scripts/tsconfig.json scripts/smart-upgrade-seed.ts",
     "verify-upgrades": "npx ts-node --project scripts/tsconfig.json scripts/verify-high-value-options.ts",
     "gen-consumables": "npx ts-node --project scripts/tsconfig.json scripts/generate-consumable-packages.ts",
-    "apply-suggestions": "npx ts-node --project scripts/tsconfig.json scripts/apply-suggested-upgrades.ts"
+    "apply-suggestions": "npx ts-node --project scripts/tsconfig.json scripts/apply-suggested-upgrades.ts",
+    "reset-to-original": "npx ts-node --project scripts/tsconfig.json scripts/reset-to-original.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

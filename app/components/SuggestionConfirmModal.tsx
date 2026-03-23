@@ -27,8 +27,12 @@ export type SuggestionConfirmModalProps = {
   disabled?: boolean;
 };
 
+function lineLabel(claim: ClaimItem[], room: string, s: SuggestedUpgrade): string {
+  return formatSuggestedUpgradeLineWithClaim(claim, room, s).replace(/^☑\s*/, "").trim();
+}
+
 /**
- * Centered modal for first-visit / “view initial suggestions” — nothing auto-applies.
+ * Centered modal — nothing applies until the user clicks Apply Selected.
  */
 export default function SuggestionConfirmModal({
   open,
@@ -113,19 +117,20 @@ export default function SuggestionConfirmModal({
         >
           ✕
         </button>
-        <p id="suggestion-modal-title" className="pr-10 text-sm font-bold uppercase tracking-wide text-amber-900">
-          💡 Suggested changes
+        <p id="suggestion-modal-title" className="pr-10 text-sm font-bold text-amber-900">
+          💡 Suggested changes for this room
         </p>
-        <p className="mt-3 text-base font-semibold text-gray-900">
-          Based on your lifestyle profile, we recommend these updates — total to add:{" "}
-          <span className="tabular-nums text-[#16A34A]">
-            {selectedTotalDelta >= 0 ? `+${formatCurrency(selectedTotalDelta)}` : formatCurrency(selectedTotalDelta)}
-          </span>
-        </p>
-        <p className="mt-2 text-sm text-gray-600">Uncheck any row to exclude it. Nothing changes until you tap Apply.</p>
+        <p className="mt-2 text-sm text-amber-800/90">Based on your lifestyle profile</p>
+        <p className="mt-2 text-sm text-gray-600">Uncheck any row to exclude it. Nothing changes until you tap Apply Selected.</p>
         <ul className="mt-4 space-y-2">
           {rowIndices.map((i) => {
             const s = list[i]!;
+            const delta = getSuggestionDelta(s, claimItems);
+            const deltaLabel =
+              delta > 0 ? `+${formatCurrency(delta)}` : delta < 0 ? formatCurrency(delta) : formatCurrency(0);
+            const deltaClass =
+              delta > 0 ? "text-[#16A34A]" : delta < 0 ? "text-red-600" : "text-[#6B7280]";
+
             if (s.type === "SPLIT") {
               const orig = findClaimLineInRoom(claimItems, roomName, s.match_description);
               const origTotal = orig ? orig.qty * orig.unit_cost : 0;
@@ -134,8 +139,6 @@ export default function SuggestionConfirmModal({
                 : "—";
               const aTot = s.item_a.qty * s.item_a.unit_cost;
               const bTot = s.item_b.qty * s.item_b.unit_cost;
-              const net = getSuggestionDelta(s, claimItems);
-              const netClass = net >= 0 ? "text-[#16A34A]" : "text-red-600";
               return (
                 <li key={i} className="rounded-lg border border-gray-100 bg-gray-50/90 px-3 py-2 text-sm">
                   <div className="flex gap-2">
@@ -160,21 +163,14 @@ export default function SuggestionConfirmModal({
                         + {s.item_b.description} {s.item_b.qty} × {formatCurrency(s.item_b.unit_cost)}
                         <span className="ml-2 font-semibold tabular-nums">+{formatCurrency(bTot)}</span>
                       </p>
-                      <p className={`border-t border-gray-200 pt-2 text-sm font-bold tabular-nums ${netClass}`}>
-                        Net change: {net >= 0 ? "+" : ""}
-                        {formatCurrency(net)}
-                      </p>
                     </div>
+                    <span className={`shrink-0 self-start text-sm font-bold tabular-nums ${deltaClass}`}>{deltaLabel}</span>
                   </div>
                 </li>
               );
             }
-            const line = formatSuggestedUpgradeLineWithClaim(claimItems, roomName, s).replace(/^☑\s*/, "");
-            const delta = getSuggestionDelta(s, claimItems);
-            const deltaLabel =
-              delta > 0 ? `+${formatCurrency(delta)}` : delta < 0 ? formatCurrency(delta) : formatCurrency(0);
-            const deltaClass =
-              delta > 0 ? "text-[#16A34A]" : delta < 0 ? "text-red-600" : "text-[#6B7280]";
+
+            const line = lineLabel(claimItems, roomName, s);
             return (
               <li
                 key={i}
@@ -199,18 +195,28 @@ export default function SuggestionConfirmModal({
             onClick={() => setExpanded(true)}
             className="mt-3 text-sm font-semibold text-[#2563EB] hover:underline"
           >
-            ▶ +{moreCount} more (click to expand)
+            ▶ +{moreCount} more
           </button>
         ) : null}
-        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+        <p className="mt-4 text-base font-bold text-gray-900 tabular-nums">
+          Total to add:{" "}
+          <span className={selectedTotalDelta >= 0 ? "text-[#16A34A]" : "text-red-600"}>
+            {selectedTotalDelta >= 0 ? "+" : ""}
+            {formatCurrency(selectedTotalDelta)}
+          </span>
+        </p>
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           <button
             type="button"
             disabled={busy || disabled || checked.size === 0}
             onClick={() => void apply()}
             className="min-h-[48px] rounded-xl bg-[#2563EB] px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-40"
           >
-            ✓ Apply selected{" "}
-            {selectedTotalDelta >= 0 ? `+${formatCurrency(selectedTotalDelta)}` : formatCurrency(selectedTotalDelta)}
+            Apply Selected{" "}
+            <span className="tabular-nums">
+              {selectedTotalDelta >= 0 ? "+" : ""}
+              {formatCurrency(selectedTotalDelta)}
+            </span>
           </button>
           <button
             type="button"
