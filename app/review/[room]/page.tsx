@@ -1907,7 +1907,7 @@ export default function RoomReviewPage() {
 
       {showRoomChrome ? (
         <footer className="fixed bottom-0 inset-x-0 z-30 min-h-[52px] border-t border-gray-200 bg-white py-2 shadow-lg md:py-0">
-          <div className="h-1.5 w-full bg-gray-200">
+          <div className="h-1.5 w-full bg-gray-200" title="Room progress toward target">
             <div
               className="h-full bg-[#2563EB] transition-[width] duration-500 ease-out"
               style={{ width: `${progressPct}%` }}

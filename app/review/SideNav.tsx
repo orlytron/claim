@@ -40,6 +40,9 @@ export default function SideNav({ session }: { session: SessionData | null }) {
           <p className="text-xs text-gray-400">Claim #7579B726D</p>
         </Link>
         <div className="mt-3">
+          <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400 mb-1.5">
+            Overall Claim
+          </p>
           <div className="flex items-center justify-between text-xs mb-1">
             <span className="tabular-nums font-semibold text-gray-900">
               {formatCurrency(grandTotal)}
