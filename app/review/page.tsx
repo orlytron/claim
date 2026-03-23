@@ -82,7 +82,6 @@ function SimpleRoomCard({
       </p>
       <div className="mt-4">
         <div className="mb-1 flex justify-between text-xs font-medium text-gray-500">
-          <span className="tabular-nums font-mono text-[11px] text-gray-600">{progressBracket(pct)}</span>
           <span className="tabular-nums">{pct}%</span>
         </div>
         <div className="h-2.5 w-full overflow-hidden rounded-full bg-gray-200">
