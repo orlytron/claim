@@ -27,6 +27,9 @@ const SLUG_TO_ROOM: Record<string, string> = {
   "garage": "Garage",
   "bathroom-white": "Bathroom White",
   "bathroom-master": "Bathroom Master",
+  "master-bedroom": "Master Bedroom",
+  "master-bathroom": "Master Bathroom",
+  "master-closet": "Master Closet",
   "david-office-guest-room": "David Office / Guest Room",
   "art": "Art",
 };

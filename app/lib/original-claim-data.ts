@@ -265,8 +265,8 @@ const ORIGINAL_CLAIM_ITEMS_RAW: Omit<OriginalClaimItem, "source">[] = [
   { room: "Bathroom White", description: "Shower curtain", brand: "", model: "", qty: 1, age_years: 0, age_months: 0, condition: "Average", unit_cost: 35, category: "Personal Care" },
   { room: "Bathroom White", description: "Dental floss", brand: "", model: "", qty: 1, age_years: 0, age_months: 0, condition: "Average", unit_cost: 4, category: "Personal Care" },
   { room: "Bathroom White", description: "Bidet", brand: "", model: "", qty: 1, age_years: 0, age_months: 0, condition: "Average", unit_cost: 200, category: "Personal Care" },
-  // Bathroom Master
-  { room: "Bathroom Master", description: "Built-in desk", brand: "", model: "", qty: 1, age_years: 0, age_months: 0, condition: "Average", unit_cost: 1800, category: "Furniture" },
+  // Master suite (split from legacy Bathroom Master)
+  { room: "Master Bedroom", description: "Built-in desk", brand: "", model: "", qty: 1, age_years: 0, age_months: 0, condition: "Average", unit_cost: 1800, category: "Furniture" },
   // David Office / Guest Room
   { room: "David Office / Guest Room", description: "Books", brand: "", model: "", qty: 25, age_years: 0, age_months: 0, condition: "Average", unit_cost: 30, category: "Books" },
   { room: "David Office / Guest Room", description: "Artwork", brand: "", model: "", qty: 2, age_years: 0, age_months: 0, condition: "Average", unit_cost: 4000, category: "Art" },

@@ -560,9 +560,9 @@ export const BUNDLES_DATA: Bundle[] = [
     ],
   },
 
-  // ── BATHROOM MASTER ──────────────────────────────────────────────────────────
+  // ── MASTER BATHROOM (legacy BATH-M codes) ───────────────────────────────────
   {
-    room: "Bathroom Master", bundle_code: "BATH-M-A", name: "Luxury Essentials",
+    room: "Master Bathroom", bundle_code: "BATH-M-A", name: "Luxury Essentials",
     tier: "A", sweet_spot: false, plausibility: "green", total_value: 15480,
     description: "",
     items: [
@@ -581,7 +581,7 @@ export const BUNDLES_DATA: Bundle[] = [
     ],
   },
   {
-    room: "Bathroom Master", bundle_code: "BATH-M-B", name: "Spa Standard",
+    room: "Master Bathroom", bundle_code: "BATH-M-B", name: "Spa Standard",
     tier: "B", sweet_spot: true, plausibility: "yellow", total_value: 41480,
     description: "",
     items: [
@@ -597,7 +597,7 @@ export const BUNDLES_DATA: Bundle[] = [
     ],
   },
   {
-    room: "Bathroom Master", bundle_code: "BATH-M-C", name: "Luxury Suite",
+    room: "Master Bathroom", bundle_code: "BATH-M-C", name: "Luxury Suite",
     tier: "C", sweet_spot: false, plausibility: "red", total_value: 57400,
     description: "",
     items: [
@@ -1141,7 +1141,7 @@ export const BUNDLES_DATA: Bundle[] = [
   },
 
   {
-    room: "Bathroom Master",
+    room: "Master Bathroom",
     bundle_code: "CONS-BTM-1",
     name: "Jacquie Luxury Skincare",
     tier: "consumables",
@@ -1159,7 +1159,7 @@ export const BUNDLES_DATA: Bundle[] = [
   },
 
   {
-    room: "Bathroom Master",
+    room: "Master Bathroom",
     bundle_code: "CONS-BTM-2",
     name: "Luxury Hair & Body",
     tier: "consumables",
@@ -1175,7 +1175,7 @@ export const BUNDLES_DATA: Bundle[] = [
   },
 
   {
-    room: "Bathroom Master",
+    room: "Master Bathroom",
     bundle_code: "CONS-BTM-3",
     name: "Dental & Daily Personal Care",
     tier: "consumables",

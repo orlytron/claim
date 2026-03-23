@@ -1061,12 +1061,14 @@ export const SUGGESTED_UPGRADES: Record<string, SuggestedUpgrade[]> = {
     },
   ],
 
-  "Bathroom Master": [
+  "Master Bedroom": [
     {
       type: "REMOVE",
       match_description: "Built-in desk",
       reason: "Wrong room — moved to David Office",
     },
+  ],
+  "Master Bathroom": [
     {
       type: "ADD",
       item: {
@@ -1074,7 +1076,7 @@ export const SUGGESTED_UPGRADES: Record<string, SuggestedUpgrade[]> = {
         brand: "",
         unit_cost: 1800,
         qty: 2,
-        room: "Bathroom Master",
+        room: "Master Bathroom",
         category: "Furniture",
         age_years: 3,
         condition: "Average",
@@ -1088,7 +1090,7 @@ export const SUGGESTED_UPGRADES: Record<string, SuggestedUpgrade[]> = {
         brand: "Kohler",
         unit_cost: 650,
         qty: 1,
-        room: "Bathroom Master",
+        room: "Master Bathroom",
         category: "Furniture",
         age_years: 3,
         condition: "Average",
@@ -1096,6 +1098,8 @@ export const SUGGESTED_UPGRADES: Record<string, SuggestedUpgrade[]> = {
       reason: "Medicine cabinet",
     },
   ],
+  "Master Closet": [],
+  "Bathroom Master": [],
 
   "Bathroom White": [
     {

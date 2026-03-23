@@ -319,7 +319,7 @@ export const AFFORDABLE_BUNDLES: Bundle[] = [
     ],
   }),
   bundle({
-    room: "Bathroom Master",
+    room: "Master Bathroom",
     bundle_code: "BATH-M-SPA-A",
     name: "Spa Bathroom Essentials",
     description: "Turn the master bath into a spa experience",

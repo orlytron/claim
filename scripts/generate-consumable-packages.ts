@@ -465,7 +465,7 @@ const CONSUMABLE_PACKAGES: PackIn[] = [
     ],
   },
   {
-    room: "Bathroom Master",
+    room: "Master Bathroom",
     bundle_code: "CONS-BTM-1",
     name: "Jacquie Luxury Skincare",
     description: "High-end skincare for art curator's bathroom",
@@ -478,7 +478,7 @@ const CONSUMABLE_PACKAGES: PackIn[] = [
     ],
   },
   {
-    room: "Bathroom Master",
+    room: "Master Bathroom",
     bundle_code: "CONS-BTM-2",
     name: "Luxury Hair & Body",
     description: "Premium hair and body care for master bath",
@@ -489,7 +489,7 @@ const CONSUMABLE_PACKAGES: PackIn[] = [
     ],
   },
   {
-    room: "Bathroom Master",
+    room: "Master Bathroom",
     bundle_code: "CONS-BTM-3",
     name: "Dental & Daily Personal Care",
     description: "Premium personal care essentials",

@@ -349,7 +349,7 @@ export const TIERED_FOCUS_BUNDLES: Bundle[] = [
     ]
   ),
   tiered(
-    "Bathroom Master",
+    "Master Bedroom",
     "MSTR-FURN-A",
     "Master Bedroom Furniture",
     "King suite furniture path",
@@ -371,7 +371,7 @@ export const TIERED_FOCUS_BUNDLES: Bundle[] = [
     ]
   ),
   tiered(
-    "Bathroom Master",
+    "Master Bedroom",
     "MSTR-BED-A",
     "King Bedding & Linens",
     "Layered luxury bedding",
@@ -393,7 +393,7 @@ export const TIERED_FOCUS_BUNDLES: Bundle[] = [
     ]
   ),
   tiered(
-    "Bathroom Master",
+    "Master Closet",
     "MSTR-JAC-A",
     "Jacquie's Wardrobe",
     "Professional and evening wardrobe",
@@ -419,7 +419,7 @@ export const TIERED_FOCUS_BUNDLES: Bundle[] = [
     { sweet_spot: false }
   ),
   tiered(
-    "Bathroom Master",
+    "Master Closet",
     "MSTR-DAV-A",
     "David's Wardrobe",
     "On-camera and casual wardrobe",
@@ -445,7 +445,7 @@ export const TIERED_FOCUS_BUNDLES: Bundle[] = [
     { sweet_spot: false }
   ),
   tiered(
-    "Bathroom Master",
+    "Master Closet",
     "MSTR-JEW-A",
     "Jacquie's Jewelry",
     "Fine and inherited pieces",
@@ -471,7 +471,7 @@ export const TIERED_FOCUS_BUNDLES: Bundle[] = [
     { sweet_spot: false, plausibility: "medium" }
   ),
   tiered(
-    "Bathroom Master",
+    "Master Closet",
     "MSTR-WATCH-A",
     "Watch Collection",
     "His and hers timepieces",

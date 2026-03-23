@@ -63,7 +63,7 @@ const L = (description: string, brand: string, unit_cost: number, qty: number, c
 /** Laundry + smart home only — room-specific tiered sets live in bundles-tiered-new. */
 export const FOCUSED_TIERED_BUNDLES: TieredBundle[] = [
   focusedBundle({
-    room: "Bathroom White",
+    room: "Master Bathroom",
     bundle_code: "LAUN-1",
     name: "Laundry Room Setup",
     description: "Washer dryer and laundry essentials",

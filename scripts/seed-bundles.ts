@@ -551,7 +551,7 @@ const BUNDLES: Bundle[] = [
 
   // ── BATHROOM MASTER ──────────────────────────────────────────────────────────
   {
-    room: "Bathroom Master", bundle_code: "BATH-M-A", name: "Luxury Essentials",
+    room: "Master Bathroom", bundle_code: "BATH-M-A", name: "Luxury Essentials",
     tier: "A", sweet_spot: false, plausibility: "green", total_value: 15480,
     description: "",
     items: [
@@ -570,7 +570,7 @@ const BUNDLES: Bundle[] = [
     ],
   },
   {
-    room: "Bathroom Master", bundle_code: "BATH-M-B", name: "Spa Standard",
+    room: "Master Bathroom", bundle_code: "BATH-M-B", name: "Spa Standard",
     tier: "B", sweet_spot: true, plausibility: "yellow", total_value: 41480,
     description: "",
     items: [
@@ -586,7 +586,7 @@ const BUNDLES: Bundle[] = [
     ],
   },
   {
-    room: "Bathroom Master", bundle_code: "BATH-M-C", name: "Luxury Suite",
+    room: "Master Bathroom", bundle_code: "BATH-M-C", name: "Luxury Suite",
     tier: "C", sweet_spot: false, plausibility: "red", total_value: 57400,
     description: "",
     items: [

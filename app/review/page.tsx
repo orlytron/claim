@@ -32,7 +32,9 @@ const ROOMS: { name: string; slug: string; display?: string }[] = [
   { name: "Bedroom Rafe", slug: "bedroom-rafe" },
   { name: "Patio", slug: "patio" },
   { name: "Garage", slug: "garage" },
-  { name: "Bathroom Master", slug: "bathroom-master", display: "Master Bedroom" },
+  { name: "Master Bedroom", slug: "master-bedroom" },
+  { name: "Master Bathroom", slug: "master-bathroom" },
+  { name: "Master Closet", slug: "master-closet" },
   { name: "Bathroom White", slug: "bathroom-white" },
 ];
 

@@ -277,7 +277,7 @@ export const SUGGESTED_ADDITIONS: Record<string, SuggestedAdditionRow[]> = {
       premium: { title: "Big Agnes Copper Spur HV", price: 720, url: "https://www.google.com/search?q=Big+Agnes+Copper+Spur", brand: "Big Agnes" },
     },
   ],
-  "Bathroom Master": [
+  "Master Bathroom": [
     {
       id: "bm-towel",
       label: "Towel set",
