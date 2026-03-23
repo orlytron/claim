@@ -190,10 +190,12 @@ export function applyOneSuggestionImmutable(
 }
 
 /**
- * Dollar delta for one suggestion using current lines for this room (pass room-filtered items).
+ * Dollar delta for one suggestion. Pass the **full** claim so matches work across rooms
+ * (MOVE / ADD / descriptions that may exist outside the current room).
  */
 export function getSuggestionDelta(suggestion: SuggestedUpgrade, claimItems: ClaimItem[]): number {
-  const findItem = (desc: string) => claimItems.find((i) => norm(i.description) === norm(desc));
+  const findItem = (desc: string) =>
+    claimItems.find((i) => i.description.toLowerCase().trim() === desc.toLowerCase().trim());
 
   switch (suggestion.type) {
     case "RENAME":
@@ -214,10 +216,12 @@ export function getSuggestionDelta(suggestion: SuggestedUpgrade, claimItems: Cla
       return newQty * newCost - orig.qty * orig.unit_cost;
     }
     case "ADD": {
-      const desc = suggestion.item.description;
-      const exists = findItem(desc);
+      const addDesc = (suggestion.item?.description ?? "").toLowerCase().trim();
+      const exists = claimItems.find(
+        (i) => i.description.toLowerCase().trim() === addDesc
+      );
       if (exists) return 0;
-      return suggestion.item.unit_cost * suggestion.item.qty;
+      return (suggestion.item?.unit_cost ?? 0) * (suggestion.item?.qty ?? 1);
     }
     case "SPLIT": {
       const orig = findItem(suggestion.match_description);
@@ -250,15 +254,14 @@ export function suggestionSelectedDeltaSum(
   room: string,
   list: SuggestedUpgrade[],
   checked: Set<number>,
-  /** When set, deltas use these lines (e.g. deduped room list) instead of filtering `claim`. */
-  sessionItems?: ClaimItem[]
+  /** @deprecated Ignored; deltas always use full `claim` for cross-room matching. */
+  _sessionItems?: ClaimItem[]
 ): number {
-  const rr = normRoom(room);
-  const roomItems = sessionItems ?? claim.filter((i) => normRoom(i.room) === rr);
+  void room;
   let t = 0;
   for (const i of [...checked].sort((a, b) => a - b)) {
     if (i < 0 || i >= list.length) continue;
-    t += getSuggestionDelta(list[i]!, roomItems);
+    t += getSuggestionDelta(list[i]!, claim);
   }
   return Math.round(t * 100) / 100;
 }
@@ -267,11 +270,11 @@ export function suggestionNonZeroDeltaIndices(
   claim: ClaimItem[],
   room: string,
   list: SuggestedUpgrade[],
-  sessionItems?: ClaimItem[]
+  /** @deprecated Ignored; deltas always use full `claim`. */
+  _sessionItems?: ClaimItem[]
 ): number[] {
-  const rr = normRoom(room);
-  const roomItems = sessionItems ?? claim.filter((i) => normRoom(i.room) === rr);
-  return list.map((_, i) => i).filter((i) => getSuggestionDelta(list[i]!, roomItems) !== 0);
+  void room;
+  return list.map((_, i) => i).filter((i) => getSuggestionDelta(list[i]!, claim) !== 0);
 }
 
 export function suggestionIsRenameOrMove(s: SuggestedUpgrade): boolean {

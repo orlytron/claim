@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import type { SuggestedUpgrade } from "../lib/suggested-upgrades";
 import { formatSuggestedUpgradeLineWithClaim } from "../lib/suggested-upgrades";
 import {
@@ -17,10 +17,13 @@ export type SuggestionConfirmBannerProps = {
   roomSlug: string;
   roomName: string;
   claimItems: ClaimItem[];
+  /** Full claim lines (same as claimItems) — used for delta matching across all rooms. */
   sessionItems: ClaimItem[];
   list: SuggestedUpgrade[];
   onApply: (nextClaim: ClaimItem[]) => Promise<void>;
   onSkip: () => void;
+  /** Persist dismiss so the banner does not reappear for this room. */
+  onSkipPermanent: () => void;
   disabled?: boolean;
 };
 
@@ -35,11 +38,20 @@ export default function SuggestionConfirmBanner({
   list,
   onApply,
   onSkip,
+  onSkipPermanent,
   disabled,
 }: SuggestionConfirmBannerProps) {
   const [expanded, setExpanded] = useState(false);
   const [checked, setChecked] = useState<Set<number>>(() => new Set(list.map((_, i) => i)));
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    console.log("Banner items count:", sessionItems.length);
+    const first = list[0];
+    if (first) {
+      console.log("First suggestion delta:", getSuggestionDelta(first, sessionItems));
+    }
+  }, [list, sessionItems]);
 
   useLayoutEffect(() => {
     setExpanded(false);
@@ -147,6 +159,14 @@ export default function SuggestionConfirmBanner({
             className="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50"
           >
             Skip for now
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onSkipPermanent}
+            className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-950 hover:bg-amber-100"
+          >
+            Skip and don&apos;t show again
           </button>
         </div>
       </div>

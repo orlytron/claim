@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import FocusedAdditionCard from "../../components/FocusedAdditionCard";
+import SuggestionConfirmBanner from "../../components/SuggestionConfirmBanner";
 import SuggestionConfirmModal from "../../components/SuggestionConfirmModal";
 import { dispatchUpgradeReward } from "../../components/UpgradeRewardToast";
 import type { Bundle } from "../../lib/bundles-data";
@@ -396,6 +397,8 @@ export default function RoomReviewPage() {
   const [suggestionsModalOpen, setSuggestionsModalOpen] = useState(false);
   /** User clicked “View initial suggestions” — reopen modal even if localStorage says dismissed. */
   const [reopenSuggestions, setReopenSuggestions] = useState(false);
+  const [sessionLoaded, setSessionLoaded] = useState(false);
+  const [showBanner, setShowBanner] = useState(false);
   const [isAdminUser, setIsAdminUser] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -434,9 +437,11 @@ export default function RoomReviewPage() {
   }, []);
 
   useEffect(() => {
+    setShowBanner(false);
+  }, [roomSlug]);
+
+  useEffect(() => {
     if (!roomSlug) return;
-    const key = `suggestions_shown_${roomSlug}`;
-    const shown = typeof window !== "undefined" ? localStorage.getItem(key) : null;
     if (!roomName) {
       setSuggestionsModalOpen(false);
       return;
@@ -446,8 +451,25 @@ export default function RoomReviewPage() {
       setSuggestionsModalOpen(false);
       return;
     }
-    setSuggestionsModalOpen(shown == null || reopenSuggestions);
+    if (reopenSuggestions) setSuggestionsModalOpen(true);
+    else setSuggestionsModalOpen(false);
   }, [roomSlug, roomName, reopenSuggestions]);
+
+  const claimItemCount = session?.claim_items?.length ?? 0;
+
+  useEffect(() => {
+    if (!sessionLoaded) return;
+    if (!roomSlug) return;
+    if (claimItemCount === 0) return;
+    if (!roomName) return;
+    if ((SUGGESTED_UPGRADES[roomName] ?? []).length === 0) {
+      setShowBanner(false);
+      return;
+    }
+    const key = `suggestions_shown_${roomSlug}`;
+    const shown = typeof window !== "undefined" ? localStorage.getItem(key) : null;
+    if (!shown) setShowBanner(true);
+  }, [sessionLoaded, roomSlug, roomName, claimItemCount]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -456,6 +478,7 @@ export default function RoomReviewPage() {
 
   async function bootstrap() {
     setIsLoading(true);
+    setSessionLoaded(false);
     setLoadError(null);
     setItems([]);
     let sess: SessionData | null = null;
@@ -464,6 +487,7 @@ export default function RoomReviewPage() {
     } catch {
       setLoadError("We couldn’t load your claim. Check your connection and try again.");
       setIsLoading(false);
+      setSessionLoaded(true);
       return;
     }
     setSession(sess);
@@ -478,6 +502,7 @@ export default function RoomReviewPage() {
         setRoomTarget(roundRoomGoalSlider(readRoomGoal(sessionId, fallbackName) ?? def));
       }
       setIsLoading(false);
+      setSessionLoaded(true);
       return;
     }
     setClaimGoal(sess.target_value ?? CLAIM_GOAL_DEFAULT);
@@ -486,6 +511,7 @@ export default function RoomReviewPage() {
     setRoomName(name);
     if (!name) {
       setIsLoading(false);
+      setSessionLoaded(true);
       return;
     }
     const roomItems = claimItems.filter((i) => i.room === name);
@@ -509,6 +535,7 @@ export default function RoomReviewPage() {
       setCachedDescs(new Set());
     }
     setIsLoading(false);
+    setSessionLoaded(true);
   }
 
   /** Dedupe by description + room; keep higher unit_cost; sort by price desc (display list). */
@@ -969,7 +996,7 @@ export default function RoomReviewPage() {
           roomSlug={roomSlug}
           roomName={roomName}
           claimItems={session.claim_items ?? []}
-          sessionItems={displayItems}
+          sessionItems={session.claim_items ?? []}
           list={roomSuggestionList}
           onApply={handleApplySuggestionsFromBanner}
           onDismiss={() => {
@@ -978,6 +1005,24 @@ export default function RoomReviewPage() {
               localStorage.setItem(`suggestions_shown_${roomSlug}`, "shown");
             }
             setSuggestionsModalOpen(false);
+          }}
+          disabled={isSaving}
+        />
+      ) : null}
+      {session && showBanner && showRoomChrome && roomSuggestionList.length > 0 ? (
+        <SuggestionConfirmBanner
+          roomSlug={roomSlug}
+          roomName={roomName}
+          claimItems={session.claim_items ?? []}
+          sessionItems={session.claim_items ?? []}
+          list={roomSuggestionList}
+          onApply={handleApplySuggestionsFromBanner}
+          onSkip={() => setShowBanner(false)}
+          onSkipPermanent={() => {
+            if (typeof window !== "undefined" && roomSlug) {
+              localStorage.setItem(`suggestions_shown_${roomSlug}`, "shown");
+            }
+            setShowBanner(false);
           }}
           disabled={isSaving}
         />
@@ -1121,6 +1166,7 @@ export default function RoomReviewPage() {
                         type="button"
                         onClick={() => {
                           setReopenSuggestions(true);
+                          setShowBanner(false);
                           setSuggestionsModalOpen(true);
                         }}
                         className="font-semibold text-amber-800 underline-offset-2 hover:underline"

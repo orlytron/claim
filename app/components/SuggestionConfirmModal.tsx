@@ -124,7 +124,7 @@ export default function SuggestionConfirmModal({
         <ul className="mt-4 space-y-2">
           {rowIndices.map((i) => {
             const line = formatSuggestedUpgradeLineWithClaim(claimItems, roomName, list[i]!);
-            const delta = getSuggestionDelta(list[i]!, sessionItems);
+            const delta = getSuggestionDelta(list[i]!, claimItems);
             const deltaLabel = delta > 0 ? `+${formatCurrency(delta)}` : delta < 0 ? formatCurrency(delta) : formatCurrency(0);
             const deltaClass =
               delta > 0 ? "text-[#16A34A]" : delta < 0 ? "text-red-600" : "text-[#6B7280]";
