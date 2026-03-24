@@ -234,6 +234,14 @@ function formatSignedGap(value: number): string {
   return formatCurrency(0);
 }
 
+function autoCondition(age: number): string {
+  if (age === 0) return "New";
+  if (age <= 5) return "Like New";
+  if (age <= 10) return "Good";
+  if (age <= 15) return "Decent";
+  return "Used";
+}
+
 function ConsumablePackCard({
   bundle: b,
   disabled,
@@ -332,12 +340,17 @@ export default function RoomReviewPage() {
   const [smartStatus, setSmartStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [generatedBundle, setGeneratedBundle] = useState<Bundle | null>(null);
   const [editingItemKey, setEditingItemKey] = useState<string | null>(null);
+  const [headerExpanded, setHeaderExpanded] = useState(false);
   const [editDraft, setEditDraft] = useState({
     description: "",
     brand: "",
     model: "",
     unit_cost: "",
     age_years: "0",
+    condition: "New",
+    vendor: "",
+    qty: "1",
+    notes: "",
   });
   const [quickDesc, setQuickDesc] = useState("");
   const [quickBrand, setQuickBrand] = useState("");
@@ -668,6 +681,7 @@ export default function RoomReviewPage() {
     if (!session?.claim_items) return;
     const next = items.filter((ci) => !sameClaimLine(ci, item));
     await saveRoomItems(next);
+    setEditingItemKey(null);
     setToast("Removed");
   }
 
@@ -1151,138 +1165,161 @@ export default function RoomReviewPage() {
               </h1>
               <div className="mt-3 h-px w-full bg-gray-200" />
 
-              <div className="mt-5 space-y-2 rounded-xl border border-gray-200 bg-gray-50 px-4 py-4 text-sm md:text-base">
-                <div className="flex flex-wrap items-center justify-between gap-2 tabular-nums">
-                  <span className="text-[#6B7280]">Current:</span>
-                  <span className="font-semibold text-gray-900">{formatCurrency(roomTotal)}</span>
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-2 tabular-nums">
-                  <span className="text-[#6B7280]">Target:</span>
-                  {editingTarget ? (
-                    <span className="inline-flex flex-wrap items-center gap-2">
-                      <input
-                        ref={targetEditInputRef}
-                        type="number"
-                        min={1}
-                        className="w-40 max-w-[55vw] rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm font-semibold tabular-nums text-gray-900"
-                        value={targetInput}
-                        onChange={(e) => setTargetInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") saveTarget();
-                          if (e.key === "Escape") {
-                            setEditingTarget(false);
-                            setTargetInput(String(roomTarget));
-                          }
-                        }}
-                        autoFocus
-                      />
-                      <button
-                        type="button"
-                        onClick={() => saveTarget()}
-                        className="rounded-lg bg-[#2563EB] px-3 py-1.5 text-sm font-bold text-white hover:bg-blue-700"
-                      >
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingTarget(false);
-                          setTargetInput(String(roomTarget));
-                        }}
-                        className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                      >
-                        Cancel
-                      </button>
+              <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50">
+                <button
+                  type="button"
+                  onClick={() => setHeaderExpanded((e) => !e)}
+                  className="flex w-full items-center justify-between rounded-xl px-4 py-3 text-left hover:bg-gray-100"
+                >
+                  <div className="flex flex-wrap items-center gap-3 text-sm tabular-nums">
+                    <span className="font-bold text-gray-900">{formatCurrency(roomTotal)}</span>
+                    <span className="text-gray-400">of {formatCurrency(roomTarget)}</span>
+                    <span
+                      className={`font-semibold ${gapSigned < 0 ? "text-red-500" : "text-green-600"}`}
+                    >
+                      {formatSignedGap(gapSigned)}
                     </span>
-                  ) : (
-                    <span className="inline-flex flex-wrap items-center gap-2 font-semibold text-gray-900">
-                      {formatCurrency(roomTarget)}
-                      <button
-                        type="button"
-                        className="text-base leading-none text-[#2563EB] hover:opacity-80"
-                        onClick={() => {
-                          setTargetInput(String(roomTarget));
-                          setEditingTarget(true);
-                        }}
-                        aria-label="Edit target"
-                      >
-                        ✏️
-                      </button>
-                    </span>
-                  )}
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-2 tabular-nums">
-                  <span className="text-[#6B7280]">Gap:</span>
-                  <span className="font-semibold text-gray-900">{formatSignedGap(gapSigned)}</span>
-                </div>
-                <div className="mt-4 space-y-2 border-t border-gray-200 pt-3 text-xs tabular-nums text-gray-800 md:text-sm">
-                  <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
-                    What this room could reach
-                  </p>
-                  <div className="flex flex-wrap justify-between gap-2">
-                    <span className="text-[#6B7280]">Current value:</span>
-                    <span className="font-medium text-gray-900">{formatCurrency(roomTotal)}</span>
                   </div>
-                  <div className="flex flex-wrap justify-between gap-2">
-                    <span className="min-w-0 text-[#6B7280]">+ Focused additions (Complete ★ all):</span>
-                    <span className="font-medium text-[#16A34A]">+{formatCurrency(pendingFocusedCompleteSum)}</span>
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap justify-between gap-2">
-                      <span className="text-[#6B7280]">+ If you upgrade items:</span>
-                      <span className="font-medium text-[#16A34A]">+{formatCurrency(upgradePremiumPotentialDelta)}</span>
+                  <span className="ml-4 shrink-0 text-xs text-gray-400">
+                    {headerExpanded ? "▲ Less" : "▼ Details"}
+                  </span>
+                </button>
+
+                {headerExpanded ? (
+                  <div className="space-y-2 border-t border-gray-200 px-4 py-4 text-sm md:text-base">
+                    <div className="flex flex-wrap items-center justify-between gap-2 tabular-nums">
+                      <span className="text-[#6B7280]">Current:</span>
+                      <span className="font-semibold text-gray-900">{formatCurrency(roomTotal)}</span>
                     </div>
-                    <p className="mt-0.5 text-[11px] leading-snug text-[#9CA3AF]">
-                      (all upgrade options at premium tier)
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap justify-between gap-2 font-semibold text-gray-900">
-                    <span>Maximum possible:</span>
-                    <span>{formatCurrency(maximumPossibleRoomTotal)}</span>
-                  </div>
-                  <div className="flex flex-wrap justify-between gap-2">
-                    <span className="text-[#6B7280]">Your target:</span>
-                    <span className="font-medium">{formatCurrency(roomTarget)}</span>
-                  </div>
-                  <div className="flex flex-wrap justify-between gap-2">
-                    <span className="text-[#6B7280]">Remaining gap:</span>
-                    <span className="font-semibold text-gray-900">{formatSignedGap(remainingGapAfterMaximum)}</span>
-                  </div>
-                  <p className="pt-2 text-sm leading-snug text-gray-700">
-                    {maximumPossibleRoomTotal < roomTarget ? (
-                      <>
-                        💡 Art collection and documentation will close the remaining gap.
-                      </>
-                    ) : (
-                      <>✅ This room can reach its target with upgrades and additions.</>
-                    )}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 border-t border-gray-200 pt-3 text-xs md:text-sm">
-                  <button
-                    type="button"
-                    onClick={() => setShowResetConfirm(true)}
-                    className="font-medium text-[#2563EB] underline-offset-2 hover:underline"
-                  >
-                    Reset room
-                  </button>
-                  {roomSuggestionList.length > 0 ? (
-                    <>
-                      <span className="text-gray-300">·</span>
+                    <div className="flex flex-wrap items-center justify-between gap-2 tabular-nums">
+                      <span className="text-[#6B7280]">Target:</span>
+                      {editingTarget ? (
+                        <span className="inline-flex flex-wrap items-center gap-2">
+                          <input
+                            ref={targetEditInputRef}
+                            type="number"
+                            min={1}
+                            className="w-40 max-w-[55vw] rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm font-semibold tabular-nums text-gray-900"
+                            value={targetInput}
+                            onChange={(e) => setTargetInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveTarget();
+                              if (e.key === "Escape") {
+                                setEditingTarget(false);
+                                setTargetInput(String(roomTarget));
+                              }
+                            }}
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            onClick={() => saveTarget()}
+                            className="rounded-lg bg-[#2563EB] px-3 py-1.5 text-sm font-bold text-white hover:bg-blue-700"
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingTarget(false);
+                              setTargetInput(String(roomTarget));
+                            }}
+                            className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                          >
+                            Cancel
+                          </button>
+                        </span>
+                      ) : (
+                        <span className="inline-flex flex-wrap items-center gap-2 font-semibold text-gray-900">
+                          {formatCurrency(roomTarget)}
+                          <button
+                            type="button"
+                            className="text-base leading-none text-[#2563EB] hover:opacity-80"
+                            onClick={() => {
+                              setTargetInput(String(roomTarget));
+                              setEditingTarget(true);
+                            }}
+                            aria-label="Edit target"
+                          >
+                            ✏️
+                          </button>
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2 tabular-nums">
+                      <span className="text-[#6B7280]">Gap:</span>
+                      <span className="font-semibold text-gray-900">{formatSignedGap(gapSigned)}</span>
+                    </div>
+                    <div className="mt-4 space-y-2 border-t border-gray-200 pt-3 text-xs tabular-nums text-gray-800 md:text-sm">
+                      <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
+                        What this room could reach
+                      </p>
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <span className="text-[#6B7280]">Current value:</span>
+                        <span className="font-medium text-gray-900">{formatCurrency(roomTotal)}</span>
+                      </div>
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <span className="min-w-0 text-[#6B7280]">+ Focused additions (Complete ★ all):</span>
+                        <span className="font-medium text-[#16A34A]">+{formatCurrency(pendingFocusedCompleteSum)}</span>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap justify-between gap-2">
+                          <span className="text-[#6B7280]">+ If you upgrade items:</span>
+                          <span className="font-medium text-[#16A34A]">+{formatCurrency(upgradePremiumPotentialDelta)}</span>
+                        </div>
+                        <p className="mt-0.5 text-[11px] leading-snug text-[#9CA3AF]">
+                          (all upgrade options at premium tier)
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap justify-between gap-2 font-semibold text-gray-900">
+                        <span>Maximum possible:</span>
+                        <span>{formatCurrency(maximumPossibleRoomTotal)}</span>
+                      </div>
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <span className="text-[#6B7280]">Your target:</span>
+                        <span className="font-medium">{formatCurrency(roomTarget)}</span>
+                      </div>
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <span className="text-[#6B7280]">Remaining gap:</span>
+                        <span className="font-semibold text-gray-900">{formatSignedGap(remainingGapAfterMaximum)}</span>
+                      </div>
+                      <p className="pt-2 text-sm leading-snug text-gray-700">
+                        {maximumPossibleRoomTotal < roomTarget ? (
+                          <>
+                            💡 Art collection and documentation will close the remaining gap.
+                          </>
+                        ) : (
+                          <>✅ This room can reach its target with upgrades and additions.</>
+                        )}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 border-t border-gray-200 pt-3 text-xs md:text-sm">
                       <button
                         type="button"
-                        onClick={() => {
-                          setReopenSuggestions(true);
-                          setShowBanner(false);
-                          setSuggestionsModalOpen(true);
-                        }}
-                        className="font-semibold text-amber-800 underline-offset-2 hover:underline"
+                        onClick={() => setShowResetConfirm(true)}
+                        className="font-medium text-[#2563EB] underline-offset-2 hover:underline"
                       >
-                        View initial suggestions
+                        Reset room
                       </button>
-                    </>
-                  ) : null}
-                </div>
+                      {roomSuggestionList.length > 0 ? (
+                        <>
+                          <span className="text-gray-300">·</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReopenSuggestions(true);
+                              setShowBanner(false);
+                              setSuggestionsModalOpen(true);
+                            }}
+                            className="font-semibold text-amber-800 underline-offset-2 hover:underline"
+                          >
+                            View initial suggestions
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
               </div>
 
               <p className="mt-6 text-xs leading-relaxed text-[#6B7280] md:text-sm">
@@ -1297,13 +1334,13 @@ export default function RoomReviewPage() {
             className="mx-auto w-full max-w-[1100px] flex-1 scroll-mt-24 overflow-x-hidden px-4 py-6 md:px-8"
           >
             <section className="rounded-2xl border border-gray-100 bg-white shadow-sm transition-all duration-300">
-              <div className="border-b border-gray-100 px-5 py-5 md:px-6">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">
-                  What&apos;s in this room
-                </h2>
-                <p className="mt-1 text-sm text-[#6B7280]">
-                  All lines in this room, highest unit price first. Edit a row to change details.
-                </p>
+              <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 md:px-6">
+                <div>
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">What&apos;s in this room</h2>
+                  <p className="mt-0.5 text-sm tabular-nums text-gray-500">
+                    {displayItems.length} items · {formatCurrency(roomTotal)}
+                  </p>
+                </div>
               </div>
 
               <div className="border-b border-gray-100 bg-gray-50/50 px-4 py-4 md:px-6">
@@ -1370,7 +1407,23 @@ export default function RoomReviewPage() {
                   </p>
                 </div>
               ) : (
-                <div className="divide-y divide-gray-100">
+                <>
+                  <div
+                    className="grid select-none items-center gap-2 border-b border-gray-200 bg-gray-50 px-4 py-2 text-xs font-bold uppercase tracking-wide text-gray-400 md:px-6"
+                    style={{
+                      gridTemplateColumns: "2rem 1fr 120px 3rem 4rem 80px 80px 80px 3rem",
+                    }}
+                  >
+                    <span>#</span>
+                    <span>Description</span>
+                    <span>Brand</span>
+                    <span className="text-center">Qty</span>
+                    <span className="text-center">Age</span>
+                    <span>Condition</span>
+                    <span className="text-right">Each</span>
+                    <span className="text-right">Total</span>
+                    <span />
+                  </div>
                   {displayItems.map((item, idx) => {
                     const lk = lockKeyForItem(item);
                     const locked = lockedKeys.includes(lk);
@@ -1378,48 +1431,114 @@ export default function RoomReviewPage() {
 
                     if (isEditing) {
                       return (
-                        <div key={lk} className="bg-blue-50/40 px-4 py-3 md:px-6">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <input
-                              autoFocus
-                              placeholder="Item name"
-                              value={editDraft.description}
-                              onChange={(e) =>
-                                setEditDraft((d) => ({ ...d, description: e.target.value }))
-                              }
-                              className="min-w-[150px] flex-[2] rounded border border-gray-300 px-2 py-1.5 text-sm"
-                            />
-                            <input
-                              placeholder="Brand"
-                              value={editDraft.brand}
-                              onChange={(e) => setEditDraft((d) => ({ ...d, brand: e.target.value }))}
-                              className="min-w-[100px] flex-1 rounded border border-gray-300 px-2 py-1.5 text-sm"
-                            />
-                            <input
-                              placeholder="$Price"
-                              value={editDraft.unit_cost}
-                              onChange={(e) =>
-                                setEditDraft((d) => ({ ...d, unit_cost: e.target.value }))
-                              }
-                              className="w-24 rounded border border-gray-300 px-2 py-1.5 text-sm tabular-nums"
-                            />
-                            <input
-                              placeholder="Age yrs"
-                              type="number"
-                              value={editDraft.age_years}
-                              onChange={(e) =>
-                                setEditDraft((d) => ({ ...d, age_years: e.target.value }))
-                              }
-                              className="w-20 rounded border border-gray-300 px-2 py-1.5 text-sm"
-                            />
+                        <div key={lk} className="border-b border-blue-200 bg-blue-50/40 px-4 py-4 md:px-6">
+                          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+                            <div className="md:col-span-2">
+                              <label className="text-xs font-medium text-gray-500">Description</label>
+                              <input
+                                autoFocus
+                                value={editDraft.description}
+                                onChange={(e) =>
+                                  setEditDraft((d) => ({ ...d, description: e.target.value }))
+                                }
+                                placeholder="Item description"
+                                className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs font-medium text-gray-500">Brand</label>
+                              <input
+                                value={editDraft.brand}
+                                onChange={(e) => setEditDraft((d) => ({ ...d, brand: e.target.value }))}
+                                placeholder="Brand or manufacturer"
+                                className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs font-medium text-gray-500">Model #</label>
+                              <input
+                                value={editDraft.model}
+                                onChange={(e) => setEditDraft((d) => ({ ...d, model: e.target.value }))}
+                                placeholder="Model number"
+                                className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs font-medium text-gray-500">
+                                Original Vendor / Where purchased
+                              </label>
+                              <input
+                                value={editDraft.vendor}
+                                onChange={(e) => setEditDraft((d) => ({ ...d, vendor: e.target.value }))}
+                                placeholder="e.g. gift from grandpa"
+                                className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs font-medium text-gray-500">Price (each)</label>
+                              <input
+                                value={editDraft.unit_cost}
+                                onChange={(e) =>
+                                  setEditDraft((d) => ({ ...d, unit_cost: e.target.value }))
+                                }
+                                placeholder="0"
+                                inputMode="decimal"
+                                className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm tabular-nums"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs font-medium text-gray-500">Qty</label>
+                              <input
+                                type="number"
+                                min={1}
+                                value={editDraft.qty || "1"}
+                                onChange={(e) => setEditDraft((d) => ({ ...d, qty: e.target.value }))}
+                                className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs font-medium text-gray-500">Age (years)</label>
+                              <input
+                                type="number"
+                                min={0}
+                                value={editDraft.age_years}
+                                onChange={(e) => {
+                                  const yr = parseInt(e.target.value, 10) || 0;
+                                  setEditDraft((d) => ({
+                                    ...d,
+                                    age_years: e.target.value,
+                                    condition: autoCondition(yr),
+                                  }));
+                                }}
+                                className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs font-medium text-gray-500">Condition</label>
+                              <select
+                                value={editDraft.condition}
+                                onChange={(e) =>
+                                  setEditDraft((d) => ({ ...d, condition: e.target.value }))
+                                }
+                                className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+                              >
+                                <option>New</option>
+                                <option>Like New</option>
+                                <option>Good</option>
+                                <option>Decent</option>
+                                <option>Used</option>
+                              </select>
+                            </div>
+                          </div>
+                          <div className="mt-4 flex flex-wrap items-center gap-2">
                             <button
                               type="button"
-                              disabled={isSaving}
+                              disabled={!editDraft.description.trim() || isSaving}
                               onClick={async () => {
                                 const price =
                                   parseFloat(String(editDraft.unit_cost).replace(/[^0-9.]/g, "")) || 0;
                                 const age = Math.min(120, Math.max(0, parseInt(String(editDraft.age_years), 10) || 0));
-                                if (!editDraft.description.trim()) return;
+                                const qty = Math.min(20, Math.max(1, parseInt(String(editDraft.qty), 10) || 1));
                                 setIsSaving(true);
                                 try {
                                   const next = items.map((ci) =>
@@ -1428,8 +1547,12 @@ export default function RoomReviewPage() {
                                           ...ci,
                                           description: editDraft.description.trim(),
                                           brand: editDraft.brand.trim(),
+                                          model: editDraft.model.trim(),
                                           unit_cost: Math.round(price * 100) / 100,
                                           age_years: age,
+                                          qty,
+                                          condition: editDraft.condition,
+                                          vendor_name: editDraft.vendor.trim() || undefined,
                                         }
                                       : ci
                                   );
@@ -1440,97 +1563,116 @@ export default function RoomReviewPage() {
                                   setIsSaving(false);
                                 }
                               }}
-                              className="rounded bg-[#2563EB] px-3 py-1.5 text-sm font-bold text-white disabled:opacity-40"
+                              className="rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
                             >
                               Save
                             </button>
                             <button
                               type="button"
                               onClick={() => setEditingItemKey(null)}
-                              className="text-sm text-gray-500"
+                              className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700"
                             >
                               Cancel
+                            </button>
+                            <button
+                              type="button"
+                              disabled={locked || isSaving}
+                              onClick={() => void handleRemoveItemRow(item)}
+                              className="ml-auto rounded-lg border border-red-200 px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-40"
+                            >
+                              Remove item
                             </button>
                           </div>
                         </div>
                       );
                     }
 
-                    const upgraded = item.source === "upgrade";
-                    const isAdded = item.source === "bundle" || item.source === "suggestion";
-                    const ageDisplay = displayAgeYears(item);
-                    const priceDisplay =
-                      item.qty > 1
-                        ? `×${item.qty} = ${formatCurrency(item.unit_cost * item.qty)}`
-                        : formatCurrency(item.unit_cost);
+                    const condShow = item.condition?.trim() || autoCondition(displayAgeYears(item));
 
                     return (
                       <div
                         key={`${lk}-${idx}`}
-                        className={`group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-gray-50 md:px-6 ${
-                          upgraded ? "bg-emerald-50/30" : ""
-                        } ${isAdded ? "bg-blue-50/20" : ""}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => {
+                          if (locked || isSaving) return;
+                          setEditingItemKey(lk);
+                          setEditDraft({
+                            description: item.description,
+                            brand: item.brand || "",
+                            model: item.model || "",
+                            unit_cost: String(item.unit_cost),
+                            age_years: String(displayAgeYears(item)),
+                            condition: item.condition?.trim() || autoCondition(displayAgeYears(item)),
+                            vendor: item.vendor_name || "",
+                            qty: String(item.qty),
+                            notes: "",
+                          });
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            if (locked || isSaving) return;
+                            setEditingItemKey(lk);
+                            setEditDraft({
+                              description: item.description,
+                              brand: item.brand || "",
+                              model: item.model || "",
+                              unit_cost: String(item.unit_cost),
+                              age_years: String(displayAgeYears(item)),
+                              condition: item.condition?.trim() || autoCondition(displayAgeYears(item)),
+                              vendor: item.vendor_name || "",
+                              qty: String(item.qty),
+                              notes: "",
+                            });
+                          }
+                        }}
+                        className="group grid cursor-pointer items-center gap-2 border-b border-gray-100 px-4 py-2.5 text-sm transition-colors last:border-0 hover:bg-blue-50/30 md:px-6"
+                        style={{
+                          gridTemplateColumns: "2rem 1fr 120px 3rem 4rem 80px 80px 80px 3rem",
+                        }}
                       >
-                        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
-                          <span
-                            className={`truncate text-sm font-medium ${
-                              upgraded ? "text-[#2563EB]" : "text-gray-900"
-                            }`}
-                          >
-                            {cleanDescription(item.description)}
-                            {isAdded ? (
-                              <sup className="ml-0.5 text-[9px] text-gray-400" title="Added by ClaimBuilder">
-                                *
-                              </sup>
-                            ) : null}
-                          </span>
-                          <span className="truncate text-xs text-gray-400">
-                            {item.brand?.trim() || "Unbranded"}
-                          </span>
-                        </div>
-                        <span className="w-12 shrink-0 text-right text-xs tabular-nums text-gray-400">
-                          {ageDisplay > 0 ? `${ageDisplay}yr` : "New"}
+                        <span className="text-xs tabular-nums text-gray-400">{idx + 1}</span>
+                        <span className="truncate font-medium text-gray-900">
+                          {cleanDescription(item.description)}
+                          {(item.source === "bundle" || item.source === "suggestion") && (
+                            <sup className="ml-0.5 text-[9px] text-gray-400">*</sup>
+                          )}
                         </span>
-                        <span
-                          className={`w-28 shrink-0 text-right text-sm font-semibold tabular-nums ${
-                            upgraded ? "text-[#2563EB]" : "text-gray-900"
-                          }`}
+                        <span className="truncate text-xs text-gray-500">
+                          {item.brand?.trim() ? (
+                            item.brand.trim()
+                          ) : (
+                            <span className="text-blue-400 underline decoration-dotted">Unbranded</span>
+                          )}
+                        </span>
+                        <span className="text-center text-xs tabular-nums text-gray-500">×{item.qty}</span>
+                        <span className="text-center text-xs tabular-nums text-gray-400">
+                          {displayAgeYears(item) > 0 ? `${displayAgeYears(item)}yr` : "New"}
+                        </span>
+                        <span className="truncate text-xs text-gray-500">{condShow}</span>
+                        <span className="text-right text-xs tabular-nums text-gray-700">
+                          {formatCurrency(item.unit_cost)}
+                        </span>
+                        <span className="text-right text-sm font-semibold tabular-nums text-gray-900">
+                          {formatCurrency(item.unit_cost * item.qty)}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={locked || isSaving}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleRemoveItemRow(item);
+                          }}
+                          className="flex h-6 w-6 items-center justify-center rounded-full text-base leading-none text-gray-300 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-500 group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-0"
+                          aria-label="Remove line"
                         >
-                          {priceDisplay}
-                        </span>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <button
-                            type="button"
-                            disabled={locked || isSaving}
-                            onClick={() => {
-                              setEditingItemKey(lk);
-                              setEditDraft({
-                                description: item.description,
-                                brand: item.brand || "",
-                                model: item.model || "",
-                                unit_cost: String(item.unit_cost),
-                                age_years: String(displayAgeYears(item)),
-                              });
-                            }}
-                            className="flex h-7 w-7 items-center justify-center rounded text-xs text-gray-400 hover:bg-gray-200 hover:text-gray-700"
-                            title="Edit"
-                          >
-                            ✏
-                          </button>
-                          <button
-                            type="button"
-                            disabled={locked || isSaving}
-                            onClick={() => void handleRemoveItemRow(item)}
-                            className="flex h-7 w-7 items-center justify-center rounded text-base leading-none text-gray-300 hover:bg-red-50 hover:text-red-500"
-                            title="Remove"
-                          >
-                            ×
-                          </button>
-                        </div>
+                          ×
+                        </button>
                       </div>
                     );
                   })}
-                </div>
+                </>
               )}
             </section>
 
@@ -1683,13 +1825,6 @@ export default function RoomReviewPage() {
                 )}
               </div>
 
-              <Link
-                href={`/review/bundles/${roomSlug}`}
-                className="mt-8 inline-flex min-h-[48px] items-center justify-center rounded-xl border-2 border-gray-800 bg-gray-800 px-5 text-sm font-bold text-white hover:bg-gray-900"
-              >
-                Add individual item →
-              </Link>
-
               {consumableBundles.length > 0 ? (
                 <div className="mt-6 rounded-2xl border border-gray-200 bg-white shadow-sm">
                   <button
@@ -1760,26 +1895,22 @@ export default function RoomReviewPage() {
             />
           </div>
           <div className="mx-auto flex max-w-[1100px] flex-wrap items-center justify-between gap-2 px-4 md:min-h-[56px] md:flex-nowrap md:gap-4 md:px-8">
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="flex shrink-0 items-center gap-2">
               <button
                 type="button"
-                title="Undo"
-                aria-label="Undo"
                 disabled={!undoAvail || isSaving}
                 onClick={() => void undoRoom()}
-                className="flex min-h-[48px] min-w-[48px] shrink-0 items-center justify-center rounded-lg border border-gray-200 text-lg leading-none text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
+                className="inline-flex min-h-[48px] items-center gap-1.5 rounded-lg border-2 border-gray-300 px-4 text-sm font-bold text-gray-700 hover:bg-gray-50 disabled:opacity-30"
               >
-                ⟲
+                ⟲ Undo
               </button>
               <button
                 type="button"
-                title="Redo"
-                aria-label="Redo"
                 disabled={!redoAvail || isSaving}
                 onClick={() => void redoRoom()}
-                className="flex min-h-[48px] min-w-[48px] shrink-0 items-center justify-center rounded-lg border border-gray-200 text-lg leading-none text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
+                className="inline-flex min-h-[48px] items-center gap-1.5 rounded-lg border-2 border-gray-300 px-4 text-sm font-bold text-gray-700 hover:bg-gray-50 disabled:opacity-30"
               >
-                ⟳
+                Redo ⟳
               </button>
             </div>
             <div className="hidden min-w-0 flex-[1_1_200px] flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-[#6B7280] md:flex md:text-sm">
