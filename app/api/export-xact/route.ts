@@ -31,8 +31,10 @@ function mapCondition(condition: string, ageYears: number): string {
   if (c === "used") return "Below Avg.";
   // Age fallback
   if (!ageYears || ageYears === 0) return "New";
-  if (ageYears <= 4) return "New";
-  return "Above Avg.";
+  if (ageYears <= 5) return "New";
+  if (ageYears <= 10) return "Above Avg.";
+  if (ageYears <= 15) return "Average";
+  return "Below Avg.";
 }
 
 function vendorFromUrl(url: string | undefined): string {

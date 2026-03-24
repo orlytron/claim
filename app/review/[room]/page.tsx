@@ -369,8 +369,10 @@ const LEGACY_CONDITION_TO_FRIENDLY: Record<string, string> = {
 
 function autoCondition(age: number): string {
   if (age === 0) return "New";
-  if (age <= 4) return "Like New";
-  return "Good";
+  if (age <= 5) return "Like New";
+  if (age <= 10) return "Good";
+  if (age <= 15) return "Decent";
+  return "Used";
 }
 
 function conditionToFriendlyDraft(raw: string, ageFallback: number): string {
