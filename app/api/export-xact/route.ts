@@ -8,6 +8,20 @@ import {
 import { cleanDescription } from "../../lib/clean-description";
 import type { ClaimItem } from "../../lib/types";
 
+function cleanExportDescription(description: string, brand: string): string {
+  if (!brand?.trim()) return description;
+  const d = description.trim();
+  const b = brand.trim();
+  // Remove brand from start of description
+  if (d.toLowerCase().startsWith(b.toLowerCase() + " ")) {
+    return d.slice(b.length + 1).trim();
+  }
+  if (d.toLowerCase() === b.toLowerCase()) {
+    return d;
+  }
+  return d;
+}
+
 function mapCondition(condition: string, ageYears: number): string {
   const c = (condition || "").toLowerCase();
   if (c.includes("new") || c.includes("like new") || ageYears <= 2) return "New";
@@ -125,7 +139,7 @@ export async function GET(req: NextRequest) {
       displayRoom,
       item.brand || "",
       item.model || "",
-      cleanDescription(item.description),
+      cleanDescription(cleanExportDescription(item.description, item.brand || "")),
       originalVendorColumn(item),
       item.qty,
       ageYears,
