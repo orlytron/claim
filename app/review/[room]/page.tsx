@@ -1359,7 +1359,7 @@ export default function RoomReviewPage() {
             <div className="h-24 rounded-lg bg-gray-100" />
           </div>
         </div>
-      ) : !roomName || (!displayItems.length && roomSuggestionList.length === 0) ? (
+      ) : !roomName ? (
         <div className="flex flex-1 flex-col items-center justify-center p-8 text-center text-base text-[#6B7280]">
           No items for this room.
           <Link href="/review" className="mt-4 font-medium text-[#2563EB] hover:underline">
@@ -1577,7 +1577,13 @@ export default function RoomReviewPage() {
               </div>
 
               {displayItems.length === 0 ? (
-                <p className="px-5 py-8 text-sm text-[#6B7280] md:px-6">No items in this room yet.</p>
+                <div className="px-5 py-10 text-center md:px-6">
+                  <p className="text-2xl">🏠</p>
+                  <p className="mt-2 text-base font-semibold text-gray-900">This room is empty</p>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Use the sections below to add items, or describe something you remember.
+                  </p>
+                </div>
               ) : (
                 <div>
                   {displayItems.map((item, idx) => {
@@ -1775,72 +1781,7 @@ export default function RoomReviewPage() {
             </section>
 
             <section className="mt-12">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">
-                Add items to {displayRoomTitle(roomName).toUpperCase()}
-              </h2>
-              <p className="mt-1 text-sm text-[#6B7280]">
-                Focused addition sets — choose a tier (Essential through Full or Ultimate), then add checked lines to
-                your claim.
-              </p>
-
-              <div className="mt-8 space-y-8">
-                {focusedBundles.length === 0 ? (
-                  <p className="text-sm text-[#6B7280]">No focused addition packages for this room yet.</p>
-                ) : (
-                  focusedBundles.map((b) => (
-                    <FocusedAdditionCard
-                      key={b.bundle_code}
-                      bundle={b}
-                      roomName={roomName}
-                      existingItems={session?.claim_items ?? []}
-                      sessionId={sessionId}
-                      disabled={isSaving}
-                      onAdd={(lines) => void handleFocusedBundleAdd(lines)}
-                    />
-                  ))
-                )}
-              </div>
-
-              {consumableBundles.length > 0 ? (
-                <div className="mt-10 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-                  <p className="text-xs font-bold uppercase tracking-wide text-gray-900">Restock & consumable packs</p>
-                  <p className="mt-1 text-sm text-[#6B7280]">One-tap add common replenishment lines for this room.</p>
-                  <div className="mt-4 space-y-4">
-                    {consumableBundles.map((b) => (
-                      <ConsumablePackCard
-                        key={b.bundle_code}
-                        bundle={b}
-                        disabled={isSaving}
-                        onAdd={(pack) => void handleConsumableBundleAdd(pack)}
-                      />
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
-              {isAdminUser && adminOnlyBundles.length > 0 ? (
-                <div className="mt-10 rounded-2xl border border-dashed border-purple-200 bg-purple-50/40 p-5">
-                  <p className="text-xs font-bold uppercase tracking-wide text-purple-900">Admin · full letter-tier packages</p>
-                  <p className="mt-1 text-sm text-purple-800">
-                    Hidden from clients. Open the bundle browser to preview large packages (over $30k).
-                  </p>
-                  <Link
-                    href={`/review/bundles/${roomSlug}`}
-                    className="mt-3 inline-flex min-h-[48px] items-center rounded-xl bg-purple-700 px-4 text-sm font-bold text-white hover:bg-purple-800"
-                  >
-                    Open bundle browser →
-                  </Link>
-                  <ul className="mt-3 max-h-40 list-inside list-disc overflow-y-auto text-xs text-purple-900">
-                    {adminOnlyBundles.slice(0, 40).map((b) => (
-                      <li key={b.bundle_code}>
-                        {b.bundle_code} — {b.name} ({formatCurrency(b.total_value)})
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-
-              <div className="mt-10 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+              <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
                 <p className="text-sm font-bold uppercase tracking-wide text-gray-900">🧠 Remember something else?</p>
                 {smartStatus === "loading" ? (
                   <div className="mt-4 flex flex-col items-start gap-3 text-sm text-[#6B7280]">
@@ -1959,6 +1900,80 @@ export default function RoomReviewPage() {
                   </details>
                 )}
               </div>
+            </section>
+
+            <section className="mt-12">
+              <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">
+                Add items to {displayRoomTitle(roomName).toUpperCase()}
+              </h2>
+              <p className="mt-1 text-sm text-[#6B7280]">
+                Focused addition sets — choose a tier (Essential through Full or Ultimate), then add checked lines to
+                your claim.
+              </p>
+
+              <div className="mt-8 space-y-8">
+                {focusedBundles.length === 0 ? (
+                  <p className="text-sm text-[#6B7280]">No focused addition packages for this room yet.</p>
+                ) : (
+                  focusedBundles.map((b) => (
+                    <FocusedAdditionCard
+                      key={b.bundle_code}
+                      bundle={b}
+                      roomName={roomName}
+                      existingItems={session?.claim_items ?? []}
+                      sessionId={sessionId}
+                      disabled={isSaving}
+                      onAdd={(lines) => void handleFocusedBundleAdd(lines)}
+                    />
+                  ))
+                )}
+              </div>
+
+              <Link
+                href={`/review/bundles/${roomSlug}`}
+                className="mt-8 inline-flex min-h-[48px] items-center justify-center rounded-xl border-2 border-gray-800 bg-gray-800 px-5 text-sm font-bold text-white hover:bg-gray-900"
+              >
+                Add individual item →
+              </Link>
+
+              {consumableBundles.length > 0 ? (
+                <div className="mt-10 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+                  <p className="text-xs font-bold uppercase tracking-wide text-gray-900">Restock & consumable packs</p>
+                  <p className="mt-1 text-sm text-[#6B7280]">One-tap add common replenishment lines for this room.</p>
+                  <div className="mt-4 space-y-4">
+                    {consumableBundles.map((b) => (
+                      <ConsumablePackCard
+                        key={b.bundle_code}
+                        bundle={b}
+                        disabled={isSaving}
+                        onAdd={(pack) => void handleConsumableBundleAdd(pack)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {isAdminUser && adminOnlyBundles.length > 0 ? (
+                <div className="mt-10 rounded-2xl border border-dashed border-purple-200 bg-purple-50/40 p-5">
+                  <p className="text-xs font-bold uppercase tracking-wide text-purple-900">Admin · full letter-tier packages</p>
+                  <p className="mt-1 text-sm text-purple-800">
+                    Hidden from clients. Open the bundle browser to preview large packages (over $30k).
+                  </p>
+                  <Link
+                    href={`/review/bundles/${roomSlug}`}
+                    className="mt-3 inline-flex min-h-[48px] items-center rounded-xl bg-purple-700 px-4 text-sm font-bold text-white hover:bg-purple-800"
+                  >
+                    Open bundle browser →
+                  </Link>
+                  <ul className="mt-3 max-h-40 list-inside list-disc overflow-y-auto text-xs text-purple-900">
+                    {adminOnlyBundles.slice(0, 40).map((b) => (
+                      <li key={b.bundle_code}>
+                        {b.bundle_code} — {b.name} ({formatCurrency(b.total_value)})
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </section>
 
             <p className="mt-10 text-center text-sm text-[#6B7280]">

@@ -491,4 +491,30 @@ export const TIERED_FOCUS_BUNDLES: Bundle[] = [
     ],
     { sweet_spot: false, plausibility: "medium" }
   ),
+  tiered(
+    "Master Closet",
+    "CLST-HEIR-A",
+    "Heirloom & Inherited Items",
+    "Inherited jewelry, family heirlooms, and keepsakes",
+    [
+      bi("Inherited gold ring estate", "", 1800, 2, "Jewelry"),
+      bi("Inherited pearl necklace", "", 1400, 1, "Jewelry"),
+      bi("Vintage brooch collection", "", 380, 4, "Jewelry"),
+    ],
+    [
+      bi("Inherited diamond ring", "", 3800, 1, "Jewelry"),
+      bi("Gold charm bracelet 18k", "", 2200, 1, "Jewelry"),
+      bi("Estate sapphire pendant", "", 2400, 1, "Jewelry"),
+    ],
+    [
+      bi("Inherited gold ring estate", "", 1800, 1, "Jewelry"),
+      bi("Inherited pearl necklace", "", 1400, 1, "Jewelry"),
+      bi("Vintage brooch collection", "", 380, 4, "Jewelry"),
+      bi("Inherited diamond ring", "", 3800, 1, "Jewelry"),
+      bi("Gold charm bracelet 18k", "", 2200, 1, "Jewelry"),
+      bi("Vintage pocket watch inherited", "", 1800, 1, "Watches"),
+      bi("Silver candlesticks inherited pair", "", 650, 2, "Decorative"),
+    ],
+    { sweet_spot: true, plausibility: "medium" }
+  ),
 ];
