@@ -1400,6 +1400,15 @@ export default function RoomReviewPage() {
                     if (isEditing) {
                       return (
                         <div key={lk} className="border-b border-blue-200 bg-blue-50/40 px-4 py-4 md:px-6">
+                          <div
+                            onClick={() => setEditingItemKey(null)}
+                            className="flex cursor-pointer items-center justify-between border-b border-blue-100 bg-blue-50/60 px-4 py-2.5 hover:bg-blue-100/50"
+                          >
+                            <span className="text-sm font-medium text-gray-700">
+                              {cleanDescription(item.description)}
+                            </span>
+                            <span className="text-xs text-gray-400">▲ Close</span>
+                          </div>
                           <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
                             <div className="md:col-span-2">
                               <label className="text-xs font-medium text-gray-500">Description</label>
