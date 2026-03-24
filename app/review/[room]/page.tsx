@@ -660,6 +660,10 @@ export default function RoomReviewPage() {
     model: "",
     unit_cost: "",
   });
+  const [quickDesc, setQuickDesc] = useState("");
+  const [quickBrand, setQuickBrand] = useState("");
+  const [quickPrice, setQuickPrice] = useState("");
+  const quickDescRef = useRef<HTMLInputElement>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [suggestionsModalOpen, setSuggestionsModalOpen] = useState(false);
   /** User clicked “View initial suggestions” — reopen modal even if localStorage says dismissed. */
@@ -1223,6 +1227,29 @@ export default function RoomReviewPage() {
     const delta = withRoom.reduce((s, l) => s + l.qty * l.unit_cost, 0);
     fireUpgradeReward(beforeClaim, merged, delta);
     setToast(`✓ Added ${formatCurrency(delta)}`);
+  }
+
+  async function handleQuickAdd() {
+    if (!quickDesc.trim()) return;
+    const price = parseFloat(quickPrice.replace(/[^0-9.]/g, "")) || 0;
+    const newItem: ClaimItem = {
+      room: roomName,
+      description: quickDesc.trim(),
+      brand: quickBrand.trim(),
+      model: "",
+      qty: 1,
+      age_years: 0,
+      age_months: 0,
+      condition: "New",
+      unit_cost: price,
+      category: "Other",
+      source: "bundle",
+    };
+    await handleFocusedBundleAdd([newItem]);
+    setQuickDesc("");
+    setQuickBrand("");
+    setQuickPrice("");
+    quickDescRef.current?.focus();
   }
 
   async function handleConsumableBundleAdd(b: Bundle) {
@@ -1931,6 +1958,54 @@ export default function RoomReviewPage() {
 
                 </div>
               )}
+              <div className="border-t border-gray-100 px-4 py-4 md:px-6">
+                <p className="mb-3 text-xs font-bold uppercase tracking-wide text-gray-500">+ Add Item</p>
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    ref={quickDescRef}
+                    type="text"
+                    placeholder="What did you have?"
+                    value={quickDesc}
+                    onChange={(e) => setQuickDesc(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleQuickAdd();
+                    }}
+                    className="min-w-[200px] flex-[2] rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm placeholder-gray-400"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Brand (optional)"
+                    value={quickBrand}
+                    onChange={(e) => setQuickBrand(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleQuickAdd();
+                    }}
+                    className="min-w-[130px] flex-1 rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm placeholder-gray-400"
+                  />
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="$Price"
+                    value={quickPrice}
+                    onChange={(e) => setQuickPrice(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleQuickAdd();
+                    }}
+                    className="w-28 rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm placeholder-gray-400"
+                  />
+                  <button
+                    type="button"
+                    disabled={!quickDesc.trim() || isSaving}
+                    onClick={() => void handleQuickAdd()}
+                    className="min-h-[44px] rounded-lg bg-[#2563EB] px-5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                  >
+                    Add →
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-gray-400">
+                  Press Enter to add. Price can be updated later.
+                </p>
+              </div>
             </section>
 
             <section className="mt-12">

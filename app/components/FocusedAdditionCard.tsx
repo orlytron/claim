@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import type { Bundle, BundleItem, BundleTiers3, BundleTiers5, BundleTiersDef } from "../lib/bundles-data";
 import { isBundleTiers5 } from "../lib/bundles-data";
 import type { ClaimItem } from "../lib/types";
@@ -251,10 +250,12 @@ export default function FocusedAdditionCard({
   const [cQty, setCQty] = useState("1");
   const [added, setAdded] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     setAdded(false);
     setShowCustom(false);
+    setExpanded(false);
   }, [bundle.bundle_code]);
 
   const checkedTotal = useMemo(() => {
@@ -370,14 +371,38 @@ export default function FocusedAdditionCard({
     : (["Essential", "Complete ★", "Full"] as const);
 
   return (
-    <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-      <div className="min-w-0">
-        <p className="text-lg font-semibold text-gray-900 [overflow-wrap:anywhere]">{bundle.name}</p>
-        <p className="mt-1 text-sm text-[#6B7280] [overflow-wrap:anywhere]">{bundle.description}</p>
-        <p className="mt-2 text-sm font-medium tabular-nums text-gray-600">
-          {tierItemCount} items · {formatCurrency(tierItemsTotal)}
-        </p>
-      </div>
+    <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+      {added ? (
+        <div className="flex min-h-[48px] items-center rounded-2xl px-5 py-4 text-base font-semibold text-[#16A34A]">
+          <span className="[overflow-wrap:anywhere]">✓ Added — {bundle.name}</span>
+        </div>
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={() => setExpanded((e) => !e)}
+            className="flex w-full items-center justify-between gap-3 rounded-2xl px-5 py-4 text-left hover:bg-gray-50"
+          >
+            <div className="min-w-0 text-left">
+              <p className="font-semibold text-gray-900 [overflow-wrap:anywhere]">{bundle.name}</p>
+              <p className="text-sm text-gray-500">
+                {tierItemCount} items · {formatCurrency(tierItemsTotal)}
+              </p>
+            </div>
+            <span className="shrink-0 text-sm font-bold text-[#2563EB]">
+              {expanded ? "Hide ▲" : "View + Add ▼"}
+            </span>
+          </button>
+
+          {expanded ? (
+            <div className="border-t border-gray-100 p-5">
+              <div className="min-w-0">
+                <p className="text-lg font-semibold text-gray-900 [overflow-wrap:anywhere]">{bundle.name}</p>
+                <p className="mt-1 text-sm text-[#6B7280] [overflow-wrap:anywhere]">{bundle.description}</p>
+                <p className="mt-2 text-sm font-medium tabular-nums text-gray-600">
+                  {tierItemCount} items · {formatCurrency(tierItemsTotal)}
+                </p>
+              </div>
 
       {tierCount > 1 ? (
         <div className="mt-5 overflow-x-auto pb-1 [-webkit-overflow-scrolling:touch]">
@@ -523,25 +548,17 @@ export default function FocusedAdditionCard({
         <span className="tabular-nums font-bold text-gray-900">{formatCurrency(checkedTotal)}</span>
       </div>
 
-      {added ? (
-        <div className="mt-3 flex min-h-[48px] items-center justify-center gap-3 rounded-xl bg-[#16A34A] px-4 py-3 text-base font-bold text-white">
-          <span>✓ Added</span>
-          <Link
-            href="#claim-items-anchor"
-            className="rounded-lg bg-white/20 px-3 py-1 text-sm font-semibold hover:bg-white/30"
-          >
-            View in claim
-          </Link>
-        </div>
-      ) : (
-        <button
-          type="button"
-          disabled={disabled || busy || selectedCount === 0}
-          onClick={() => void handleAddToClaim()}
-          className="mt-3 flex min-h-[48px] w-full items-center justify-center rounded-xl bg-[#2563EB] text-base font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
-        >
-          + Add to Claim +{formatCurrency(checkedTotal)}
-        </button>
+              <button
+                type="button"
+                disabled={disabled || busy || selectedCount === 0}
+                onClick={() => void handleAddToClaim()}
+                className="mt-3 flex min-h-[48px] w-full items-center justify-center rounded-xl bg-[#2563EB] text-base font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
+              >
+                + Add to Claim +{formatCurrency(checkedTotal)}
+              </button>
+            </div>
+          ) : null}
+        </>
       )}
     </div>
   );
