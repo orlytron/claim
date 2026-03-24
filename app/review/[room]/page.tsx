@@ -514,12 +514,14 @@ function ItemPriceRow({
   item,
   accent = "default",
   brand,
+  source,
   sourceTag,
   hidePrice,
 }: {
   item: ClaimItem;
   accent?: "default" | "upgrade";
   brand?: string | null;
+  source?: ClaimItem["source"];
   sourceTag?: ReactNode;
   /** When true, only the title/qty-each line (no right-side amount). */
   hidePrice?: boolean;
@@ -528,9 +530,20 @@ function ItemPriceRow({
   const textColor = accent === "upgrade" ? "text-[#2563EB]" : "text-gray-900";
   const rightNote = accent === "upgrade" && item.qty === 1 ? " ✓" : "";
 
+  const src = source ?? item.source;
   const leftCluster = (
     <span className="min-w-0 flex flex-1 flex-wrap items-baseline gap-x-2 gap-y-1 [overflow-wrap:anywhere]">
-      <span className={`font-semibold ${textColor}`}>{d}</span>
+      <span className={`inline-flex items-baseline gap-0 font-semibold ${textColor}`}>
+        {d}
+        {(src === "suggestion" || src === "bundle") && (
+          <span
+            title="Added by ClaimBuilder"
+            className="text-[10px] text-gray-400 align-super cursor-default"
+          >
+            *
+          </span>
+        )}
+      </span>
       {brand?.trim() ? <span className="text-sm font-medium text-[#6B7280]">{brand}</span> : null}
       {sourceTag}
       {item.qty > 1 ? (
@@ -638,6 +651,13 @@ export default function RoomReviewPage() {
   const [editingAgeKey, setEditingAgeKey] = useState<string | null>(null);
   const [ageDraft, setAgeDraft] = useState("");
   const [conditionDraft, setConditionDraft] = useState("");
+  const [editingItemKey, setEditingItemKey] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState({
+    description: "",
+    brand: "",
+    model: "",
+    unit_cost: "",
+  });
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [suggestionsModalOpen, setSuggestionsModalOpen] = useState(false);
   /** User clicked “View initial suggestions” — reopen modal even if localStorage says dismissed. */
@@ -1630,17 +1650,124 @@ export default function RoomReviewPage() {
                         key={`${generateItemId(item)}-${idx}`}
                         className={`group/row relative border-b border-gray-100 transition-colors duration-300 last:border-b-0 ${rowBg}`}
                       >
-                        <button
-                          type="button"
-                          disabled={locked || isSaving}
-                          onClick={() => void handleRemoveItemRow(item)}
-                          className="absolute right-3 top-3 flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 text-lg leading-none text-gray-400 transition hover:border-red-400 hover:text-red-500 disabled:opacity-30"
-                          aria-label="Remove line from claim"
-                        >
-                          ×
-                        </button>
-                        <div className="flex min-h-[72px] items-center gap-4 px-4 py-4 pr-12 md:px-6 md:pr-14">
-                          <div className="min-w-0 flex-1">
+                        {editingItemKey === lk ? (
+                          <div className="border-b border-blue-100 bg-blue-50/30 px-4 py-4 md:px-6">
+                            <p className="mb-3 text-xs font-bold uppercase tracking-wide text-gray-500">Edit Item</p>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <div>
+                                <label className="text-xs text-gray-500">Description</label>
+                                <input
+                                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                                  value={editDraft.description}
+                                  onChange={(e) =>
+                                    setEditDraft((d) => ({ ...d, description: e.target.value }))
+                                  }
+                                />
+                              </div>
+                              <div>
+                                <label className="text-xs text-gray-500">Brand</label>
+                                <input
+                                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                                  value={editDraft.brand}
+                                  onChange={(e) => setEditDraft((d) => ({ ...d, brand: e.target.value }))}
+                                />
+                              </div>
+                              <div>
+                                <label className="text-xs text-gray-500">Model</label>
+                                <input
+                                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                                  value={editDraft.model}
+                                  onChange={(e) => setEditDraft((d) => ({ ...d, model: e.target.value }))}
+                                />
+                              </div>
+                              <div>
+                                <label className="text-xs text-gray-500">Price (each)</label>
+                                <input
+                                  type="number"
+                                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm tabular-nums"
+                                  value={editDraft.unit_cost}
+                                  onChange={(e) =>
+                                    setEditDraft((d) => ({ ...d, unit_cost: e.target.value }))
+                                  }
+                                />
+                              </div>
+                            </div>
+                            <div className="mt-4 flex gap-2">
+                              <button
+                                type="button"
+                                disabled={isSaving}
+                                onClick={async () => {
+                                  const price = parseFloat(editDraft.unit_cost);
+                                  if (
+                                    !editDraft.description.trim() ||
+                                    Number.isNaN(price) ||
+                                    price <= 0
+                                  )
+                                    return;
+                                  setIsSaving(true);
+                                  try {
+                                    const next = items.map((ci) =>
+                                      sameClaimLine(ci, item)
+                                        ? {
+                                            ...ci,
+                                            description: editDraft.description.trim(),
+                                            brand: editDraft.brand.trim(),
+                                            model: editDraft.model.trim(),
+                                            unit_cost: Math.round(price * 100) / 100,
+                                          }
+                                        : ci
+                                    );
+                                    await saveRoomItems(next);
+                                    setEditingItemKey(null);
+                                    setToast("✓ Item updated");
+                                  } finally {
+                                    setIsSaving(false);
+                                  }
+                                }}
+                                className="rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
+                              >
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingItemKey(null)}
+                                className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              disabled={locked || isSaving}
+                              onClick={() => {
+                                setOpenUpgradeKey(null);
+                                setEditingItemKey(lk);
+                                setEditDraft({
+                                  description: item.description,
+                                  brand: item.brand || "",
+                                  model: item.model || "",
+                                  unit_cost: String(item.unit_cost),
+                                });
+                              }}
+                              className="absolute right-10 top-3 flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 text-xs text-gray-400 opacity-0 transition hover:border-blue-400 hover:text-blue-500 group-hover/row:opacity-100 disabled:pointer-events-none disabled:opacity-0"
+                              aria-label="Edit item"
+                            >
+                              ✏
+                            </button>
+                            <button
+                              type="button"
+                              disabled={locked || isSaving}
+                              onClick={() => void handleRemoveItemRow(item)}
+                              className="absolute right-3 top-3 flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 text-lg leading-none text-gray-400 transition hover:border-red-400 hover:text-red-500 disabled:opacity-30"
+                              aria-label="Remove line from claim"
+                            >
+                              ×
+                            </button>
+                            <div className="flex min-h-[72px] items-center gap-4 px-4 py-4 pr-[4.5rem] md:px-6 md:pr-20">
+                              <div className="min-w-0 flex-1">
                             {upgraded && pre ? (
                               <>
                                 <PriorItemPriceStrike
@@ -1653,6 +1780,7 @@ export default function RoomReviewPage() {
                                     item={item}
                                     accent="upgrade"
                                     brand={item.brand}
+                                    source={item.source}
                                     sourceTag={<SourceTag source={item.source} />}
                                     hidePrice
                                   />
@@ -1692,6 +1820,7 @@ export default function RoomReviewPage() {
                                 <ItemPriceRow
                                   item={item}
                                   brand={item.brand}
+                                  source={item.source}
                                   sourceTag={<SourceTag source={item.source} />}
                                   hidePrice
                                 />
@@ -1723,8 +1852,8 @@ export default function RoomReviewPage() {
                                 </div>
                               </div>
                             )}
-                          </div>
-                          <div className="flex w-32 shrink-0 flex-col items-center justify-center md:w-40">
+                              </div>
+                              <div className="flex w-32 shrink-0 flex-col items-center justify-center md:w-40">
                             {showAccordion && !upgraded ? (
                               isOpen ? (
                                 <button
@@ -1764,9 +1893,9 @@ export default function RoomReviewPage() {
                                 </button>
                               </div>
                             ) : null}
-                          </div>
-                          <RightPriceColumn item={item} />
-                        </div>
+                              </div>
+                              <RightPriceColumn item={item} />
+                            </div>
 
                         {showAccordion ? (
                           <div
@@ -1792,6 +1921,8 @@ export default function RoomReviewPage() {
                             </div>
                           </div>
                         ) : null}
+                          </>
+                        )}
                       </div>
                     );
                   })}

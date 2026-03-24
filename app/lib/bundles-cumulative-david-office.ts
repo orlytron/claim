@@ -6,7 +6,7 @@ export const DAV_SPORTS_A = tiered5({
   bundle_code: "DAV-SPORTS-A",
   name: "Sports Memorabilia Collection",
   description: "Mets, Raiders, Knicks signed collectibles and memorabilia",
-  total_value: 8500,
+  total_value: 12900,
   sweet_spot: false,
   plausibility: "easy",
   essential: {
@@ -46,7 +46,7 @@ export const DAV_SPORTS_A = tiered5({
     ],
   },
   full: {
-    total: 8500,
+    total: 8700,
     items: [
       { description: "Signed baseballs ×10", brand: "Rawlings", unit_cost: 120, qty: 10, total: 1200, category: "Collectibles" },
       { description: "Mets jerseys framed ×4", brand: "Fanatics", unit_cost: 380, qty: 4, total: 1520, category: "Collectibles" },
@@ -58,11 +58,11 @@ export const DAV_SPORTS_A = tiered5({
       { description: "UV display cases ×12", brand: "Ultra Pro", unit_cost: 85, qty: 12, total: 1020, category: "Collectibles" },
       { description: "Team pennants ×12", brand: "", unit_cost: 45, qty: 12, total: 540, category: "Collectibles" },
       { description: "Commemorative programs ×8", brand: "", unit_cost: 35, qty: 8, total: 280, category: "Collectibles" },
-      { description: "Display wall shelving unit", brand: "West Elm", unit_cost: 480, qty: 1, total: 480, category: "Furniture" },
+      { description: "Display wall shelving unit", brand: "Restoration Hardware", unit_cost: 680, qty: 1, total: 680, category: "Furniture" },
     ],
   },
   ultimate: {
-    total: 12500,
+    total: 12900,
     items: [
       { description: "Signed baseballs ×15", brand: "Rawlings", unit_cost: 120, qty: 15, total: 1800, category: "Collectibles" },
       { description: "Mets jerseys framed ×6", brand: "Fanatics", unit_cost: 380, qty: 6, total: 2280, category: "Collectibles" },
@@ -73,7 +73,7 @@ export const DAV_SPORTS_A = tiered5({
       { description: "Team jerseys ×5", brand: "Wilson", unit_cost: 380, qty: 5, total: 1900, category: "Collectibles" },
       { description: "UV display cases ×18", brand: "Ultra Pro", unit_cost: 85, qty: 18, total: 1530, category: "Collectibles" },
       { description: "Team pennants ×18", brand: "", unit_cost: 45, qty: 18, total: 810, category: "Collectibles" },
-      { description: "Display shelving units ×2", brand: "West Elm", unit_cost: 480, qty: 2, total: 960, category: "Furniture" },
+      { description: "Display shelving units ×2", brand: "Restoration Hardware", unit_cost: 680, qty: 2, total: 1360, category: "Furniture" },
       { description: "LED display lighting strips", brand: "Govee", unit_cost: 45, qty: 6, total: 270, category: "Electronics" },
       { description: "Signed football Raiders authenticated", brand: "Wilson", unit_cost: 280, qty: 2, total: 560, category: "Collectibles" },
     ],

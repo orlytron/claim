@@ -105,7 +105,7 @@ export const TIERED_FOCUS_BUNDLES: Bundle[] = [
     "Bar & Entertaining",
     "Glassware, bar tools, and service pieces",
     [
-      bi("Brass bar cart", "CB2", 1200, 1, "Kitchen"),
+      bi("Brass bar cart", "Arteriors", 2400, 1, "Kitchen"),
       bi("Riedel wine glass Vinum", "Riedel", 40, 8, "Kitchen"),
       bi("Cocktail shaker set professional", "", 280, 1, "Kitchen"),
       bi("Waterford crystal decanter", "Waterford", 180, 2, "Kitchen"),
@@ -356,7 +356,7 @@ export const TIERED_FOCUS_BUNDLES: Bundle[] = [
     [
       bi("RH king platform bed frame", "RH", 3200, 1, "Furniture"),
       bi("RH nightstand", "RH", 1400, 2, "Furniture"),
-      bi("West Elm 6-drawer dresser", "West Elm", 1500, 1, "Furniture"),
+      bi("RH 6-drawer dresser", "Restoration Hardware", 2800, 1, "Furniture"),
     ],
     [
       bi("RH double-door armoire", "RH", 3800, 1, "Furniture"),

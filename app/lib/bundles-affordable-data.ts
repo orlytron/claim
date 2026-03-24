@@ -63,7 +63,7 @@ export const AFFORDABLE_BUNDLES: Bundle[] = [
     sweet_spot: false,
     plausibility: "easy",
     items: [
-      item("Brass bar cart with shelves", "CB2", 1, 1200, "Furniture"),
+      item("Brass bar cart with shelves", "Arteriors", 1, 2400, "Furniture"),
       item("Riedel wine glasses set of 8", "Riedel", 1, 320, "Kitchen"),
       item("Cocktail shaker set stainless", "Crafthouse", 1, 280, "Kitchen"),
       item("Ice bucket stainless double-wall", "Rabbit", 1, 85, "Kitchen"),
@@ -180,7 +180,7 @@ export const AFFORDABLE_BUNDLES: Bundle[] = [
     plausibility: "easy",
     items: [
       item("UV-protected jersey display frame", "Steiner Sports", 6, 380, "Decorative"),
-      item("Floating wall shelves for memorabilia", "West Elm", 4, 180, "Furniture"),
+      item("Floating wall shelves for memorabilia", "Gallery Solutions", 4, 220, "Furniture"),
       item("LED display lighting strip", "Govee", 4, 45, "Electronics"),
     ],
   }),
@@ -312,7 +312,7 @@ export const AFFORDABLE_BUNDLES: Bundle[] = [
     items: [
       item("Outdoor bar cart teak", "Gloster", 1, 1200, "Furniture"),
       item("Outdoor wine glasses acrylic set of 8", "Govino", 1, 38, "Kitchen"),
-      item("Outdoor dining lanterns", "Crate & Barrel", 6, 85, "Lighting"),
+      item("Outdoor dining lanterns", "Restoration Hardware", 6, 145, "Lighting"),
       item("Outdoor throw blankets", "Pendleton", 4, 180, "Textiles"),
       item("Citronella torch set of 4", "Tiki", 1, 45, "Decorative"),
       item("Outdoor speaker weatherproof", "Sonos", 2, 449, "Electronics"),
