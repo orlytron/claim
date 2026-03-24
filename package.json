@@ -16,7 +16,8 @@
     "verify-upgrades": "npx ts-node --project scripts/tsconfig.json scripts/verify-high-value-options.ts",
     "gen-consumables": "npx ts-node --project scripts/tsconfig.json scripts/generate-consumable-packages.ts",
     "apply-suggestions": "npx ts-node --project scripts/tsconfig.json scripts/apply-suggested-upgrades.ts",
-    "reset-to-original": "npx ts-node --project scripts/tsconfig.json scripts/reset-to-original.ts"
+    "reset-to-original": "npx ts-node --project scripts/tsconfig.json scripts/reset-to-original.ts",
+    "add-garage": "npx ts-node --project scripts/tsconfig.json scripts/add-garage-items.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

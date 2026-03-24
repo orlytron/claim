@@ -8,30 +8,12 @@ import {
 import { cleanDescription } from "../../lib/clean-description";
 import type { ClaimItem } from "../../lib/types";
 
-function mapCategory(category: string, description: string): string {
-  const c = (category || "").toLowerCase();
-  const d = (description || "").toLowerCase();
-
-  if (c === "electronics" || c === "appliances") return "ELEC";
-  if (c === "furniture") return "FURN";
-  if (c === "clothing") return "CLTH";
-  if (c === "kitchen") return "KITC";
-  if (c === "sports") return "SPRT";
-  if (c === "collectibles" || c === "jewelry" || c === "watches") return "COLL";
-  if (c === "art") return "ARTW";
-  if (c === "textiles") return "TEXT";
-  if (c === "books") return "BOOK";
-  if (c === "lighting") return "LGHT";
-  if (c === "decorative") return "DECO";
-  if (c === "personal care") return "HLTH";
-  if (c === "pet") return "MISC";
-  if (c === "tools") return "TOOL";
-
-  if (d.includes("tv") || d.includes("camera") || d.includes("computer")) return "ELEC";
-  if (d.includes("sofa") || d.includes("chair") || d.includes("table")) return "FURN";
-  if (d.includes("shirt") || d.includes("jacket") || d.includes("pants")) return "CLTH";
-
-  return "MISC";
+function mapCondition(condition: string, ageYears: number): string {
+  const c = (condition || "").toLowerCase();
+  if (c.includes("new") || c.includes("like new") || ageYears <= 2) return "New";
+  if (c.includes("above") || c.includes("excellent") || ageYears <= 4) return "Above Avg.";
+  if (c.includes("below") || c.includes("fair") || c.includes("poor") || ageYears >= 7) return "Below Avg.";
+  return "Average";
 }
 
 function vendorFromUrl(url: string | undefined): string {
@@ -78,13 +60,13 @@ export async function GET(req: NextRequest) {
   const grandTotal = allItems.reduce((sum, item) => sum + item.qty * item.unit_cost, 0);
 
   const headerRows: unknown[][] = [
-    ["Template Version: 4.3", "Average", "Below Avg.", "Above Avg.", "New", "", "", "", "", "", "", "", "", ""],
-    ["Insured:", "ISRAEL, DAVID", "", "", "", "", "Claim Number:", "7579B726D", "", "", "", "State/Prov:", "CA", ""],
-    ["Adjuster:", "", "", "", "", "", "Policy Number:", "71XS54220", "", "", "", "", "", ""],
-    ["Important Information:", "", "", "", "", "", "", "", "", "", "", "", "", ""],
-    ["", "", "", "", "", "", "", "", "", "", "", "", "", ""],
-    ["", "", "", "", "", "", "", "", "", "", "", "", "", ""],
-    ["Total Estimated Replacement Cost = ", "", "", "", "", "", "", "", "", "", grandTotal, "", "", ""],
+    ["Template Version: 4.3", "Average", "Below Avg.", "Above Avg.", "New", "", "", "", "", "", "", ""],
+    ["Insured:", "ISRAEL, DAVID", "", "", "", "", "Claim Number:", "7579B726D", "", "", "State/Prov:", "CA"],
+    ["Adjuster:", "", "", "", "", "", "Policy Number:", "71XS54220", "", "", "", ""],
+    ["Important Information:", "", "", "", "", "", "", "", "", "", "", ""],
+    ["", "", "", "", "", "", "", "", "", "", "", ""],
+    ["", "", "", "", "", "", "", "", "", "", "", ""],
+    ["Total Estimated Replacement Cost = ", "", "", "", "", "", "", "", "", "", grandTotal, ""],
     [
       "Item #",
       "Room",
@@ -98,8 +80,6 @@ export async function GET(req: NextRequest) {
       "Condition",
       "Cost to Replace Pre-Tax (each)",
       "Total Cost",
-      "CAT",
-      "SEL",
     ],
   ];
 
@@ -122,8 +102,6 @@ export async function GET(req: NextRequest) {
       "",
       "",
       roomRunSubtotal,
-      "",
-      "",
     ]);
     roomRunSubtotal = 0;
   };
@@ -140,6 +118,7 @@ export async function GET(req: NextRequest) {
 
     const isNew = (item.condition || "").toLowerCase() === "new" || item.source === "bundle" || item.source === "suggestion";
     const ageYears = isNew ? 0 : item.age_years ?? 0;
+    const ageMonths = isNew ? 0 : item.age_months ?? 0;
 
     itemRows.push([
       itemNum,
@@ -150,12 +129,10 @@ export async function GET(req: NextRequest) {
       originalVendorColumn(item),
       item.qty,
       ageYears,
-      0,
-      item.condition || "Average",
+      ageMonths,
+      mapCondition(item.condition || "", ageYears),
       item.unit_cost,
       lineTotal,
-      mapCategory(item.category || "", item.description || ""),
-      "",
     ]);
   }
 
@@ -186,8 +163,6 @@ export async function GET(req: NextRequest) {
     { wch: 12 },
     { wch: 18 },
     { wch: 14 },
-    { wch: 14 },
-    { wch: 6 },
   ];
 
   const workbook = XLSX.utils.book_new();
