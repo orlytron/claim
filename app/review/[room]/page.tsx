@@ -349,24 +349,47 @@ function ConsumablePackCard({
   );
 }
 
-const CONDITION_SELECT_OPTIONS = ["New", "Above Avg.", "Average", "Below Avg."] as const;
+const CONDITION_SELECT_OPTIONS = ["New", "Like New", "Good", "Decent", "Used"] as const;
+
+/** Map pre-friendly / Xact-style labels saved on older rows. */
+const LEGACY_CONDITION_TO_FRIENDLY: Record<string, string> = {
+  new: "New",
+  "like new": "Like New",
+  "above avg.": "Good",
+  "above avg": "Good",
+  "above average": "Good",
+  excellent: "Good",
+  average: "Decent",
+  "below avg.": "Used",
+  "below avg": "Used",
+  "below average": "Used",
+  fair: "Used",
+  poor: "Used",
+};
 
 function autoCondition(age: number): string {
-  if (age <= 2) return "New";
-  if (age <= 4) return "Above Avg.";
-  if (age <= 7) return "Average";
-  return "Below Avg.";
+  if (age <= 1) return "New";
+  if (age <= 2) return "Like New";
+  if (age <= 4) return "Good";
+  if (age <= 7) return "Decent";
+  return "Used";
+}
+
+function conditionToFriendlyDraft(raw: string, ageFallback: number): string {
+  const t = raw.trim();
+  if (!t) return autoCondition(ageFallback);
+  const canon = CONDITION_SELECT_OPTIONS.find((o) => o.toLowerCase() === t.toLowerCase());
+  if (canon) return canon;
+  const mapped = LEGACY_CONDITION_TO_FRIENDLY[t.toLowerCase()];
+  if (mapped) return mapped;
+  return autoCondition(ageFallback);
 }
 
 function displayConditionForItem(item: ClaimItem): string {
   const d = displayAgeYears(item);
   const c = item.condition?.trim();
-  if (c) return c;
-  if (d === 0) return "New";
-  if (d <= 2) return "New";
-  if (d <= 4) return "Above Avg.";
-  if (d <= 7) return "Average";
-  return "Below Avg.";
+  if (!c) return autoCondition(d);
+  return conditionToFriendlyDraft(c, d);
 }
 
 type AgeEditorBlockProps = {
@@ -405,8 +428,7 @@ function AgeEditorBlock({
     const disp = displayAgeYears(item);
     setAgeDraft(String(disp));
     const raw = item.condition?.trim() ?? "";
-    const match = CONDITION_SELECT_OPTIONS.find((o) => o.toLowerCase() === raw.toLowerCase());
-    setConditionDraft(match ?? autoCondition(disp));
+    setConditionDraft(conditionToFriendlyDraft(raw, disp));
   }
 
   function save() {

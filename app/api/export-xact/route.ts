@@ -22,19 +22,15 @@ function cleanExportDescription(description: string, brand: string): string {
   return d;
 }
 
-function mapCondition(condition: string | undefined, ageYears: number): string {
-  // Age 0 = always New regardless of condition field
+function mapCondition(condition: string, ageYears: number): string {
+  const c = (condition || "").toLowerCase();
+  if (c === "new") return "New";
+  if (c === "like new") return "New";
+  if (c === "good") return "Above Avg.";
+  if (c === "decent") return "Average";
+  if (c === "used") return "Below Avg.";
+  // Age fallback
   if (!ageYears || ageYears === 0) return "New";
-
-  const c = (condition || "").toLowerCase().trim();
-
-  // Explicit condition overrides age
-  if (c === "new" || c === "like new") return "New";
-  if (c === "above avg." || c === "above avg" || c === "above average" || c === "excellent") return "Above Avg.";
-  if (c === "below avg." || c === "below avg" || c === "below average" || c === "fair" || c === "poor") return "Below Avg.";
-  if (c === "average" || c === "good") return "Average";
-
-  // Fall back to age-based
   if (ageYears <= 2) return "New";
   if (ageYears <= 4) return "Above Avg.";
   if (ageYears <= 7) return "Average";
