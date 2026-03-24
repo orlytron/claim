@@ -3,6 +3,7 @@
  * Run from repo root: npm run reset-to-original
  */
 import * as path from "path";
+import * as readline from "readline";
 
 import { createClient } from "@supabase/supabase-js";
 import * as dotenv from "dotenv";
@@ -55,7 +56,19 @@ async function reset() {
   );
 }
 
-reset().catch((e) => {
-  console.error(e);
-  process.exit(1);
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+});
+
+rl.question('⚠️  This will DELETE all client work. Type "RESET" to confirm: ', (answer) => {
+  rl.close();
+  if (answer.trim() !== "RESET") {
+    console.log("Cancelled.");
+    process.exit(0);
+  }
+  void reset().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
 });
