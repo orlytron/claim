@@ -1301,6 +1301,13 @@ export default function RoomReviewPage() {
             id="claim-items-anchor"
             className="mx-auto w-full max-w-[1100px] flex-1 scroll-mt-24 overflow-x-hidden px-4 py-6 md:px-8"
           >
+            <div className="mb-8">
+              <SmartLookup
+                roomName={roomName}
+                onAdd={(lines) => void handleFocusedBundleAdd(lines)}
+                disabled={isSaving}
+              />
+            </div>
             <section className="rounded-2xl border border-gray-100 bg-white shadow-sm transition-all duration-300">
               <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 md:px-6">
                 <div>
@@ -1660,14 +1667,6 @@ export default function RoomReviewPage() {
               <p className="mt-1 text-sm text-[#6B7280]">
                 Look up replacement options, then add focused bundles or individual lines to your claim.
               </p>
-
-              <div className="mt-8">
-                <SmartLookup
-                  roomName={roomName}
-                  onAdd={(lines) => void handleFocusedBundleAdd(lines)}
-                  disabled={isSaving}
-                />
-              </div>
 
               <div className="mt-6">
                 {requestStatus === "success" ? (
