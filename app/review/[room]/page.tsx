@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import FocusedAdditionCard from "../../components/FocusedAdditionCard";
@@ -23,8 +23,8 @@ import { supabase } from "../../lib/supabase";
 import { displayAgeYears, ORIGINAL_CLAIM_ITEMS } from "../../lib/original-claim-data";
 import { ClaimItem } from "../../lib/types";
 import { useClaimMode } from "../../lib/useClaimMode";
-import { generateItemId, slugify, formatCurrency } from "../../lib/utils";
-import { UpgradeOptionsPanel, type UpgradeOption } from "./UpgradeOptionsPanel";
+import { slugify, formatCurrency } from "../../lib/utils";
+import type { UpgradeOption } from "./UpgradeOptionsPanel";
 
 export type { UpgradeOption };
 import { SUGGESTED_UPGRADES } from "../../lib/suggested-upgrades";
@@ -228,55 +228,6 @@ function SmallSpinner() {
   );
 }
 
-function QtyAdjuster({
-  qty,
-  disabled,
-  onChange,
-}: {
-  qty: number;
-  disabled?: boolean;
-  onChange: (q: number) => void;
-}) {
-  return (
-    <span className="inline-flex items-center gap-1">
-      <span className="text-sm text-[#6B7280]">Qty:</span>
-      <button
-        type="button"
-        disabled={disabled || qty <= 1}
-        onClick={() => onChange(Math.max(1, qty - 1))}
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-gray-300 text-lg font-medium leading-none transition-colors hover:bg-gray-50 disabled:opacity-40"
-      >
-        −
-      </button>
-      <span className="min-w-[1.25rem] text-center text-base font-bold tabular-nums text-gray-900">{qty}</span>
-      <button
-        type="button"
-        disabled={disabled || qty >= 20}
-        onClick={() => onChange(Math.min(20, qty + 1))}
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-gray-300 text-lg font-medium leading-none transition-colors hover:bg-gray-50 disabled:opacity-40"
-      >
-        +
-      </button>
-    </span>
-  );
-}
-
-function SourceTag({ source }: { source?: ClaimItem["source"] }) {
-  if (source === "upgrade")
-    return (
-      <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[12px] font-medium text-[#2563EB]">
-        ↑ upgraded
-      </span>
-    );
-  if (source === "art")
-    return (
-      <span className="shrink-0 rounded-full bg-violet-50 px-2 py-0.5 text-[12px] font-medium text-violet-700">
-        🎨 art
-      </span>
-    );
-  return null;
-}
-
 function formatSignedGap(value: number): string {
   if (value < 0) return `−${formatCurrency(Math.abs(value))}`;
   if (value > 0) return `+${formatCurrency(value)}`;
@@ -349,274 +300,6 @@ function ConsumablePackCard({
   );
 }
 
-const CONDITION_SELECT_OPTIONS = ["New", "Like New", "Good", "Decent", "Used"] as const;
-
-/** Map pre-friendly / Xact-style labels saved on older rows. */
-const LEGACY_CONDITION_TO_FRIENDLY: Record<string, string> = {
-  new: "New",
-  "like new": "Like New",
-  "above avg.": "Good",
-  "above avg": "Good",
-  "above average": "Good",
-  excellent: "Good",
-  average: "Decent",
-  "below avg.": "Used",
-  "below avg": "Used",
-  "below average": "Used",
-  fair: "Used",
-  poor: "Used",
-};
-
-function autoCondition(age: number): string {
-  if (age === 0) return "New";
-  if (age <= 5) return "Like New";
-  if (age <= 10) return "Good";
-  if (age <= 15) return "Decent";
-  return "Used";
-}
-
-function conditionToFriendlyDraft(raw: string, ageFallback: number): string {
-  const t = raw.trim();
-  if (!t) return autoCondition(ageFallback);
-  const canon = CONDITION_SELECT_OPTIONS.find((o) => o.toLowerCase() === t.toLowerCase());
-  if (canon) return canon;
-  const mapped = LEGACY_CONDITION_TO_FRIENDLY[t.toLowerCase()];
-  if (mapped) return mapped;
-  return autoCondition(ageFallback);
-}
-
-function displayConditionForItem(item: ClaimItem): string {
-  const d = displayAgeYears(item);
-  const c = item.condition?.trim();
-  if (!c) return autoCondition(d);
-  return conditionToFriendlyDraft(c, d);
-}
-
-type AgeEditorBlockProps = {
-  lk: string;
-  item: ClaimItem;
-  locked: boolean;
-  isSaving: boolean;
-  editingAgeKey: string | null;
-  ageDraft: string;
-  setAgeDraft: (s: string) => void;
-  conditionDraft: string;
-  setConditionDraft: (s: string) => void;
-  setEditingAgeKey: (k: string | null) => void;
-  onSaveAge: (item: ClaimItem, ageYears: number, condition: string) => void | Promise<void>;
-};
-
-function AgeEditorBlock({
-  lk,
-  item,
-  locked,
-  isSaving,
-  editingAgeKey,
-  ageDraft,
-  setAgeDraft,
-  conditionDraft,
-  setConditionDraft,
-  setEditingAgeKey,
-  onSaveAge,
-}: AgeEditorBlockProps) {
-  const display = displayAgeYears(item);
-  const condLabel = displayConditionForItem(item);
-
-  function startEdit() {
-    if (locked || isSaving) return;
-    setEditingAgeKey(lk);
-    const disp = displayAgeYears(item);
-    setAgeDraft(String(disp));
-    const raw = item.condition?.trim() ?? "";
-    setConditionDraft(conditionToFriendlyDraft(raw, disp));
-  }
-
-  function save() {
-    const y = Math.min(30, Math.max(0, parseInt(ageDraft, 10) || 0));
-    void onSaveAge(item, y, conditionDraft);
-  }
-
-  return (
-    <div className="inline-flex items-center gap-1.5">
-      {editingAgeKey === lk ? (
-        <span className="inline-flex flex-wrap items-center gap-1.5">
-          <input
-            type="number"
-            min={0}
-            max={30}
-            className="w-12 rounded border border-gray-300 bg-white px-2 py-0.5 text-sm tabular-nums text-gray-900"
-            value={ageDraft}
-            onChange={(e) => {
-              const yr = parseInt(e.target.value, 10) || 0;
-              setAgeDraft(e.target.value);
-              setConditionDraft(autoCondition(yr));
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                save();
-              }
-              if (e.key === "Escape") {
-                e.preventDefault();
-                setEditingAgeKey(null);
-              }
-            }}
-            autoFocus
-          />
-          <span className="text-sm text-gray-400">yrs</span>
-          <select
-            className="max-w-[9.5rem] rounded border border-gray-300 bg-white px-1.5 py-0.5 text-sm text-gray-900"
-            value={conditionDraft}
-            onChange={(e) => setConditionDraft(e.target.value)}
-            aria-label="Condition"
-          >
-            {CONDITION_SELECT_OPTIONS.map((opt) => (
-              <option key={opt} value={opt}>
-                {opt}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="rounded px-1.5 text-sm font-semibold text-gray-700 hover:bg-gray-100"
-            aria-label="Save age and condition"
-            onClick={() => save()}
-          >
-            ✓
-          </button>
-        </span>
-      ) : (
-        <span className="inline-flex items-center gap-0 text-sm text-gray-400">
-          <button
-            type="button"
-            disabled={locked || isSaving}
-            onClick={startEdit}
-            className="border-0 bg-transparent p-0 hover:text-gray-600 disabled:opacity-40"
-          >
-            {display} yrs
-          </button>
-          <span aria-hidden className="mx-0.5">
-            ·
-          </span>
-          <button
-            type="button"
-            disabled={locked || isSaving}
-            onClick={startEdit}
-            className="border-0 bg-transparent p-0 hover:text-gray-600 disabled:opacity-40"
-          >
-            {condLabel}
-          </button>
-        </span>
-      )}
-    </div>
-  );
-}
-
-function ItemPriceRow({
-  item,
-  accent = "default",
-  brand,
-  source,
-  sourceTag,
-  hidePrice,
-}: {
-  item: ClaimItem;
-  accent?: "default" | "upgrade";
-  brand?: string | null;
-  source?: ClaimItem["source"];
-  sourceTag?: ReactNode;
-  /** When true, only the title/qty-each line (no right-side amount). */
-  hidePrice?: boolean;
-}) {
-  const d = cleanDescription(item.description);
-  const textColor = accent === "upgrade" ? "text-[#2563EB]" : "text-gray-900";
-  const rightNote = accent === "upgrade" && item.qty === 1 ? " ✓" : "";
-
-  const src = source ?? item.source;
-  const leftCluster = (
-    <span className="min-w-0 flex flex-1 flex-wrap items-baseline gap-x-2 gap-y-1 [overflow-wrap:anywhere]">
-      <span className={`inline-flex items-baseline gap-0 font-semibold ${textColor}`}>
-        {d}
-        {(src === "suggestion" || src === "bundle") && (
-          <span
-            title="Added by ClaimBuilder"
-            className="text-[10px] text-gray-400 align-super cursor-default"
-          >
-            *
-          </span>
-        )}
-      </span>
-      {brand?.trim() ? <span className="text-sm font-medium text-[#6B7280]">{brand}</span> : null}
-      {sourceTag}
-      {item.qty > 1 ? (
-        <>
-          <span className="font-normal text-gray-400">×{item.qty}</span>
-          <span className="text-sm font-normal text-gray-400">{formatCurrency(item.unit_cost)} each</span>
-        </>
-      ) : null}
-    </span>
-  );
-
-  if (hidePrice) {
-    return (
-      <div className="flex w-full flex-wrap items-baseline gap-x-2 gap-y-1 text-[17px]">{leftCluster}</div>
-    );
-  }
-
-  if (item.qty > 1) {
-    return (
-      <div className="flex w-full flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-[17px]">
-        {leftCluster}
-        <span className={`shrink-0 font-bold tabular-nums ${textColor}`}>
-          = {formatCurrency(item.unit_cost * item.qty)}
-        </span>
-      </div>
-    );
-  }
-  return (
-    <div className="flex w-full flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-[17px]">
-      {leftCluster}
-      <span className={`shrink-0 font-bold tabular-nums ${textColor}`}>
-        {formatCurrency(item.unit_cost)}
-        {rightNote}
-      </span>
-    </div>
-  );
-}
-
-function RightPriceColumn({ item }: { item: ClaimItem }) {
-  return (
-    <div className="shrink-0 text-right">
-      {item.qty > 1 ? (
-        <span className="text-[17px] font-bold tabular-nums text-gray-900">
-          = {formatCurrency(item.unit_cost * item.qty)}
-        </span>
-      ) : (
-        <span className="text-[17px] font-bold tabular-nums text-gray-900">{formatCurrency(item.unit_cost)}</span>
-      )}
-    </div>
-  );
-}
-
-function PriorItemPriceStrike({ unit_cost, qty, description }: { unit_cost: number; qty: number; description: string }) {
-  const d = cleanDescription(description);
-  if (qty > 1) {
-    return (
-      <p className="text-[17px] text-[#6B7280] line-through [overflow-wrap:anywhere]">
-        {d}
-        <span className="font-normal text-gray-400"> ×{qty}</span>
-        <span className="text-sm font-normal text-gray-400"> {formatCurrency(unit_cost)} each</span>
-        <span className="font-semibold tabular-nums"> = {formatCurrency(unit_cost * qty)}</span>
-      </p>
-    );
-  }
-  return (
-    <p className="text-[17px] text-[#6B7280] line-through [overflow-wrap:anywhere]">
-      {d} <span className="font-semibold tabular-nums">{formatCurrency(unit_cost)}</span>
-    </p>
-  );
-}
-
 export default function RoomReviewPage() {
   const params = useParams<{ room: string }>();
   const roomSlug = params.room;
@@ -643,27 +326,25 @@ export default function RoomReviewPage() {
   const [editingTarget, setEditingTarget] = useState(false);
   const [targetInput, setTargetInput] = useState("");
   const targetEditInputRef = useRef<HTMLInputElement>(null);
-  const [openUpgradeKey, setOpenUpgradeKey] = useState<string | null>(null);
   const [requestText, setRequestText] = useState("");
   const [requestStatus, setRequestStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [smartRequest, setSmartRequest] = useState("");
   const [smartStatus, setSmartStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [generatedBundle, setGeneratedBundle] = useState<Bundle | null>(null);
-  const [qtyFlashKey, setQtyFlashKey] = useState<string | null>(null);
-  const [editingAgeKey, setEditingAgeKey] = useState<string | null>(null);
-  const [ageDraft, setAgeDraft] = useState("");
-  const [conditionDraft, setConditionDraft] = useState("");
   const [editingItemKey, setEditingItemKey] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState({
     description: "",
     brand: "",
     model: "",
     unit_cost: "",
+    age_years: "0",
   });
   const [quickDesc, setQuickDesc] = useState("");
   const [quickBrand, setQuickBrand] = useState("");
   const [quickPrice, setQuickPrice] = useState("");
+  const [quickAge, setQuickAge] = useState("0");
   const quickDescRef = useRef<HTMLInputElement>(null);
+  const [consumablesExpanded, setConsumablesExpanded] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [suggestionsModalOpen, setSuggestionsModalOpen] = useState(false);
   /** User clicked “View initial suggestions” — reopen modal even if localStorage says dismissed. */
@@ -929,11 +610,6 @@ export default function RoomReviewPage() {
     return lockedKeys.includes(lockKeyForItem(item));
   }
 
-  function flashQtySaved(key: string) {
-    setQtyFlashKey(key);
-    window.setTimeout(() => setQtyFlashKey(null), 1000);
-  }
-
   async function persistRoomItemsSnapshot(newRoomItems: ClaimItem[]) {
     if (!session?.claim_items) return;
     const rest = session.claim_items.filter((i) => i.room !== roomName);
@@ -1022,21 +698,6 @@ export default function RoomReviewPage() {
     } finally {
       setIsSaving(false);
     }
-  }
-
-  async function updateItemQty(item: ClaimItem, qty: number) {
-    if (!session?.claim_items || qty < 1 || qty > 20) return;
-    const next = items.map((ci) => (sameClaimLine(ci, item) ? { ...ci, qty } : ci));
-    const key = lockKeyForItem(item);
-    await saveRoomItems(next);
-    flashQtySaved(key);
-  }
-
-  async function updateItemAge(item: ClaimItem, ageYears: number, condition: string) {
-    if (!session?.claim_items || ageYears < 0 || ageYears > 120) return;
-    const next = items.map((ci) => (sameClaimLine(ci, item) ? { ...ci, age_years: ageYears, condition } : ci));
-    await saveRoomItems(next);
-    setEditingAgeKey(null);
   }
 
   function claimTotals(claim: ClaimItem[]) {
@@ -1238,7 +899,7 @@ export default function RoomReviewPage() {
       brand: quickBrand.trim(),
       model: "",
       qty: 1,
-      age_years: 0,
+      age_years: parseInt(quickAge, 10) || 0,
       age_months: 0,
       condition: "New",
       unit_cost: price,
@@ -1249,6 +910,7 @@ export default function RoomReviewPage() {
     setQuickDesc("");
     setQuickBrand("");
     setQuickPrice("");
+    setQuickAge("0");
     quickDescRef.current?.focus();
   }
 
@@ -1640,9 +1302,63 @@ export default function RoomReviewPage() {
                   What&apos;s in this room
                 </h2>
                 <p className="mt-1 text-sm text-[#6B7280]">
-                  All lines in this room, highest unit price first. Upgrade when cached options exist (under $100 with no
-                  brand: no upgrade button).
+                  All lines in this room, highest unit price first. Edit a row to change details.
                 </p>
+              </div>
+
+              <div className="border-b border-gray-100 bg-gray-50/50 px-4 py-4 md:px-6">
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    ref={quickDescRef}
+                    type="text"
+                    placeholder="Item name"
+                    value={quickDesc}
+                    onChange={(e) => setQuickDesc(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleQuickAdd();
+                    }}
+                    className="min-w-[160px] flex-[3] rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm placeholder-gray-400"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Brand"
+                    value={quickBrand}
+                    onChange={(e) => setQuickBrand(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleQuickAdd();
+                    }}
+                    className="min-w-[110px] flex-[2] rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm placeholder-gray-400"
+                  />
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="Cost"
+                    value={quickPrice}
+                    onChange={(e) => setQuickPrice(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleQuickAdd();
+                    }}
+                    className="w-24 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm placeholder-gray-400 tabular-nums"
+                  />
+                  <input
+                    type="number"
+                    placeholder="Age"
+                    value={quickAge}
+                    onChange={(e) => setQuickAge(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleQuickAdd();
+                    }}
+                    className="w-16 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm placeholder-gray-400"
+                  />
+                  <button
+                    type="button"
+                    disabled={!quickDesc.trim() || isSaving}
+                    onClick={() => void handleQuickAdd()}
+                    className="rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                  >
+                    Add →
+                  </button>
+                </div>
               </div>
 
               {displayItems.length === 0 ? (
@@ -1654,358 +1370,168 @@ export default function RoomReviewPage() {
                   </p>
                 </div>
               ) : (
-                <div>
+                <div className="divide-y divide-gray-100">
                   {displayItems.map((item, idx) => {
                     const lk = lockKeyForItem(item);
                     const locked = lockedKeys.includes(lk);
-                    const rowKey = lk;
-                    const cacheHas =
-                      cachedDescs.has(norm(item.description)) ||
-                      cachedDescs.has(norm(item.pre_upgrade_item?.description ?? ""));
-                    const allowUpgradeUi =
-                      cacheHas && (item.unit_cost >= 100 || !!(item.brand || "").trim());
-                    const showAccordion = allowUpgradeUi;
-                    const upgraded = item.source === "upgrade" && !!item.pre_upgrade_item;
-                    const pre = item.pre_upgrade_item;
-                    const isOpen = openUpgradeKey === rowKey;
-                    const rowBg = locked
-                      ? "bg-blue-50/40"
-                      : upgraded
-                        ? "bg-emerald-50/30"
-                        : "bg-white";
+                    const isEditing = editingItemKey === lk;
+
+                    if (isEditing) {
+                      return (
+                        <div key={lk} className="bg-blue-50/40 px-4 py-3 md:px-6">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              autoFocus
+                              placeholder="Item name"
+                              value={editDraft.description}
+                              onChange={(e) =>
+                                setEditDraft((d) => ({ ...d, description: e.target.value }))
+                              }
+                              className="min-w-[150px] flex-[2] rounded border border-gray-300 px-2 py-1.5 text-sm"
+                            />
+                            <input
+                              placeholder="Brand"
+                              value={editDraft.brand}
+                              onChange={(e) => setEditDraft((d) => ({ ...d, brand: e.target.value }))}
+                              className="min-w-[100px] flex-1 rounded border border-gray-300 px-2 py-1.5 text-sm"
+                            />
+                            <input
+                              placeholder="$Price"
+                              value={editDraft.unit_cost}
+                              onChange={(e) =>
+                                setEditDraft((d) => ({ ...d, unit_cost: e.target.value }))
+                              }
+                              className="w-24 rounded border border-gray-300 px-2 py-1.5 text-sm tabular-nums"
+                            />
+                            <input
+                              placeholder="Age yrs"
+                              type="number"
+                              value={editDraft.age_years}
+                              onChange={(e) =>
+                                setEditDraft((d) => ({ ...d, age_years: e.target.value }))
+                              }
+                              className="w-20 rounded border border-gray-300 px-2 py-1.5 text-sm"
+                            />
+                            <button
+                              type="button"
+                              disabled={isSaving}
+                              onClick={async () => {
+                                const price =
+                                  parseFloat(String(editDraft.unit_cost).replace(/[^0-9.]/g, "")) || 0;
+                                const age = Math.min(120, Math.max(0, parseInt(String(editDraft.age_years), 10) || 0));
+                                if (!editDraft.description.trim()) return;
+                                setIsSaving(true);
+                                try {
+                                  const next = items.map((ci) =>
+                                    sameClaimLine(ci, item)
+                                      ? {
+                                          ...ci,
+                                          description: editDraft.description.trim(),
+                                          brand: editDraft.brand.trim(),
+                                          unit_cost: Math.round(price * 100) / 100,
+                                          age_years: age,
+                                        }
+                                      : ci
+                                  );
+                                  await saveRoomItems(next);
+                                  setEditingItemKey(null);
+                                  setToast("✓ Updated");
+                                } finally {
+                                  setIsSaving(false);
+                                }
+                              }}
+                              className="rounded bg-[#2563EB] px-3 py-1.5 text-sm font-bold text-white disabled:opacity-40"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingItemKey(null)}
+                              className="text-sm text-gray-500"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    const upgraded = item.source === "upgrade";
+                    const isAdded = item.source === "bundle" || item.source === "suggestion";
+                    const ageDisplay = displayAgeYears(item);
+                    const priceDisplay =
+                      item.qty > 1
+                        ? `×${item.qty} = ${formatCurrency(item.unit_cost * item.qty)}`
+                        : formatCurrency(item.unit_cost);
 
                     return (
                       <div
-                        key={`${generateItemId(item)}-${idx}`}
-                        className={`group/row relative border-b border-gray-100 transition-colors duration-300 last:border-b-0 ${rowBg}`}
+                        key={`${lk}-${idx}`}
+                        className={`group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-gray-50 md:px-6 ${
+                          upgraded ? "bg-emerald-50/30" : ""
+                        } ${isAdded ? "bg-blue-50/20" : ""}`}
                       >
-                        {editingItemKey === lk ? (
-                          <div className="border-b border-blue-100 bg-blue-50/30 px-4 py-4 md:px-6">
-                            <p className="mb-3 text-xs font-bold uppercase tracking-wide text-gray-500">Edit Item</p>
-                            <div className="grid gap-3 sm:grid-cols-2">
-                              <div>
-                                <label className="text-xs text-gray-500">Description</label>
-                                <input
-                                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                                  value={editDraft.description}
-                                  onChange={(e) =>
-                                    setEditDraft((d) => ({ ...d, description: e.target.value }))
-                                  }
-                                />
-                              </div>
-                              <div>
-                                <label className="text-xs text-gray-500">Brand</label>
-                                <input
-                                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                                  value={editDraft.brand}
-                                  onChange={(e) => setEditDraft((d) => ({ ...d, brand: e.target.value }))}
-                                />
-                              </div>
-                              <div>
-                                <label className="text-xs text-gray-500">Model</label>
-                                <input
-                                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                                  value={editDraft.model}
-                                  onChange={(e) => setEditDraft((d) => ({ ...d, model: e.target.value }))}
-                                />
-                              </div>
-                              <div>
-                                <label className="text-xs text-gray-500">Price (each)</label>
-                                <input
-                                  type="number"
-                                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm tabular-nums"
-                                  value={editDraft.unit_cost}
-                                  onChange={(e) =>
-                                    setEditDraft((d) => ({ ...d, unit_cost: e.target.value }))
-                                  }
-                                />
-                              </div>
-                            </div>
-                            <div className="mt-4 flex gap-2">
-                              <button
-                                type="button"
-                                disabled={isSaving}
-                                onClick={async () => {
-                                  const price = parseFloat(editDraft.unit_cost);
-                                  if (
-                                    !editDraft.description.trim() ||
-                                    Number.isNaN(price) ||
-                                    price <= 0
-                                  )
-                                    return;
-                                  setIsSaving(true);
-                                  try {
-                                    const next = items.map((ci) =>
-                                      sameClaimLine(ci, item)
-                                        ? {
-                                            ...ci,
-                                            description: editDraft.description.trim(),
-                                            brand: editDraft.brand.trim(),
-                                            model: editDraft.model.trim(),
-                                            unit_cost: Math.round(price * 100) / 100,
-                                          }
-                                        : ci
-                                    );
-                                    await saveRoomItems(next);
-                                    setEditingItemKey(null);
-                                    setToast("✓ Item updated");
-                                  } finally {
-                                    setIsSaving(false);
-                                  }
-                                }}
-                                className="rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
-                              >
-                                Save
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setEditingItemKey(null)}
-                                className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              disabled={locked || isSaving}
-                              onClick={() => {
-                                setOpenUpgradeKey(null);
-                                setEditingItemKey(lk);
-                                setEditDraft({
-                                  description: item.description,
-                                  brand: item.brand || "",
-                                  model: item.model || "",
-                                  unit_cost: String(item.unit_cost),
-                                });
-                              }}
-                              className="absolute right-10 top-3 flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 text-xs text-gray-400 opacity-0 transition hover:border-blue-400 hover:text-blue-500 group-hover/row:opacity-100 disabled:pointer-events-none disabled:opacity-0"
-                              aria-label="Edit item"
-                            >
-                              ✏
-                            </button>
-                            <button
-                              type="button"
-                              disabled={locked || isSaving}
-                              onClick={() => void handleRemoveItemRow(item)}
-                              className="absolute right-3 top-3 flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 text-lg leading-none text-gray-400 transition hover:border-red-400 hover:text-red-500 disabled:opacity-30"
-                              aria-label="Remove line from claim"
-                            >
-                              ×
-                            </button>
-                            <div className="flex min-h-[72px] items-center gap-4 px-4 py-4 pr-[4.5rem] md:px-6 md:pr-20">
-                              <div className="min-w-0 flex-1">
-                            {upgraded && pre ? (
-                              <>
-                                <PriorItemPriceStrike
-                                  description={pre.description}
-                                  unit_cost={pre.unit_cost}
-                                  qty={item.qty}
-                                />
-                                <div className="mt-2 space-y-2">
-                                  <ItemPriceRow
-                                    item={item}
-                                    accent="upgrade"
-                                    brand={item.brand}
-                                    source={item.source}
-                                    sourceTag={<SourceTag source={item.source} />}
-                                    hidePrice
-                                  />
-                                  <div className="flex flex-wrap items-center gap-3">
-                                    <QtyAdjuster
-                                      qty={item.qty}
-                                      disabled={locked || isSaving}
-                                      onChange={(q) => void updateItemQty(item, q)}
-                                    />
-                                    {qtyFlashKey === lk ? (
-                                      <span className="text-xs font-medium text-[#16A34A] transition-opacity duration-300">
-                                        Qty updated
-                                      </span>
-                                    ) : null}
-                                    <span className="text-[#6B7280]">·</span>
-                                    <AgeEditorBlock
-                                      lk={lk}
-                                      item={item}
-                                      locked={locked}
-                                      isSaving={isSaving}
-                                      editingAgeKey={editingAgeKey}
-                                      ageDraft={ageDraft}
-                                      setAgeDraft={setAgeDraft}
-                                      conditionDraft={conditionDraft}
-                                      setConditionDraft={setConditionDraft}
-                                      setEditingAgeKey={setEditingAgeKey}
-                                      onSaveAge={updateItemAge}
-                                    />
-                                  </div>
-                                </div>
-                                <p className="mt-1 text-sm font-bold tabular-nums text-[#16A34A]">
-                                  +{formatCurrency((item.unit_cost - pre.unit_cost) * item.qty)} added
-                                </p>
-                              </>
-                            ) : (
-                              <div className="space-y-2">
-                                <ItemPriceRow
-                                  item={item}
-                                  brand={item.brand}
-                                  source={item.source}
-                                  sourceTag={<SourceTag source={item.source} />}
-                                  hidePrice
-                                />
-                                <div className="flex flex-wrap items-center gap-3">
-                                  <QtyAdjuster
-                                    qty={item.qty}
-                                    disabled={locked || isSaving}
-                                    onChange={(q) => void updateItemQty(item, q)}
-                                  />
-                                  {qtyFlashKey === lk ? (
-                                    <span className="text-xs font-medium text-[#16A34A] transition-opacity duration-300">
-                                      Qty updated
-                                    </span>
-                                  ) : null}
-                                  <span className="text-[#6B7280]">·</span>
-                                  <AgeEditorBlock
-                                    lk={lk}
-                                    item={item}
-                                    locked={locked}
-                                    isSaving={isSaving}
-                                    editingAgeKey={editingAgeKey}
-                                    ageDraft={ageDraft}
-                                    setAgeDraft={setAgeDraft}
-                                    conditionDraft={conditionDraft}
-                                    setConditionDraft={setConditionDraft}
-                                    setEditingAgeKey={setEditingAgeKey}
-                                    onSaveAge={updateItemAge}
-                                  />
-                                </div>
-                              </div>
-                            )}
-                              </div>
-                              <div className="flex w-32 shrink-0 flex-col items-center justify-center md:w-40">
-                            {showAccordion && !upgraded ? (
-                              isOpen ? (
-                                <button
-                                  type="button"
-                                  onClick={() => setOpenUpgradeKey(null)}
-                                  className="text-sm font-semibold text-gray-500 hover:text-gray-700"
-                                >
-                                  ✕ Close
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  disabled={isSaving}
-                                  onClick={() => setOpenUpgradeKey(rowKey)}
-                                  className="inline-flex items-center gap-1.5 rounded-lg border-2 border-[#2563EB] bg-white px-4 py-2 text-sm font-semibold text-[#2563EB] hover:bg-blue-50 disabled:opacity-40"
-                                >
-                                  <span aria-hidden>↑</span> Upgrade
-                                </button>
-                              )
-                            ) : null}
-                            {upgraded ? (
-                              <div className="flex flex-col items-center gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => (isOpen ? setOpenUpgradeKey(null) : setOpenUpgradeKey(rowKey))}
-                                  className="text-sm font-semibold text-[#2563EB]"
-                                >
-                                  {isOpen ? "✕ Close" : "Change"}
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={isSaving}
-                                  onClick={() => void handleRevert(item)}
-                                  className="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-40"
-                                >
-                                  Revert
-                                </button>
-                              </div>
-                            ) : null}
-                              </div>
-                              <RightPriceColumn item={item} />
-                            </div>
-
-                        {showAccordion ? (
-                          <div
-                            className={`overflow-hidden transition-[max-height] duration-300 ease-in-out ${
-                              isOpen ? "max-h-[2200px]" : "max-h-0"
+                        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
+                          <span
+                            className={`truncate text-sm font-medium ${
+                              upgraded ? "text-[#2563EB]" : "text-gray-900"
                             }`}
                           >
-                            <div className="border-t border-gray-100 bg-gray-50/90 px-4 py-6 md:px-6">
-                              <UpgradeOptionsPanel
-                                key={`${item.description}-${item.unit_cost}-${idx}`}
-                                item={item}
-                                locked={locked}
-                                cacheHas={cacheHas}
-                                isPanelOpen={isOpen}
-                                onClose={() => setOpenUpgradeKey(null)}
-                                onApply={async (opt) => {
-                                  if (upgraded && item.pre_upgrade_item) await handleChangeUpgrade(item, opt);
-                                  else await handleApplyUpgrade(item, opt);
-                                }}
-                                onApplied={() => setOpenUpgradeKey(null)}
-                                onRefreshNotice={(msg) => setToast(msg)}
-                              />
-                            </div>
-                          </div>
-                        ) : null}
-                          </>
-                        )}
+                            {cleanDescription(item.description)}
+                            {isAdded ? (
+                              <sup className="ml-0.5 text-[9px] text-gray-400" title="Added by ClaimBuilder">
+                                *
+                              </sup>
+                            ) : null}
+                          </span>
+                          <span className="truncate text-xs text-gray-400">
+                            {item.brand?.trim() || "Unbranded"}
+                          </span>
+                        </div>
+                        <span className="w-12 shrink-0 text-right text-xs tabular-nums text-gray-400">
+                          {ageDisplay > 0 ? `${ageDisplay}yr` : "New"}
+                        </span>
+                        <span
+                          className={`w-28 shrink-0 text-right text-sm font-semibold tabular-nums ${
+                            upgraded ? "text-[#2563EB]" : "text-gray-900"
+                          }`}
+                        >
+                          {priceDisplay}
+                        </span>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <button
+                            type="button"
+                            disabled={locked || isSaving}
+                            onClick={() => {
+                              setEditingItemKey(lk);
+                              setEditDraft({
+                                description: item.description,
+                                brand: item.brand || "",
+                                model: item.model || "",
+                                unit_cost: String(item.unit_cost),
+                                age_years: String(displayAgeYears(item)),
+                              });
+                            }}
+                            className="flex h-7 w-7 items-center justify-center rounded text-xs text-gray-400 hover:bg-gray-200 hover:text-gray-700"
+                            title="Edit"
+                          >
+                            ✏
+                          </button>
+                          <button
+                            type="button"
+                            disabled={locked || isSaving}
+                            onClick={() => void handleRemoveItemRow(item)}
+                            className="flex h-7 w-7 items-center justify-center rounded text-base leading-none text-gray-300 hover:bg-red-50 hover:text-red-500"
+                            title="Remove"
+                          >
+                            ×
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
-
                 </div>
               )}
-              <div className="border-t border-gray-100 px-4 py-4 md:px-6">
-                <p className="mb-3 text-xs font-bold uppercase tracking-wide text-gray-500">+ Add Item</p>
-                <div className="flex flex-wrap gap-2">
-                  <input
-                    ref={quickDescRef}
-                    type="text"
-                    placeholder="What did you have?"
-                    value={quickDesc}
-                    onChange={(e) => setQuickDesc(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void handleQuickAdd();
-                    }}
-                    className="min-w-[200px] flex-[2] rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm placeholder-gray-400"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Brand (optional)"
-                    value={quickBrand}
-                    onChange={(e) => setQuickBrand(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void handleQuickAdd();
-                    }}
-                    className="min-w-[130px] flex-1 rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm placeholder-gray-400"
-                  />
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="$Price"
-                    value={quickPrice}
-                    onChange={(e) => setQuickPrice(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void handleQuickAdd();
-                    }}
-                    className="w-28 rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm placeholder-gray-400"
-                  />
-                  <button
-                    type="button"
-                    disabled={!quickDesc.trim() || isSaving}
-                    onClick={() => void handleQuickAdd()}
-                    className="min-h-[44px] rounded-lg bg-[#2563EB] px-5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-                  >
-                    Add →
-                  </button>
-                </div>
-                <p className="mt-2 text-xs text-gray-400">
-                  Press Enter to add. Price can be updated later.
-                </p>
-              </div>
             </section>
 
             <section className="mt-12">
@@ -2165,19 +1691,33 @@ export default function RoomReviewPage() {
               </Link>
 
               {consumableBundles.length > 0 ? (
-                <div className="mt-10 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-                  <p className="text-xs font-bold uppercase tracking-wide text-gray-900">Restock & consumable packs</p>
-                  <p className="mt-1 text-sm text-[#6B7280]">One-tap add common replenishment lines for this room.</p>
-                  <div className="mt-4 space-y-4">
-                    {consumableBundles.map((b) => (
-                      <ConsumablePackCard
-                        key={b.bundle_code}
-                        bundle={b}
-                        disabled={isSaving}
-                        onAdd={(pack) => void handleConsumableBundleAdd(pack)}
-                      />
-                    ))}
-                  </div>
+                <div className="mt-6 rounded-2xl border border-gray-200 bg-white shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => setConsumablesExpanded((e) => !e)}
+                    className="flex w-full items-center justify-between rounded-2xl px-5 py-4 hover:bg-gray-50"
+                  >
+                    <p className="text-left text-sm font-bold uppercase tracking-wide text-gray-700">
+                      Restock & Consumable Packs
+                      <span className="ml-2 font-normal normal-case text-gray-400">
+                        ({consumableBundles.length} packs)
+                      </span>
+                    </p>
+                    <span className="text-sm text-gray-400">{consumablesExpanded ? "▲" : "▼"}</span>
+                  </button>
+
+                  {consumablesExpanded ? (
+                    <div className="space-y-4 border-t border-gray-100 p-5">
+                      {consumableBundles.map((b) => (
+                        <ConsumablePackCard
+                          key={b.bundle_code}
+                          bundle={b}
+                          disabled={isSaving}
+                          onAdd={(pack) => void handleConsumableBundleAdd(pack)}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
