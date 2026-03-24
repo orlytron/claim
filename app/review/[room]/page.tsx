@@ -29,7 +29,7 @@ import type { UpgradeOption } from "./UpgradeOptionsPanel";
 export type { UpgradeOption };
 import { SUGGESTED_UPGRADES } from "../../lib/suggested-upgrades";
 import { ROOM_ORDER } from "../../lib/room-order";
-import { apiResponseToBundle, type SmartItemRequestBundleJson } from "../../lib/smart-item-request";
+import SmartLookup from "../../components/SmartLookup";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -336,9 +336,6 @@ export default function RoomReviewPage() {
   const targetEditInputRef = useRef<HTMLInputElement>(null);
   const [requestText, setRequestText] = useState("");
   const [requestStatus, setRequestStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const [smartRequest, setSmartRequest] = useState("");
-  const [smartStatus, setSmartStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const [generatedBundle, setGeneratedBundle] = useState<Bundle | null>(null);
   const [editingItemKey, setEditingItemKey] = useState<string | null>(null);
   const [headerExpanded, setHeaderExpanded] = useState(false);
   const [editDraft, setEditDraft] = useState({
@@ -972,35 +969,6 @@ export default function RoomReviewPage() {
       setRequestStatus("error");
     }
   }
-
-  const runSmartItemRequest = useCallback(async () => {
-    if (!smartRequest.trim() || !roomName) return;
-    setSmartStatus("loading");
-    try {
-      const res = await fetch("/api/smart-item-request", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          request: smartRequest.trim(),
-          room: roomName,
-          existingItems: items,
-          sessionId,
-        }),
-      });
-      const j = (await res.json()) as {
-        success?: boolean;
-        bundle?: SmartItemRequestBundleJson;
-        error?: string;
-      };
-      if (!j.success || !j.bundle) {
-        throw new Error(j.error || "Could not generate a bundle");
-      }
-      setGeneratedBundle(apiResponseToBundle(j.bundle, roomName));
-      setSmartStatus("success");
-    } catch {
-      setSmartStatus("error");
-    }
-  }, [smartRequest, roomName, items, sessionId]);
 
   function saveTarget() {
     if (!roomName) {
@@ -1677,89 +1645,19 @@ export default function RoomReviewPage() {
             </section>
 
             <section className="mt-12">
-              <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-                <p className="text-sm font-bold uppercase tracking-wide text-gray-900">🧠 Remember something else?</p>
-                {smartStatus === "loading" ? (
-                  <div className="mt-4 flex flex-col items-start gap-3 text-sm text-[#6B7280]">
-                    <div className="flex items-center gap-2">
-                      <SmallSpinner />
-                      <span>Identifying items and finding replacement prices…</span>
-                    </div>
-                    <p className="text-xs">This takes about 10 seconds.</p>
-                  </div>
-                ) : smartStatus === "success" && generatedBundle ? (
-                  <div className="mt-4 space-y-4">
-                    <p className="text-sm font-semibold text-gray-900">
-                      ✓ Found: <span className="text-[#16A34A]">{generatedBundle.name}</span>
-                    </p>
-                    <FocusedAdditionCard
-                      key={generatedBundle.bundle_code}
-                      bundle={generatedBundle}
-                      roomName={roomName}
-                      existingItems={session?.claim_items ?? []}
-                      sessionId={sessionId}
-                      disabled={isSaving}
-                      onAdd={(lines) => {
-                        void (async () => {
-                          await handleFocusedBundleAdd(lines);
-                          setGeneratedBundle(null);
-                          setSmartStatus("idle");
-                          setSmartRequest("");
-                        })();
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="text-sm font-semibold text-[#2563EB] underline"
-                      onClick={() => {
-                        setGeneratedBundle(null);
-                        setSmartStatus("idle");
-                        setSmartRequest("");
-                      }}
-                    >
-                      Describe something else →
-                    </button>
-                  </div>
-                ) : smartStatus === "error" ? (
-                  <div className="mt-4 space-y-4">
-                    <p className="text-sm text-amber-900">
-                      Couldn&apos;t identify those items. Try describing in more detail, or send us a note using the link
-                      below.
-                    </p>
-                    <button
-                      type="button"
-                      className="text-sm font-semibold text-[#2563EB] underline"
-                      onClick={() => {
-                        setSmartStatus("idle");
-                        setSmartRequest("");
-                      }}
-                    >
-                      ← Try smart search again
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <p className="mt-2 text-sm text-[#6B7280]">
-                      Describe anything you had and we&apos;ll identify it and find a replacement price — plus suggest what
-                      else would have been with it.
-                    </p>
-                    <textarea
-                      className="mt-4 w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder-gray-400"
-                      rows={3}
-                      placeholder="We had a professional espresso machine in the kitchen…"
-                      value={smartRequest}
-                      onChange={(e) => setSmartRequest(e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      disabled={!smartRequest.trim() || isSaving}
-                      onClick={() => void runSmartItemRequest()}
-                      className="mt-4 min-h-[44px] rounded-lg bg-[#2563EB] px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-                    >
-                      Find Items →
-                    </button>
-                  </>
-                )}
+              <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">
+                Add items to {displayRoomTitle(roomName).toUpperCase()}
+              </h2>
+              <p className="mt-1 text-sm text-[#6B7280]">
+                Look up replacement options, then add focused bundles or individual lines to your claim.
+              </p>
+
+              <div className="mt-8">
+                <SmartLookup
+                  roomName={roomName}
+                  onAdd={(lines) => void handleFocusedBundleAdd(lines)}
+                  disabled={isSaving}
+                />
               </div>
 
               <div className="mt-6">
@@ -1796,16 +1694,6 @@ export default function RoomReviewPage() {
                   </details>
                 )}
               </div>
-            </section>
-
-            <section className="mt-12">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900">
-                Add items to {displayRoomTitle(roomName).toUpperCase()}
-              </h2>
-              <p className="mt-1 text-sm text-[#6B7280]">
-                Focused addition sets — choose a tier (Essential through Full or Ultimate), then add checked lines to
-                your claim.
-              </p>
 
               <div className="mt-8 space-y-8">
                 {focusedBundles.length === 0 ? (
