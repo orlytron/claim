@@ -349,6 +349,26 @@ function ConsumablePackCard({
   );
 }
 
+const CONDITION_SELECT_OPTIONS = ["New", "Above Avg.", "Average", "Below Avg."] as const;
+
+function autoCondition(age: number): string {
+  if (age <= 2) return "New";
+  if (age <= 4) return "Above Avg.";
+  if (age <= 7) return "Average";
+  return "Below Avg.";
+}
+
+function displayConditionForItem(item: ClaimItem): string {
+  const d = displayAgeYears(item);
+  const c = item.condition?.trim();
+  if (c) return c;
+  if (d === 0) return "New";
+  if (d <= 2) return "New";
+  if (d <= 4) return "Above Avg.";
+  if (d <= 7) return "Average";
+  return "Below Avg.";
+}
+
 type AgeEditorBlockProps = {
   lk: string;
   item: ClaimItem;
@@ -357,8 +377,10 @@ type AgeEditorBlockProps = {
   editingAgeKey: string | null;
   ageDraft: string;
   setAgeDraft: (s: string) => void;
+  conditionDraft: string;
+  setConditionDraft: (s: string) => void;
   setEditingAgeKey: (k: string | null) => void;
-  onSaveAge: (item: ClaimItem, ageYears: number) => void | Promise<void>;
+  onSaveAge: (item: ClaimItem, ageYears: number, condition: string) => void | Promise<void>;
 };
 
 function AgeEditorBlock({
@@ -369,21 +391,27 @@ function AgeEditorBlock({
   editingAgeKey,
   ageDraft,
   setAgeDraft,
+  conditionDraft,
+  setConditionDraft,
   setEditingAgeKey,
   onSaveAge,
 }: AgeEditorBlockProps) {
   const display = displayAgeYears(item);
-  const label = display < 1 ? "New" : `${display} yrs`;
+  const condLabel = displayConditionForItem(item);
 
   function startEdit() {
     if (locked || isSaving) return;
     setEditingAgeKey(lk);
-    setAgeDraft(String(displayAgeYears(item)));
+    const disp = displayAgeYears(item);
+    setAgeDraft(String(disp));
+    const raw = item.condition?.trim() ?? "";
+    const match = CONDITION_SELECT_OPTIONS.find((o) => o.toLowerCase() === raw.toLowerCase());
+    setConditionDraft(match ?? autoCondition(disp));
   }
 
   function save() {
     const y = Math.min(30, Math.max(0, parseInt(ageDraft, 10) || 0));
-    void onSaveAge(item, y);
+    void onSaveAge(item, y, conditionDraft);
   }
 
   return (
@@ -396,7 +424,11 @@ function AgeEditorBlock({
             max={30}
             className="w-12 rounded border border-gray-300 bg-white px-2 py-0.5 text-sm tabular-nums text-gray-900"
             value={ageDraft}
-            onChange={(e) => setAgeDraft(e.target.value)}
+            onChange={(e) => {
+              const yr = parseInt(e.target.value, 10) || 0;
+              setAgeDraft(e.target.value);
+              setConditionDraft(autoCondition(yr));
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
@@ -410,26 +442,49 @@ function AgeEditorBlock({
             autoFocus
           />
           <span className="text-sm text-gray-400">yrs</span>
+          <select
+            className="max-w-[9.5rem] rounded border border-gray-300 bg-white px-1.5 py-0.5 text-sm text-gray-900"
+            value={conditionDraft}
+            onChange={(e) => setConditionDraft(e.target.value)}
+            aria-label="Condition"
+          >
+            {CONDITION_SELECT_OPTIONS.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
           <button
             type="button"
             className="rounded px-1.5 text-sm font-semibold text-gray-700 hover:bg-gray-100"
-            aria-label="Save age"
+            aria-label="Save age and condition"
             onClick={() => save()}
           >
             ✓
           </button>
         </span>
       ) : (
-        <>
+        <span className="inline-flex items-center gap-0 text-sm text-gray-400">
           <button
             type="button"
             disabled={locked || isSaving}
             onClick={startEdit}
-            className="border-0 bg-transparent p-0 text-sm text-gray-400 hover:text-gray-600 disabled:opacity-40"
+            className="border-0 bg-transparent p-0 hover:text-gray-600 disabled:opacity-40"
           >
-            {label}
+            {display} yrs
           </button>
-        </>
+          <span aria-hidden className="mx-0.5">
+            ·
+          </span>
+          <button
+            type="button"
+            disabled={locked || isSaving}
+            onClick={startEdit}
+            className="border-0 bg-transparent p-0 hover:text-gray-600 disabled:opacity-40"
+          >
+            {condLabel}
+          </button>
+        </span>
       )}
     </div>
   );
@@ -562,6 +617,7 @@ export default function RoomReviewPage() {
   const [qtyFlashKey, setQtyFlashKey] = useState<string | null>(null);
   const [editingAgeKey, setEditingAgeKey] = useState<string | null>(null);
   const [ageDraft, setAgeDraft] = useState("");
+  const [conditionDraft, setConditionDraft] = useState("");
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [suggestionsModalOpen, setSuggestionsModalOpen] = useState(false);
   /** User clicked “View initial suggestions” — reopen modal even if localStorage says dismissed. */
@@ -930,9 +986,9 @@ export default function RoomReviewPage() {
     flashQtySaved(key);
   }
 
-  async function updateItemAge(item: ClaimItem, ageYears: number) {
+  async function updateItemAge(item: ClaimItem, ageYears: number, condition: string) {
     if (!session?.claim_items || ageYears < 0 || ageYears > 120) return;
-    const next = items.map((ci) => (sameClaimLine(ci, item) ? { ...ci, age_years: ageYears } : ci));
+    const next = items.map((ci) => (sameClaimLine(ci, item) ? { ...ci, age_years: ageYears, condition } : ci));
     await saveRoomItems(next);
     setEditingAgeKey(null);
   }
@@ -1594,6 +1650,8 @@ export default function RoomReviewPage() {
                                       editingAgeKey={editingAgeKey}
                                       ageDraft={ageDraft}
                                       setAgeDraft={setAgeDraft}
+                                      conditionDraft={conditionDraft}
+                                      setConditionDraft={setConditionDraft}
                                       setEditingAgeKey={setEditingAgeKey}
                                       onSaveAge={updateItemAge}
                                     />
@@ -1631,6 +1689,8 @@ export default function RoomReviewPage() {
                                     editingAgeKey={editingAgeKey}
                                     ageDraft={ageDraft}
                                     setAgeDraft={setAgeDraft}
+                                    conditionDraft={conditionDraft}
+                                    setConditionDraft={setConditionDraft}
                                     setEditingAgeKey={setEditingAgeKey}
                                     onSaveAge={updateItemAge}
                                   />
