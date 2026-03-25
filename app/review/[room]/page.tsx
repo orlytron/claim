@@ -7,7 +7,9 @@ import FocusedAdditionCard from "../../components/FocusedAdditionCard";
 import SuggestionConfirmBanner from "../../components/SuggestionConfirmBanner";
 import SuggestionConfirmModal from "../../components/SuggestionConfirmModal";
 import { dispatchUpgradeReward } from "../../components/UpgradeRewardToast";
-import type { Bundle } from "../../lib/bundles-data";
+import type { Bundle, BundleItem } from "../../lib/bundles-data";
+import { apiResponseToBundle } from "../../lib/smart-item-request";
+import type { SmartItemRequestBundleJson } from "../../lib/smart-item-request";
 import {
   getAdminOnlyBundlesForRoom,
   getConsumableBundlesForRoom,
@@ -354,6 +356,11 @@ export default function RoomReviewPage() {
   const [quickPrice, setQuickPrice] = useState("");
   const [quickAge, setQuickAge] = useState("0");
   const quickDescRef = useRef<HTMLInputElement>(null);
+  const [itemBundleLoading, setItemBundleLoading] = useState<string | null>(null);
+  const [itemBundleResults, setItemBundleResults] = useState<Record<string, BundleItem[]>>({});
+  const [itemBundleQuery, setItemBundleQuery] = useState<Record<string, string>>({});
+  const [goalBundleLoading, setGoalBundleLoading] = useState(false);
+  const [goalBundle, setGoalBundle] = useState<Bundle | null>(null);
   const [consumablesExpanded, setConsumablesExpanded] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [suggestionsModalOpen, setSuggestionsModalOpen] = useState(false);
@@ -901,6 +908,85 @@ export default function RoomReviewPage() {
     setToast(`✓ Added ${formatCurrency(delta)}`);
   }
 
+  function normalizeBundleLineFromApi(raw: unknown): BundleItem | null {
+    if (!raw || typeof raw !== "object") return null;
+    const o = raw as Record<string, unknown>;
+    const qty = Math.max(1, Math.round(Number(o.qty) || 1));
+    const unit_cost = Math.round((Number(o.unit_cost) || 0) * 100) / 100;
+    const description = String(o.description ?? "").trim() || "Item";
+    const brand = String(o.brand ?? "").trim();
+    const category = String(o.category ?? "Other").trim() || "Other";
+    return {
+      description,
+      brand,
+      qty,
+      unit_cost,
+      total: Math.round(unit_cost * qty * 100) / 100,
+      category,
+    };
+  }
+
+  async function handleItemBundle(item: ClaimItem, key: string, customQuery?: string) {
+    setItemBundleLoading(key);
+    try {
+      const searchTerm = (customQuery ?? `${item.brand || ""} ${item.description}`).trim();
+      const res = await fetch("/api/smart-item-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request: `Generate items that go with: ${searchTerm}. Focus on related accessories, supplies and complementary items. Room: ${roomName}`,
+          room: roomName,
+          existingItems: items.slice(0, 10),
+          sessionId,
+        }),
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { success?: boolean; bundle?: SmartItemRequestBundleJson };
+      if (!data.success || !data.bundle) return;
+      const rawItems = data.bundle.tiers?.complete?.items;
+      const relatedItems = (Array.isArray(rawItems) ? rawItems : [])
+        .map(normalizeBundleLineFromApi)
+        .filter((x): x is BundleItem => x != null)
+        .slice(0, 8);
+      setItemBundleResults((prev) => ({ ...prev, [key]: relatedItems }));
+    } catch {
+      // fail silently
+    } finally {
+      setItemBundleLoading(null);
+    }
+  }
+
+  async function handleAddByGoal() {
+    setGoalBundleLoading(true);
+    try {
+      const gap = roomTarget - roomTotal;
+      if (gap <= 0) {
+        setToast("Room already at target!");
+        return;
+      }
+      const res = await fetch("/api/smart-item-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request: `Suggest items that would be found in a ${roomName} of a luxury Pacific Palisades home. We need to add approximately $${Math.round(gap).toLocaleString()} more in documented items. Suggest realistic items this family would have owned.`,
+          room: roomName,
+          existingItems: items.slice(0, 15),
+          sessionId,
+        }),
+      });
+      const data = (await res.json()) as { success?: boolean; bundle?: SmartItemRequestBundleJson };
+      if (!res.ok || !data.success || !data.bundle) {
+        setToast("Could not generate — try again");
+        return;
+      }
+      setGoalBundle(apiResponseToBundle(data.bundle, roomName));
+    } catch {
+      setToast("Could not generate — try again");
+    } finally {
+      setGoalBundleLoading(false);
+    }
+  }
+
   async function handleQuickAdd() {
     if (!quickDesc.trim()) return;
     const price = parseFloat(quickPrice.replace(/[^0-9.]/g, "")) || 0;
@@ -1306,7 +1392,55 @@ export default function RoomReviewPage() {
                 roomName={roomName}
                 onAdd={(lines) => void handleFocusedBundleAdd(lines)}
                 disabled={isSaving}
+                sessionId={sessionId}
+                existingItems={items}
               />
+            </div>
+            <div className="mb-4">
+              <div className="flex items-center justify-between px-1 py-2">
+                <p className="text-xs text-gray-400">
+                  {formatCurrency(roomTotal)} documented ·{" "}
+                  {formatCurrency(Math.max(0, roomTarget - roomTotal))} to goal
+                </p>
+                <button
+                  type="button"
+                  disabled={goalBundleLoading || isSaving}
+                  onClick={() => void handleAddByGoal()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-40"
+                >
+                  {goalBundleLoading ? (
+                    <>
+                      <div className="h-3 w-3 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+                      Finding items...
+                    </>
+                  ) : (
+                    "+ Add by Goal"
+                  )}
+                </button>
+              </div>
+              {goalBundle ? (
+                <div>
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-xs font-bold uppercase tracking-wide text-gray-500">
+                      Suggested for this room
+                    </p>
+                    <button type="button" onClick={() => setGoalBundle(null)} className="text-xs text-gray-400 hover:text-gray-600">
+                      Clear ×
+                    </button>
+                  </div>
+                  <FocusedAdditionCard
+                    bundle={goalBundle}
+                    roomName={roomName}
+                    existingItems={session?.claim_items ?? []}
+                    sessionId={sessionId}
+                    disabled={isSaving}
+                    onAdd={(lines) => {
+                      void handleFocusedBundleAdd(lines);
+                      setGoalBundle(null);
+                    }}
+                  />
+                </div>
+              ) : null}
             </div>
             <section className="rounded-2xl border border-gray-100 bg-white shadow-sm transition-all duration-300">
               <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 md:px-6">
@@ -1566,6 +1700,110 @@ export default function RoomReviewPage() {
                             >
                               Remove item
                             </button>
+                          </div>
+                          <div className="mt-4 border-t border-blue-100 pt-4">
+                            {!(itemBundleResults[lk]?.length) ? (
+                              <button
+                                type="button"
+                                disabled={itemBundleLoading === lk}
+                                onClick={() => void handleItemBundle(item, lk)}
+                                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+                              >
+                                {itemBundleLoading === lk ? (
+                                  <>
+                                    <div className="h-3 w-3 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+                                    Finding related items...
+                                  </>
+                                ) : (
+                                  "+ What else goes with this?"
+                                )}
+                              </button>
+                            ) : null}
+
+                            {itemBundleResults[lk] && itemBundleResults[lk].length > 0 ? (
+                              <div className="space-y-1">
+                                <p className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-400">Related items</p>
+                                {itemBundleResults[lk].map((bi, idx) => (
+                                  <div
+                                    key={idx}
+                                    className="flex items-center gap-3 rounded-lg border border-gray-100 bg-white px-3 py-2 text-sm"
+                                  >
+                                    <span className="flex-1 truncate font-medium text-gray-800">{bi.description}</span>
+                                    <span className="shrink-0 text-xs text-gray-400">{bi.brand || "Unbranded"}</span>
+                                    <span className="w-20 shrink-0 text-right text-xs font-semibold tabular-nums text-gray-700">
+                                      {formatCurrency(bi.unit_cost)}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        void handleFocusedBundleAdd([
+                                          {
+                                            room: roomName,
+                                            description: bi.description,
+                                            brand: bi.brand || "",
+                                            model: "",
+                                            qty: bi.qty || 1,
+                                            unit_cost: bi.unit_cost,
+                                            age_years: 0,
+                                            age_months: 0,
+                                            condition: "New",
+                                            category: bi.category || "Other",
+                                            source: "bundle",
+                                          },
+                                        ]);
+                                      }}
+                                      className="shrink-0 rounded-lg bg-[#2563EB] px-2.5 py-1 text-xs font-bold text-white hover:bg-blue-700"
+                                    >
+                                      + Add
+                                    </button>
+                                  </div>
+                                ))}
+                                <div className="mt-3 flex gap-2">
+                                  <input
+                                    type="text"
+                                    placeholder="Type a specific item to find more like this..."
+                                    value={itemBundleQuery[lk] || ""}
+                                    onChange={(e) =>
+                                      setItemBundleQuery((prev) => ({
+                                        ...prev,
+                                        [lk]: e.target.value,
+                                      }))
+                                    }
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter" && itemBundleQuery[lk]?.trim()) {
+                                        void handleItemBundle(item, lk, itemBundleQuery[lk]);
+                                      }
+                                    }}
+                                    className="flex-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm placeholder-gray-400"
+                                  />
+                                  <button
+                                    type="button"
+                                    disabled={!itemBundleQuery[lk]?.trim() || itemBundleLoading === lk}
+                                    onClick={() => {
+                                      if (itemBundleQuery[lk]?.trim()) {
+                                        void handleItemBundle(item, lk, itemBundleQuery[lk]);
+                                      }
+                                    }}
+                                    className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+                                  >
+                                    Find more →
+                                  </button>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setItemBundleResults((prev) => {
+                                      const n = { ...prev };
+                                      delete n[lk];
+                                      return n;
+                                    });
+                                  }}
+                                  className="mt-1 text-xs text-gray-400 hover:text-gray-600"
+                                >
+                                  Clear results
+                                </button>
+                              </div>
+                            ) : null}
                           </div>
                         </div>
                       );
