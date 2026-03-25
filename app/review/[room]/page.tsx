@@ -373,6 +373,13 @@ export default function RoomReviewPage() {
   const [showBanner, setShowBanner] = useState(false);
   const [isAdminUser, setIsAdminUser] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [filterText, setFilterText] = useState("");
+  const [inlineEdit, setInlineEdit] = useState<{
+    key: string;
+    field: string;
+    value: string;
+  } | null>(null);
+  const inlineBlurSkipRef = useRef(false);
 
   const undoHistoryRef = useRef<ClaimItem[][]>([]);
   const undoFutureRef = useRef<ClaimItem[][]>([]);
@@ -542,6 +549,15 @@ export default function RoomReviewPage() {
     return Array.from(uniqueItems.values()).sort((a, b) => b.unit_cost - a.unit_cost);
   }, [items]);
 
+  const filteredItems = useMemo(() => {
+    if (!filterText.trim()) return displayItems;
+    const f = filterText.toLowerCase();
+    return displayItems.filter(
+      (item) =>
+        item.description.toLowerCase().includes(f) || (item.brand || "").toLowerCase().includes(f)
+    );
+  }, [displayItems, filterText]);
+
   const upgradeCandidates = useMemo(() => items.filter(isUpgradeCandidate), [items]);
 
   const upgradeSubtotal = useMemo(
@@ -664,6 +680,37 @@ export default function RoomReviewPage() {
     if (!session?.claim_items) return;
     if (!opts?.skipHistory) pushUndoSnapshot();
     await persistRoomItemsSnapshot(newRoomItems);
+  }
+
+  async function saveInlineEdit() {
+    if (!inlineEdit) return;
+    const { key, field, value } = inlineEdit;
+    const next = items.map((ci) => {
+      const lk = lockKeyForItem(ci);
+      if (lk !== key) return ci;
+      if (field === "brand") {
+        return { ...ci, brand: value.trim() };
+      }
+      if (field === "unit_cost") {
+        const price = parseFloat(value.replace(/[^0-9.]/g, "")) || 0;
+        return { ...ci, unit_cost: Math.round(price * 100) / 100 };
+      }
+      if (field === "description") {
+        return { ...ci, description: value.trim() };
+      }
+      if (field === "age_years") {
+        const age = Math.min(30, Math.max(0, parseInt(value, 10) || 0));
+        return { ...ci, age_years: age, condition: autoCondition(age) };
+      }
+      return ci;
+    });
+    setIsSaving(true);
+    try {
+      await saveRoomItems(next);
+      setInlineEdit(null);
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function saveFullClaim(nextClaim: ClaimItem[]) {
@@ -1420,6 +1467,13 @@ export default function RoomReviewPage() {
                   <p className="mt-0.5 text-sm tabular-nums text-gray-500">
                     {displayItems.length} items · {formatCurrency(roomTotal)}
                   </p>
+                  <input
+                    type="text"
+                    placeholder="Filter items..."
+                    value={filterText}
+                    onChange={(e) => setFilterText(e.target.value)}
+                    className="mt-2 w-full max-w-xs rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm placeholder-gray-400"
+                  />
                 </div>
               </div>
 
@@ -1496,6 +1550,10 @@ export default function RoomReviewPage() {
                     Use the sections below to add items, or describe something you remember.
                   </p>
                 </div>
+              ) : filterText.trim() && filteredItems.length === 0 ? (
+                <p className="px-4 py-6 text-center text-sm text-gray-400 md:px-6">
+                  No items match &quot;{filterText}&quot;
+                </p>
               ) : (
                 <>
                   <div
@@ -1514,7 +1572,7 @@ export default function RoomReviewPage() {
                     <span className="text-right">Total</span>
                     <span />
                   </div>
-                  {displayItems.map((item, idx) => {
+                  {filteredItems.map((item, idx) => {
                     const lk = lockKeyForItem(item);
                     const locked = lockedKeys.includes(lk);
                     const isEditing = editingItemKey === lk;
@@ -1836,27 +1894,181 @@ export default function RoomReviewPage() {
                         }}
                       >
                         <span className="text-xs tabular-nums text-gray-400">{idx + 1}</span>
-                        <span className="truncate font-medium text-gray-900">
-                          {cleanDescription(item.description)}
-                          {(item.source === "bundle" || item.source === "suggestion") && (
-                            <sup className="ml-0.5 text-[9px] text-gray-400">*</sup>
-                          )}
-                        </span>
-                        <span className="truncate text-xs text-gray-500">
-                          {item.brand?.trim() ? (
-                            item.brand.trim()
-                          ) : (
-                            <span className="text-blue-400 underline decoration-dotted">Unbranded</span>
-                          )}
-                        </span>
+                        {inlineEdit?.key === lk && inlineEdit?.field === "description" ? (
+                          <input
+                            autoFocus
+                            className="min-w-0 rounded border border-blue-300 px-1.5 py-0.5 text-sm font-medium text-gray-900"
+                            value={inlineEdit.value}
+                            onChange={(e) =>
+                              setInlineEdit((ie) => (ie ? { ...ie, value: e.target.value } : null))
+                            }
+                            onClick={(e) => e.stopPropagation()}
+                            onBlur={() => {
+                              if (inlineBlurSkipRef.current) {
+                                inlineBlurSkipRef.current = false;
+                                return;
+                              }
+                              void saveInlineEdit();
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void saveInlineEdit();
+                              if (e.key === "Escape") {
+                                inlineBlurSkipRef.current = true;
+                                setInlineEdit(null);
+                              }
+                            }}
+                          />
+                        ) : (
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (locked || isSaving) return;
+                              setInlineEdit({
+                                key: lk,
+                                field: "description",
+                                value: item.description,
+                              });
+                            }}
+                            className="min-w-0 cursor-pointer truncate rounded px-1 font-medium text-gray-900 hover:bg-gray-100 -mx-1"
+                          >
+                            {cleanDescription(item.description)}
+                            {(item.source === "bundle" || item.source === "suggestion") && (
+                              <sup className="ml-0.5 text-[9px] text-gray-400">*</sup>
+                            )}
+                          </span>
+                        )}
+                        {inlineEdit?.key === lk && inlineEdit?.field === "brand" ? (
+                          <input
+                            autoFocus
+                            className="w-full rounded border border-blue-300 px-1.5 py-0.5 text-xs"
+                            value={inlineEdit.value}
+                            onChange={(e) =>
+                              setInlineEdit((ie) => (ie ? { ...ie, value: e.target.value } : null))
+                            }
+                            onClick={(e) => e.stopPropagation()}
+                            onBlur={() => {
+                              if (inlineBlurSkipRef.current) {
+                                inlineBlurSkipRef.current = false;
+                                return;
+                              }
+                              void saveInlineEdit();
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void saveInlineEdit();
+                              if (e.key === "Escape") {
+                                inlineBlurSkipRef.current = true;
+                                setInlineEdit(null);
+                              }
+                            }}
+                          />
+                        ) : (
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (locked || isSaving) return;
+                              setInlineEdit({
+                                key: lk,
+                                field: "brand",
+                                value: item.brand || "",
+                              });
+                            }}
+                            className={`truncate text-xs cursor-pointer rounded px-1 -mx-1 hover:bg-gray-100 ${
+                              !item.brand?.trim()
+                                ? "text-blue-400 underline decoration-dotted"
+                                : "text-gray-500"
+                            }`}
+                          >
+                            {item.brand?.trim() || "Unbranded"}
+                          </span>
+                        )}
                         <span className="text-center text-xs tabular-nums text-gray-500">×{item.qty}</span>
-                        <span className="text-center text-xs tabular-nums text-gray-400">
-                          {displayAgeYears(item) > 0 ? `${displayAgeYears(item)}yr` : "New"}
-                        </span>
+                        {inlineEdit?.key === lk && inlineEdit?.field === "age_years" ? (
+                          <input
+                            autoFocus
+                            type="number"
+                            min={0}
+                            max={30}
+                            className="w-full rounded border border-blue-300 px-1.5 py-0.5 text-center text-xs tabular-nums"
+                            value={inlineEdit.value}
+                            onChange={(e) =>
+                              setInlineEdit((ie) => (ie ? { ...ie, value: e.target.value } : null))
+                            }
+                            onClick={(e) => e.stopPropagation()}
+                            onBlur={() => {
+                              if (inlineBlurSkipRef.current) {
+                                inlineBlurSkipRef.current = false;
+                                return;
+                              }
+                              void saveInlineEdit();
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void saveInlineEdit();
+                              if (e.key === "Escape") {
+                                inlineBlurSkipRef.current = true;
+                                setInlineEdit(null);
+                              }
+                            }}
+                          />
+                        ) : (
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (locked || isSaving) return;
+                              setInlineEdit({
+                                key: lk,
+                                field: "age_years",
+                                value: String(displayAgeYears(item)),
+                              });
+                            }}
+                            className="cursor-pointer rounded px-1 text-center text-xs tabular-nums text-gray-400 hover:bg-gray-100 -mx-1"
+                          >
+                            {displayAgeYears(item) > 0 ? `${displayAgeYears(item)}yr` : "New"}
+                          </span>
+                        )}
                         <span className="truncate text-xs text-gray-500">{condShow}</span>
-                        <span className="text-right text-xs tabular-nums text-gray-700">
-                          {formatCurrency(item.unit_cost)}
-                        </span>
+                        {inlineEdit?.key === lk && inlineEdit?.field === "unit_cost" ? (
+                          <input
+                            autoFocus
+                            type="number"
+                            inputMode="decimal"
+                            step="0.01"
+                            className="w-full rounded border border-blue-300 px-1.5 py-0.5 text-right text-xs tabular-nums"
+                            value={inlineEdit.value}
+                            onChange={(e) =>
+                              setInlineEdit((ie) => (ie ? { ...ie, value: e.target.value } : null))
+                            }
+                            onClick={(e) => e.stopPropagation()}
+                            onBlur={() => {
+                              if (inlineBlurSkipRef.current) {
+                                inlineBlurSkipRef.current = false;
+                                return;
+                              }
+                              void saveInlineEdit();
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void saveInlineEdit();
+                              if (e.key === "Escape") {
+                                inlineBlurSkipRef.current = true;
+                                setInlineEdit(null);
+                              }
+                            }}
+                          />
+                        ) : (
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (locked || isSaving) return;
+                              setInlineEdit({
+                                key: lk,
+                                field: "unit_cost",
+                                value: String(item.unit_cost),
+                              });
+                            }}
+                            className="cursor-pointer rounded px-1 text-right text-xs tabular-nums text-gray-700 hover:bg-gray-100 -mx-1"
+                          >
+                            {formatCurrency(item.unit_cost)}
+                          </span>
+                        )}
                         <span className="text-right text-sm font-semibold tabular-nums text-gray-900">
                           {formatCurrency(item.unit_cost * item.qty)}
                         </span>

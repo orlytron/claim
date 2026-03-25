@@ -199,6 +199,11 @@ export default function ReviewDashboard() {
     [sessionItems]
   );
 
+  const zeroPriceItems = useMemo(
+    () => sessionItems.filter((i) => !i.unit_cost || i.unit_cost === 0),
+    [sessionItems]
+  );
+
   const artItems = useMemo(() => sessionItems.filter((i) => i.room === ART_ROOM), [sessionItems]);
   const artManualTotal = useMemo(
     () => artItems.reduce((s, i) => s + i.qty * i.unit_cost, 0),
@@ -464,6 +469,12 @@ export default function ReviewDashboard() {
 
         <div className="fixed inset-x-0 bottom-0 z-20 border-t-2 border-gray-200 bg-white">
           <div className="mx-auto max-w-[720px] px-4 py-4">
+            {zeroPriceItems.length > 0 ? (
+              <p className="mb-2 text-center text-xs text-amber-600">
+                ⚠ {zeroPriceItems.length} item{zeroPriceItems.length !== 1 ? "s have" : " has"} no price — add
+                prices for a complete export
+              </p>
+            ) : null}
             <div className="flex items-center justify-between gap-4">
               <div className="text-base">
                 <span className="text-gray-500">Total: </span>
