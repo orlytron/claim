@@ -8,8 +8,12 @@ import SuggestionConfirmBanner from "../../components/SuggestionConfirmBanner";
 import SuggestionConfirmModal from "../../components/SuggestionConfirmModal";
 import { dispatchUpgradeReward } from "../../components/UpgradeRewardToast";
 import type { Bundle, BundleItem } from "../../lib/bundles-data";
-import { apiResponseToBundle } from "../../lib/smart-item-request";
 import type { SmartItemRequestBundleJson } from "../../lib/smart-item-request";
+import {
+  getNextSuggestions,
+  ROOM_SUGGESTIONS,
+  suggestionAlreadyPresent,
+} from "../../lib/room-item-suggestions";
 import {
   getAdminOnlyBundlesForRoom,
   getConsumableBundlesForRoom,
@@ -336,8 +340,6 @@ export default function RoomReviewPage() {
   const [editingTarget, setEditingTarget] = useState(false);
   const [targetInput, setTargetInput] = useState("");
   const targetEditInputRef = useRef<HTMLInputElement>(null);
-  const [requestText, setRequestText] = useState("");
-  const [requestStatus, setRequestStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [editingItemKey, setEditingItemKey] = useState<string | null>(null);
   const [headerExpanded, setHeaderExpanded] = useState(false);
   const [editDraft, setEditDraft] = useState({
@@ -359,8 +361,8 @@ export default function RoomReviewPage() {
   const [itemBundleLoading, setItemBundleLoading] = useState<string | null>(null);
   const [itemBundleResults, setItemBundleResults] = useState<Record<string, BundleItem[]>>({});
   const [itemBundleQuery, setItemBundleQuery] = useState<Record<string, string>>({});
-  const [goalBundleLoading, setGoalBundleLoading] = useState(false);
-  const [goalBundle, setGoalBundle] = useState<Bundle | null>(null);
+  const [suggestionOffset, setSuggestionOffset] = useState(0);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const [consumablesExpanded, setConsumablesExpanded] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [suggestionsModalOpen, setSuggestionsModalOpen] = useState(false);
@@ -547,6 +549,17 @@ export default function RoomReviewPage() {
   );
 
   const roomTotal = useMemo(() => items.reduce((s, i) => s + i.qty * i.unit_cost, 0), [items]);
+
+  const currentSuggestions = useMemo(
+    () => getNextSuggestions(roomName, items, suggestionOffset),
+    [roomName, items, suggestionOffset]
+  );
+
+  const totalAvailable = useMemo(() => {
+    const all = ROOM_SUGGESTIONS[roomName] || [];
+    return all.filter((s) => !suggestionAlreadyPresent(s, items)).length;
+  }, [roomName, items]);
+
   /** Original claim lines only (excludes bundle/art adds); uses pre-upgrade unit when upgraded */
   const originalRoomValue = useMemo(
     () =>
@@ -956,37 +969,6 @@ export default function RoomReviewPage() {
     }
   }
 
-  async function handleAddByGoal() {
-    setGoalBundleLoading(true);
-    try {
-      const gap = roomTarget - roomTotal;
-      if (gap <= 0) {
-        setToast("Room already at target!");
-        return;
-      }
-      const res = await fetch("/api/smart-item-request", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          request: `Suggest items that would be found in a ${roomName} of a luxury Pacific Palisades home. We need to add approximately $${Math.round(gap).toLocaleString()} more in documented items. Suggest realistic items this family would have owned.`,
-          room: roomName,
-          existingItems: items.slice(0, 15),
-          sessionId,
-        }),
-      });
-      const data = (await res.json()) as { success?: boolean; bundle?: SmartItemRequestBundleJson };
-      if (!res.ok || !data.success || !data.bundle) {
-        setToast("Could not generate — try again");
-        return;
-      }
-      setGoalBundle(apiResponseToBundle(data.bundle, roomName));
-    } catch {
-      setToast("Could not generate — try again");
-    } finally {
-      setGoalBundleLoading(false);
-    }
-  }
-
   async function handleQuickAdd() {
     if (!quickDesc.trim()) return;
     const price = parseFloat(quickPrice.replace(/[^0-9.]/g, "")) || 0;
@@ -1035,25 +1017,6 @@ export default function RoomReviewPage() {
     const delta = lines.reduce((s, l) => s + l.qty * l.unit_cost, 0);
     fireUpgradeReward(beforeClaim, merged, delta);
     setToast(`✓ Added ${formatCurrency(delta)}`);
-  }
-
-  async function sendSpecificItemRequest() {
-    if (!requestText.trim() || !roomName) return;
-    setRequestStatus("loading");
-    try {
-      const { error } = await supabase.from("client_suggestions").insert({
-        room: roomName,
-        message: requestText.trim(),
-        status: "pending",
-      });
-      if (error) setRequestStatus("error");
-      else {
-        setRequestStatus("success");
-        setRequestText("");
-      }
-    } catch {
-      setRequestStatus("error");
-    }
   }
 
   function saveTarget() {
@@ -1396,52 +1359,58 @@ export default function RoomReviewPage() {
                 existingItems={items}
               />
             </div>
-            <div className="mb-4">
-              <div className="flex items-center justify-between px-1 py-2">
-                <p className="text-xs text-gray-400">
-                  {formatCurrency(roomTotal)} documented ·{" "}
-                  {formatCurrency(Math.max(0, roomTarget - roomTotal))} to goal
-                </p>
-                <button
-                  type="button"
-                  disabled={goalBundleLoading || isSaving}
-                  onClick={() => void handleAddByGoal()}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-40"
-                >
-                  {goalBundleLoading ? (
-                    <>
-                      <div className="h-3 w-3 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
-                      Finding items...
-                    </>
-                  ) : (
-                    "+ Add by Goal"
-                  )}
-                </button>
-              </div>
-              {goalBundle ? (
-                <div>
-                  <div className="mb-2 flex items-center justify-between">
-                    <p className="text-xs font-bold uppercase tracking-wide text-gray-500">
-                      Suggested for this room
-                    </p>
-                    <button type="button" onClick={() => setGoalBundle(null)} className="text-xs text-gray-400 hover:text-gray-600">
-                      Clear ×
-                    </button>
+            {totalAvailable > 0 ? (
+              <div className="mb-4 px-1">
+                {!showSuggestions ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowSuggestions(true)}
+                    className="flex items-center gap-1 py-1 text-xs text-gray-400 hover:text-gray-600"
+                  >
+                    <span>💡</span>
+                    <span>Suggest items for this room</span>
+                    <span className="text-gray-300">({totalAvailable} ideas)</span>
+                  </button>
+                ) : (
+                  <div className="rounded-xl border border-gray-100 bg-gray-50/50 px-3 py-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="text-xs font-medium text-gray-500">💡 What else could be here?</p>
+                      <button
+                        type="button"
+                        onClick={() => setShowSuggestions(false)}
+                        className="text-xs text-gray-300 hover:text-gray-500"
+                      >
+                        hide
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {currentSuggestions.map((s, i) => (
+                        <span
+                          key={i}
+                          className="rounded-full border border-gray-200 bg-white px-3 py-1 text-xs text-gray-600"
+                        >
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                    {totalAvailable > suggestionOffset + 5 ? (
+                      <button
+                        type="button"
+                        onClick={() => setSuggestionOffset((o) => o + 5)}
+                        className="mt-2 text-xs text-gray-400 hover:text-gray-600"
+                      >
+                        Show more ideas →
+                      </button>
+                    ) : null}
+                    {totalAvailable <= suggestionOffset + 5 && suggestionOffset > 0 ? (
+                      <p className="mt-2 text-xs text-gray-400">
+                        That&apos;s all the suggestions for this room.
+                      </p>
+                    ) : null}
                   </div>
-                  <FocusedAdditionCard
-                    bundle={goalBundle}
-                    roomName={roomName}
-                    existingItems={session?.claim_items ?? []}
-                    sessionId={sessionId}
-                    disabled={isSaving}
-                    onAdd={(lines) => {
-                      void handleFocusedBundleAdd(lines);
-                      setGoalBundle(null);
-                    }}
-                  />
-                </div>
-              ) : null}
-            </div>
+                )}
+              </div>
+            ) : null}
             <section className="rounded-2xl border border-gray-100 bg-white shadow-sm transition-all duration-300">
               <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 md:px-6">
                 <div>
@@ -1905,41 +1874,6 @@ export default function RoomReviewPage() {
               <p className="mt-1 text-sm text-[#6B7280]">
                 Look up replacement options, then add focused bundles or individual lines to your claim.
               </p>
-
-              <div className="mt-6">
-                {requestStatus === "success" ? (
-                  <p className="text-sm text-[#16A34A]">Note sent ✓</p>
-                ) : (
-                  <details className="group">
-                    <summary className="cursor-pointer list-none text-sm text-[#6B7280] hover:text-gray-900">
-                      <span>Can&apos;t find it? Send us a note →</span>
-                    </summary>
-                    <div className="mt-3 space-y-2">
-                      <textarea
-                        className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder-gray-400"
-                        rows={2}
-                        placeholder="Describe the item..."
-                        value={requestText}
-                        onChange={(e) => {
-                          setRequestText(e.target.value);
-                          if (requestStatus === "error") setRequestStatus("idle");
-                        }}
-                      />
-                      {requestStatus === "error" ? (
-                        <p className="text-xs text-red-600">Could not send — try again.</p>
-                      ) : null}
-                      <button
-                        type="button"
-                        disabled={!requestText.trim() || requestStatus === "loading"}
-                        onClick={() => void sendSpecificItemRequest()}
-                        className="rounded-lg bg-gray-800 px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
-                      >
-                        {requestStatus === "loading" ? "Sending…" : "Send"}
-                      </button>
-                    </div>
-                  </details>
-                )}
-              </div>
 
               <div className="mt-8 space-y-8">
                 {focusedBundles.length === 0 ? (
