@@ -405,6 +405,14 @@ export default function ReviewDashboard() {
               );
             })}
 
+            <Link
+              href="/review/pricing"
+              className="block w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-sm text-gray-600 transition hover:border-[#2563EB]/30 hover:bg-blue-50/40 hover:text-gray-800"
+            >
+              Ready to find replacement prices and build your shopping list? →{" "}
+              <span className="font-semibold text-[#2563EB]">Open rebuild planning</span>
+            </Link>
+
             <div className="relative my-8">
               <div className="absolute inset-x-0 top-1/2 border-t border-gray-300" aria-hidden />
               <p className="relative mx-auto w-max bg-white px-3 text-center text-xs font-medium uppercase tracking-wider text-gray-400">
