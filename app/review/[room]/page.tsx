@@ -357,6 +357,7 @@ export default function RoomReviewPage() {
   const [quickBrand, setQuickBrand] = useState("");
   const [quickPrice, setQuickPrice] = useState("");
   const [quickAge, setQuickAge] = useState("0");
+  const [quickCondition, setQuickCondition] = useState("New");
   const quickDescRef = useRef<HTMLInputElement>(null);
   const [itemBundleLoading, setItemBundleLoading] = useState<string | null>(null);
   const [itemBundleResults, setItemBundleResults] = useState<Record<string, BundleItem[]>>({});
@@ -980,7 +981,7 @@ export default function RoomReviewPage() {
       qty: 1,
       age_years: parseInt(quickAge, 10) || 0,
       age_months: 0,
-      condition: "New",
+      condition: quickCondition,
       unit_cost: price,
       category: "Other",
       source: "bundle",
@@ -990,6 +991,7 @@ export default function RoomReviewPage() {
     setQuickBrand("");
     setQuickPrice("");
     setQuickAge("0");
+    setQuickCondition("New");
     quickDescRef.current?.focus();
   }
 
@@ -1421,59 +1423,69 @@ export default function RoomReviewPage() {
                 </div>
               </div>
 
-              <div className="border-b border-gray-100 bg-gray-50/50 px-4 py-4 md:px-6">
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    ref={quickDescRef}
-                    type="text"
-                    placeholder="Item name"
-                    value={quickDesc}
-                    onChange={(e) => setQuickDesc(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void handleQuickAdd();
-                    }}
-                    className="min-w-[160px] flex-[3] rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm placeholder-gray-400"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Brand"
-                    value={quickBrand}
-                    onChange={(e) => setQuickBrand(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void handleQuickAdd();
-                    }}
-                    className="min-w-[110px] flex-[2] rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm placeholder-gray-400"
-                  />
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="Cost"
-                    value={quickPrice}
-                    onChange={(e) => setQuickPrice(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void handleQuickAdd();
-                    }}
-                    className="w-24 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm placeholder-gray-400 tabular-nums"
-                  />
-                  <input
-                    type="number"
-                    placeholder="Age"
-                    value={quickAge}
-                    onChange={(e) => setQuickAge(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void handleQuickAdd();
-                    }}
-                    className="w-16 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm placeholder-gray-400"
-                  />
-                  <button
-                    type="button"
-                    disabled={!quickDesc.trim() || isSaving}
-                    onClick={() => void handleQuickAdd()}
-                    className="rounded-lg bg-[#2563EB] px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-                  >
-                    Add →
-                  </button>
-                </div>
+              <div className="flex flex-wrap items-center gap-1.5 border-b border-gray-100 bg-gray-50/30 px-4 py-3 md:px-6">
+                <input
+                  ref={quickDescRef}
+                  type="text"
+                  placeholder="Item name"
+                  value={quickDesc}
+                  onChange={(e) => setQuickDesc(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleQuickAdd();
+                  }}
+                  className="min-w-[140px] flex-[3] rounded border border-gray-200 bg-white px-2.5 py-1.5 text-sm placeholder-gray-400"
+                />
+                <input
+                  type="text"
+                  placeholder="Brand"
+                  value={quickBrand}
+                  onChange={(e) => setQuickBrand(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleQuickAdd();
+                  }}
+                  className="min-w-[100px] flex-[2] rounded border border-gray-200 bg-white px-2.5 py-1.5 text-sm placeholder-gray-400"
+                />
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="$Cost"
+                  value={quickPrice}
+                  onChange={(e) => setQuickPrice(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleQuickAdd();
+                  }}
+                  className="w-20 rounded border border-gray-200 bg-white px-2.5 py-1.5 text-sm placeholder-gray-400 tabular-nums"
+                />
+                <input
+                  type="number"
+                  min={0}
+                  placeholder="Age"
+                  value={quickAge}
+                  onChange={(e) => setQuickAge(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleQuickAdd();
+                  }}
+                  className="w-16 rounded border border-gray-200 bg-white px-2.5 py-1.5 text-sm placeholder-gray-400"
+                />
+                <select
+                  value={quickCondition}
+                  onChange={(e) => setQuickCondition(e.target.value)}
+                  className="w-24 rounded border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-600"
+                >
+                  <option>New</option>
+                  <option>Like New</option>
+                  <option>Good</option>
+                  <option>Decent</option>
+                  <option>Used</option>
+                </select>
+                <button
+                  type="button"
+                  disabled={!quickDesc.trim() || isSaving}
+                  onClick={() => void handleQuickAdd()}
+                  className="whitespace-nowrap rounded bg-[#2563EB] px-3 py-1.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                >
+                  Add →
+                </button>
               </div>
 
               {displayItems.length === 0 ? (

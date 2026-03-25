@@ -37,6 +37,14 @@ function mapCondition(condition: string, ageYears: number): string {
   return "Below Avg.";
 }
 
+function optionPrice(o: unknown): number {
+  if (!o || typeof o !== "object") return 0;
+  const p = (o as { price?: unknown }).price;
+  if (typeof p === "number" && p > 0) return p;
+  if (typeof p === "string") return parseFloat(p.replace(/[^0-9.]/g, "")) || 0;
+  return 0;
+}
+
 function vendorFromUrl(url: string | undefined): string {
   if (!url) return "";
   try {
@@ -60,8 +68,38 @@ function originalVendorColumn(item: ClaimItem): string {
   return "";
 }
 
+function getReplacementCost(
+  item: ClaimItem,
+  replacementPriceMap: Record<string, number>
+): number {
+  const desc = (item.pre_upgrade_item?.description || item.description).toLowerCase();
+  const cached = replacementPriceMap[desc];
+  if (cached != null && cached > item.unit_cost) {
+    return cached;
+  }
+  return item.unit_cost;
+}
+
 export async function GET(req: NextRequest) {
   const sessionId = req.nextUrl.searchParams.get("sessionId") || "trial";
+
+  const { data: cacheRows } = await supabaseAdmin
+    .from("upgrades_cache")
+    .select("item_description, options");
+
+  const replacementPriceMap: Record<string, number> = {};
+  for (const row of cacheRows || []) {
+    const rd = row as { item_description?: string; options?: unknown };
+    const desc = typeof rd.item_description === "string" ? rd.item_description.trim() : "";
+    if (!desc) continue;
+    const opts = Array.isArray(rd.options) ? rd.options : [];
+    const mid = opts[1];
+    const price = optionPrice(mid);
+    if (price > 0) {
+      const key = desc.toLowerCase();
+      replacementPriceMap[key] = Math.max(replacementPriceMap[key] ?? 0, price);
+    }
+  }
 
   const { data: sessionRow, error: sErr } = await supabaseAdmin
     .from("claim_session")
@@ -84,7 +122,10 @@ export async function GET(req: NextRequest) {
     return !TEST_DESCRIPTIONS.some((t) => d.includes(t));
   });
 
-  const grandTotal = exportItems.reduce((sum, item) => sum + item.qty * item.unit_cost, 0);
+  const grandTotal = exportItems.reduce(
+    (sum, item) => sum + item.qty * getReplacementCost(item, replacementPriceMap),
+    0
+  );
 
   const headerRows: unknown[][] = [
     ["Template Version: 4.3", "Average", "Below Avg.", "Above Avg.", "New", "", "", "", "", "", "", ""],
@@ -140,7 +181,8 @@ export async function GET(req: NextRequest) {
     }
     lastRoom = displayRoom;
     itemNum += 1;
-    const lineTotal = item.qty * item.unit_cost;
+    const eachReplace = getReplacementCost(item, replacementPriceMap);
+    const lineTotal = item.qty * eachReplace;
     roomRunSubtotal += lineTotal;
 
     const isNew = (item.condition || "").toLowerCase() === "new" || item.source === "bundle" || item.source === "suggestion";
@@ -158,7 +200,7 @@ export async function GET(req: NextRequest) {
       ageYears,
       ageMonths,
       mapCondition(item.condition || "", ageYears),
-      item.unit_cost,
+      eachReplace,
       lineTotal,
     ]);
   }
